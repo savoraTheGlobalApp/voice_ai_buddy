@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import httpx
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -41,6 +41,21 @@ app.add_middleware(
 
 class TokenResponse(BaseModel):
     token: str
+
+
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
+    model: str = "gpt-4o-mini"
+
+
+class ChatResponse(BaseModel):
+    response: str
+    message: Optional[str] = None
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "nova"
 
 
 @app.get("/health")
@@ -92,6 +107,117 @@ async def get_realtime_token():
             data = response.json()
             # data.value contains the ephemeral client secret string
             return TokenResponse(token=data["value"])
+
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Network error while contacting OpenAI API: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected server error: {str(e)}"
+        )
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Chat API endpoint for TTT mode using OpenAI Chat API.
+    Uses gpt-4o-mini model for cost-effective text-to-text processing.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": request.model,
+                    "messages": request.messages,
+                    "temperature": 0.7,
+                    "max_tokens": 500,
+                },
+                timeout=30.0,
+            )
+
+            if not response.is_success:
+                error_text = response.text
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to get chat completion: {error_text}"
+                )
+
+            data = response.json()
+            assistant_message = data["choices"][0]["message"]["content"]
+            return ChatResponse(response=assistant_message, message=assistant_message)
+
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Network error while contacting OpenAI API: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected server error: {str(e)}"
+        )
+
+
+@app.post("/api/tts")
+async def text_to_speech(request: TTSRequest):
+    """
+    Text-to-Speech API endpoint using OpenAI TTS API.
+    Returns audio file for playback.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "tts-1",
+                    "input": request.text,
+                    "voice": request.voice,
+                },
+                timeout=30.0,
+            )
+
+            if not response.is_success:
+                error_text = response.text
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate speech: {error_text}"
+                )
+
+            # Return audio file directly
+            from fastapi.responses import Response
+            return Response(
+                content=response.content,
+                media_type="audio/mpeg",
+                headers={
+                    "Content-Disposition": "inline; filename=speech.mp3"
+                }
+            )
 
     except httpx.HTTPError as e:
         raise HTTPException(
