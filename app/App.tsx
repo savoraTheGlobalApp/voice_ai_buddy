@@ -155,11 +155,31 @@ export async function setupCounter(
     });
     session.transport.on('disconnected', () => console.log('[realtime] disconnected'));
     session.transport.on('error', (e: any) => {
-      // Only log if there's actual error information to avoid noise from empty error objects
-      if (e && (e.error || e.message || typeof e === 'string' || Object.keys(e).length > 0)) {
+      
+      if (!e) {
+        return;
+      }
+      
+      // Check if it's an empty object by stringifying
+      try {
+        const errorStr = JSON.stringify(e);
+        if (errorStr === '{}' || errorStr === 'null' || errorStr === 'undefined') {
+          return;
+        }
+      } catch {
+        // If stringify fails, continue to check properties
+      }
+      
+      const hasMessage = (e?.error?.message && typeof e.error.message === 'string' && e.error.message.trim().length > 0) || 
+                         (e?.message && typeof e.message === 'string' && e.message.trim().length > 0);
+      const hasCode = (e?.code !== undefined && e?.code !== null && e?.code !== '') || 
+                      (e?.error?.code !== undefined && e?.error?.code !== null && e?.error?.code !== '');
+      const isStringError = typeof e === 'string' && e.trim().length > 0;
+      
+      // Only log if we have a clear, meaningful error
+      if (hasMessage || hasCode || isStringError) {
         console.error('[realtime] error', e);
       }
-      // Silently ignore empty error objects that don't provide useful information
     });
     session.transport.on('turn_started', () => console.log('[realtime] turn_started'));
     session.transport.on('turn_done', () => console.log('[realtime] turn_done'));
