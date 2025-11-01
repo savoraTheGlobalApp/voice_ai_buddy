@@ -146,6 +146,7 @@ export default function Page() {
       <button
         ref={buttonRef}
         onClick={() => {
+          if (status === 'connecting...') return;
           setStatus('connecting...');
           setupCounter(
             buttonRef.current as HTMLButtonElement,
@@ -159,9 +160,49 @@ export default function Page() {
               setStatus('error - see console');
             });
         }}
-        style={{ padding: '12px 20px', fontSize: 16 }}
+        disabled={status === 'connecting...'}
+        type="button"
+        style={{
+          padding: '14px 32px',
+          fontSize: 16,
+          fontWeight: 600,
+          color: '#ffffff',
+          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+          transition: 'all 0.2s ease-in-out',
+          minWidth: '180px',
+        }}
+        onMouseEnter={(e) => {
+          if (status !== 'connecting...') {
+            e.currentTarget.style.backgroundColor = status === 'connected' ? '#059669' : status === 'error - see console' ? '#dc2626' : '#2563eb';
+            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (status !== 'connecting...') {
+            e.currentTarget.style.backgroundColor = status === 'connected' ? '#10b981' : status === 'error - see console' ? '#ef4444' : '#3b82f6';
+            e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }
+        }}
+        onMouseDown={(e) => {
+          if (status !== 'connecting...') {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
+          }
+        }}
+        onMouseUp={(e) => {
+          if (status !== 'connecting...') {
+            e.currentTarget.style.transform = 'translateY(-1px)';
+            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+          }
+        }}
       >
-        Connect Realtime
+        {status === 'connecting...' ? 'Connecting...' : status === 'connected' ? '✓ Connected' : status === 'error - see console' ? '⚠ Try Again' : 'Connect Realtime'}
       </button>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
       <div style={{ fontSize: 12, color: '#666' }}>Status: {status}</div>
