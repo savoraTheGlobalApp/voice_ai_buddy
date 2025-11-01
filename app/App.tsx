@@ -35,7 +35,9 @@ export async function setupCounter(
     } catch (permErr) {
       console.warn('[realtime] mic permission not granted yet or blocked', permErr);
     }
-    const resp = await fetch('/api/realtime-token', { method: 'GET' });
+    // Get backend URL from environment variable or use default
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const resp = await fetch(`${backendUrl}/api/realtime-token`, { method: 'GET' });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`Failed to obtain realtime token: ${text}`);

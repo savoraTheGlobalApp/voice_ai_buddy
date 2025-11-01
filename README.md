@@ -1,36 +1,221 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Voice AI Buddy
 
-## Getting Started
+A real-time voice AI assistant built with Next.js (frontend) and Python FastAPI (backend). Designed for easy deployment on both software platforms (web/mobile) and future hardware integration (embedded devices, soft toys).
 
-First, run the development server:
+## Architecture
 
+- **Frontend (Next.js)**: Handles microphone capture, WebRTC client, low-latency streaming to OpenAI Realtime API, and quick UX iteration
+- **Backend (Python FastAPI)**: Manages API keys, generates ephemeral tokens, and provides foundation for future hardware control, ML models, and parental insights
+
+## Prerequisites
+
+- Node.js 18+ and npm
+- Python 3.9+
+- OpenAI API key
+
+## Quick Start
+
+### 1. Backend Setup
+
+**Windows:**
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd backend
+
+# Create virtual environment (use 'python' not 'python3' on Windows)
+python -m venv venv
+
+# Activate virtual environment
+venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file
+copy .env.example .env
+# Or in PowerShell: Copy-Item .env.example .env
+
+# Edit .env and add your OpenAI API key
+# OPENAI_API_KEY=sk-your-key-here
+
+# Run backend server
+python main.py
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**macOS/Linux:**
+```bash
+cd backend
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+# Create virtual environment
+python3 -m venv venv
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Activate virtual environment
+source venv/bin/activate
 
-## Learn More
+# Install dependencies
+pip install -r requirements.txt
 
-To learn more about Next.js, take a look at the following resources:
+# Create .env file
+cp .env.example .env
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Edit .env and add your OpenAI API key
+# OPENAI_API_KEY=sk-your-key-here
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# Run backend server
+python main.py
+```
 
-## Deploy on Vercel
+> **Note**: If you get "Python was not found" on Windows, use `python` not `python3`. Ensure Python is installed and added to PATH.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Backend will run at `http://localhost:8000`
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 2. Frontend Setup
+
+```bash
+# From project root
+
+# Install dependencies
+npm install
+
+# Create .env.local file
+# Copy env.example to .env.local or create manually:
+echo "NEXT_PUBLIC_BACKEND_URL=http://localhost:8000" > .env.local
+
+# Run frontend development server
+npm run dev
+```
+
+Frontend will run at `http://localhost:3000`
+
+### 3. Usage
+
+1. Open `http://localhost:3000` in your browser
+2. Select your microphone and speaker devices
+3. Click "Connect Realtime"
+4. Grant microphone permissions when prompted
+5. Start speaking! The AI will respond in real-time
+
+## Environment Variables
+
+### Backend (`.env` in backend/ directory)
+
+- `OPENAI_API_KEY` (required): Your OpenAI API key
+- `REALTIME_MODEL` (optional): Model to use. Default: `gpt-realtime-mini` (cost-effective)
+  - Options: `gpt-realtime`, `gpt-realtime-mini`, `gpt-4o-mini-realtime-preview`
+- `PORT` (optional): Backend server port. Default: `8000`
+- `ENV` (optional): Environment. Default: `development`
+- `FRONTEND_URL` (optional): Frontend URL for CORS. Default: `http://localhost:3000`
+
+### Frontend (`.env.local` in project root)
+
+- `NEXT_PUBLIC_BACKEND_URL` (optional): Backend API URL. Default: `http://localhost:8000`
+
+## Cost Optimization
+
+The project is configured to use `gpt-realtime-mini` by default for significant cost savings:
+- **gpt-realtime-mini**: ~$0.60/1M input tokens, ~$2.40/1M output tokens (85% cheaper)
+- **gpt-realtime**: ~$4.00/1M input tokens, ~$16.00/1M output tokens
+
+Transcription is disabled by default to avoid additional charges.
+
+## Project Structure
+
+```
+voice_ai_buddy/
+├── app/                    # Next.js frontend
+│   ├── App.tsx            # Main voice AI component
+│   └── page.tsx           # Next.js page wrapper
+├── backend/               # Python FastAPI backend
+│   ├── main.py           # FastAPI application
+│   ├── requirements.txt  # Python dependencies
+│   └── README.md         # Backend documentation
+└── README.md             # This file
+```
+
+## Deployment
+
+The architecture is designed for easy separate deployment of frontend and backend.
+
+### Quick Deploy
+
+**Frontend (Vercel/Netlify):**
+- Import Git repository
+- Set `NEXT_PUBLIC_BACKEND_URL` environment variable
+- Deploy automatically on push
+
+**Backend (Render/Railway):**
+- Create new web service
+- Set root directory to `backend`
+- Add environment variables (see DEPLOYMENT.md)
+- Auto-deploys on push
+
+### Detailed Deployment Guide
+
+See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for complete step-by-step instructions covering:
+- Vercel + Render setup
+- Netlify + Render setup
+- Railway + Vercel setup
+- Production optimizations
+- Troubleshooting
+- Custom domains
+- Cost estimation
+
+### Future Hardware Deployment
+
+The architecture is designed to easily add:
+- **Hardware endpoints** in backend (`main.py`) for GPIO, device control
+- **Local ML models** for wake-word detection, VAD
+- **Parental insights** based on conversation analysis
+- **Device management** for embedded deployment
+
+## Development
+
+### Running Both Services
+
+Use two terminal windows:
+
+**Terminal 1 (Backend):**
+```bash
+cd backend
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+python main.py
+```
+
+**Terminal 2 (Frontend):**
+```bash
+npm run dev
+```
+
+### API Endpoints
+
+- `GET /health` - Backend health check
+- `GET /api/realtime-token` - Generate ephemeral token for OpenAI Realtime API
+
+## Troubleshooting
+
+**Can't connect to backend:**
+- Ensure backend is running on port 8000
+- Check `NEXT_PUBLIC_BACKEND_URL` in `.env.local`
+- Check browser console for CORS errors
+
+**No audio output:**
+- Check browser audio settings
+- Ensure correct speaker device is selected
+- Check system audio output settings
+
+**Microphone not detected:**
+- Grant browser microphone permissions
+- Check OS microphone settings
+- Try selecting different microphone in the UI
+
+## Future Enhancements
+
+- [ ] Hardware GPIO control endpoints
+- [ ] Local wake-word detection
+- [ ] Parental insights dashboard
+- [ ] Conversation logging and analysis
+- [ ] Multi-device support
+- [ ] Custom voice models
+
+## License
+
+[Add your license here]
