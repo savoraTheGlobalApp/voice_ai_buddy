@@ -314,7 +314,7 @@ export async function setupSTTMode(
         },
         body: JSON.stringify({
           messages: conversationHistory,
-          model: 'gpt-4o-mini',
+          // Model will be determined by backend from environment variable or use default
         }),
       });
 
