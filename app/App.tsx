@@ -1,6 +1,8 @@
 "use client";
 import React, { useEffect, useRef, useState } from 'react';
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
 // Shared instructions for both modes
 const SOCRATIC_TUTOR_INSTRUCTIONS = `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
@@ -391,11 +393,14 @@ export async function setupSTTMode(
     };
 
     recognition.onerror = (event: any) => {
-      console.error('[STT] Recognition error:', event.error);
-      // Only log meaningful errors
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        console.error('[STT] Error:', event.error);
+      // Only log meaningful errors - ignore common non-critical errors
+      if (event.error !== 'no-speech' && 
+          event.error !== 'aborted' && 
+          event.error !== 'audio-capture' &&
+          event.error !== 'not-allowed') {
+        console.error('[STT] Recognition error:', event.error);
       }
+      // Silently handle common expected errors
     };
 
     recognition.onend = () => {
@@ -447,11 +452,22 @@ export default function Page() {
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState<string | null>(null);
   const [selectedOutput, setSelectedOutput] = useState<string | null>(null);
+  const { currentUser, userData, logout } = useAuth();
+  const router = useRouter();
   
   // Read toggle state from environment variable
   // "ON" = STT/TTT/TTS mode (cost-effective), "OFF" = Realtime mode (default)
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
   const [useSTTMode, setUseSTTMode] = useState(envMode === 'ON');
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+  };
 
   useEffect(() => {
     // enumerate devices when permissions are available
@@ -477,7 +493,42 @@ export default function Page() {
   }, []);
 
   return (
-    <main style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+    <main style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, padding: '20px' }}>
+      {/* User Info and Logout */}
+      <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+        {userData && (
+          <div style={{ textAlign: 'right', marginRight: '12px' }}>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827' }}>{userData.name}</div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>{userData.email}</div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handleLogout}
+          style={{
+            padding: '8px 16px',
+            fontSize: '14px',
+            fontWeight: 500,
+            color: '#6b7280',
+            backgroundColor: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = '#f3f4f6';
+            e.currentTarget.style.borderColor = '#d1d5db';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'white';
+            e.currentTarget.style.borderColor = '#e5e7eb';
+          }}
+        >
+          Logout
+        </button>
+      </div>
+
       {/* Toggle for mode selection */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
         <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
