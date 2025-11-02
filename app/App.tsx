@@ -109,13 +109,20 @@ You: "Great thinking! Let me give you a hint - think about how a rainbow has man
 - Use simple Indian English expressions naturally and sparingly
 - Age 3-10 appropriate throughout`;
 
-let currentSession: RealtimeSession | null = null;
+let currentSession: {
+  session: RealtimeSession;
+  conversationHistory: Array<{ role: string; content: string }>;
+  recognition?: any;
+} | null = null;
 let currentSTTSession: {
   recognition: any;
   mediaRecorder: MediaRecorder | null;
   audioContext: AudioContext | null;
   conversationHistory: Array<{ role: string; content: string }>;
 } | null = null;
+
+// Callback to update chat UI when conversation history changes
+let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) => void) | null = null;
 
 // Realtime mode setup (OFF toggle = current implementation)
 export async function setupRealtimeMode(
@@ -139,7 +146,14 @@ export async function setupRealtimeMode(
   }
   const transport = new OpenAIRealtimeWebRTC({ mediaStream, audioElement: audioEl ?? undefined });
   const session = new RealtimeSession(agent, { transport });
-  currentSession = session;
+
+  // Initialize conversation history
+  const conversationHistory: Array<{ role: string; content: string }> = [
+    {
+      role: 'system',
+      content: SOCRATIC_TUTOR_INSTRUCTIONS,
+    },
+  ];
   // Automatically connects your microphone and audio output in the browser via WebRTC.
   try {
     // Prompt for microphone permission early to ensure input is available
@@ -158,12 +172,81 @@ export async function setupRealtimeMode(
     }
     const { token } = await resp.json();
 
+    // Initialize Web Speech API for STT to transcribe user speech (free, parallel to Realtime API)
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    let recognition: any = null;
+    
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+      
+      // Handle user speech transcription
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[event.results.length - 1][0].transcript.trim();
+        if (!transcript) return;
+        
+        console.log('[STT] User said:', transcript);
+        
+        // Add to conversation history
+        conversationHistory.push({ role: 'user', content: transcript });
+        
+        // Update UI
+        if (onConversationUpdate) {
+          onConversationUpdate([...conversationHistory]);
+        }
+      };
+      
+      recognition.onerror = (event: any) => {
+        if (event.error !== 'no-speech' && event.error !== 'aborted' && 
+            event.error !== 'audio-capture' && event.error !== 'not-allowed') {
+          console.error('[STT] Recognition error:', event.error);
+        }
+      };
+      
+      recognition.onend = () => {
+        // Restart recognition if session is still active
+        if (currentSession && currentSession.session === session) {
+          try {
+            recognition.start();
+          } catch (e) {
+            // Ignore errors when restarting
+          }
+        }
+      };
+    }
+
     // Basic diagnostics — register BEFORE connecting so we don't miss early events
     session.transport.on('connected', () => {
       console.log('[realtime] connected');
       if (session.transport.muted) session.transport.mute(false);
-      // Warm greeting from Socratic tutor
-      session.transport.sendMessage('Hi! I\'m your learning buddy! I love hearing your thoughts and questions. What are you curious about today?', {});
+      
+      // Start Web Speech API recognition for user transcription
+      if (recognition) {
+        try {
+          recognition.start();
+          console.log('[STT] Started for user transcription');
+        } catch (e) {
+          console.warn('[STT] Could not start recognition:', e);
+        }
+      }
+      
+      // Trigger the agent to start speaking automatically
+      // The agent will respond with a greeting based on the instructions
+      // Wait a moment for the session to be fully ready, then trigger
+      setTimeout(() => {
+        try {
+          // Send a trigger message to start the conversation
+          // This will make the agent respond with its greeting based on instructions
+          // Note: This message will be handled by Realtime API, not added to our conversationHistory
+          // The agent's response will be captured by our event listeners
+          session.transport.sendMessage('', {});
+          console.log('[realtime] Triggered agent to start conversation');
+        } catch (e) {
+          console.warn('[realtime] Could not trigger agent:', e);
+        }
+      }, 1500); // Wait 1.5 seconds for session to be fully ready
     });
     session.transport.on('disconnected', () => console.log('[realtime] disconnected'));
     session.transport.on('error', (e: any) => {
@@ -193,33 +276,214 @@ export async function setupRealtimeMode(
         console.error('[realtime] error', e);
       }
     });
-    session.transport.on('turn_started', () => console.log('[realtime] turn_started'));
-    session.transport.on('turn_done', () => console.log('[realtime] turn_done'));
-    session.transport.on('audio_done', () => console.log('[realtime] audio_done'));
+    session.transport.on('turn_started', () => {
+      console.log('[realtime] turn_started');
+    });
+    // Track which messages we've already logged to avoid duplicates
+    let lastLoggedHistoryLength = 0;
+    
+    session.transport.on('turn_done', () => {
+      console.log('[realtime] turn_done');
+      
+      // Access conversation history directly from session.history
+      try {
+        const history = (session as any).history;
+        
+        if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
+          // Get new messages since last check
+          const newMessages = history.slice(lastLoggedHistoryLength);
+          
+          newMessages.forEach((message: any) => {
+            // Extract assistant transcript from the message
+            let assistantText: string | null = null;
+            
+            // Check different possible structures
+            if (message.role === 'assistant') {
+              // Extract transcript from message.content array
+              // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
+              if (message.content && Array.isArray(message.content)) {
+                // Find the content part with transcript (usually output_audio type)
+                for (const part of message.content) {
+                  if (part.transcript && typeof part.transcript === 'string') {
+                    assistantText = part.transcript.trim();
+                    break; // Use first transcript found
+                  }
+                }
+              }
+              
+              // Fallback: Check for transcript property directly on message
+              if (!assistantText && message.transcript && typeof message.transcript === 'string') {
+                assistantText = message.transcript.trim();
+              }
+              
+              // Fallback: Try to get text from content if it's a string
+              if (!assistantText && message.content && typeof message.content === 'string') {
+                assistantText = message.content.trim();
+              }
+              
+              // Fallback: Check for text property directly
+              if (!assistantText && message.text && typeof message.text === 'string') {
+                assistantText = message.text.trim();
+              }
+              
+              // Add to conversation history and update UI if we found assistant text
+              if (assistantText && assistantText.length > 2) {
+                console.log('[realtime] ASSISTANT SAID:', assistantText);
+                
+                // Check if we already have this message to avoid duplicates
+                const existingMessage = conversationHistory.find(
+                  msg => msg.role === 'assistant' && msg.content === assistantText
+                );
+                
+                if (!existingMessage) {
+                  conversationHistory.push({ role: 'assistant', content: assistantText });
+                  
+                  // Update chat UI
+                  if (onConversationUpdate) {
+                    onConversationUpdate([...conversationHistory]);
+                  }
+                }
+              }
+            }
+          });
+          
+          // Update last logged length
+          lastLoggedHistoryLength = history.length;
+        }
+      } catch (e) {
+        console.warn('[realtime] Error accessing session.history:', e);
+      }
+    });
+    session.transport.on('audio_done', () => {
+      console.log('[realtime] audio_done');
+      
+      // When audio is done (assistant finished speaking), check history immediately
+      // This might capture the transcript faster than waiting for turn_done
+      try {
+        const history = (session as any).history;
+        
+        if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
+          // Get the most recent assistant message
+          const recentMessages = history.slice(lastLoggedHistoryLength);
+          
+          let foundNewAssistantMessage = false;
+          
+          recentMessages.forEach((message: any) => {
+            if (message.role === 'assistant') {
+              let assistantText: string | null = null;
+              
+              // Extract transcript from message.content array
+              // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
+              if (message.content && Array.isArray(message.content)) {
+                // Find the content part with transcript (usually output_audio type)
+                for (const part of message.content) {
+                  if (part.transcript && typeof part.transcript === 'string') {
+                    assistantText = part.transcript.trim();
+                    break; // Use first transcript found
+                  }
+                }
+              }
+              
+              // Fallback: Check for transcript property directly on message
+              if (!assistantText && message.transcript && typeof message.transcript === 'string') {
+                assistantText = message.transcript.trim();
+              }
+              
+              // Fallback: Try to get text from content if it's a string
+              if (!assistantText && typeof message.content === 'string') {
+                assistantText = message.content.trim();
+              }
+              
+              // Fallback: Check for text property directly
+              if (!assistantText && message.text && typeof message.text === 'string') {
+                assistantText = message.text.trim();
+              }
+              
+              if (assistantText && assistantText.length > 2) {
+                console.log('[realtime] ASSISTANT SAID:', assistantText);
+                
+                // Add to conversation history and update UI
+                const existingMessage = conversationHistory.find(
+                  msg => msg.role === 'assistant' && msg.content === assistantText
+                );
+                
+                if (!existingMessage) {
+                  conversationHistory.push({ role: 'assistant', content: assistantText });
+                  foundNewAssistantMessage = true;
+                  
+                  // Update chat UI
+                  if (onConversationUpdate) {
+                    onConversationUpdate([...conversationHistory]);
+                  }
+                }
+              }
+            }
+          });
+          
+          // Update counter after processing all messages to prevent duplicates
+          if (foundNewAssistantMessage) {
+            lastLoggedHistoryLength = history.length;
+          }
+        }
+      } catch (e) {
+        console.warn('[realtime] Error checking history on audio_done:', e);
+      }
+    });
+
 
     // Close any previous session to avoid multiple active connections
-    try { currentSession?.close(); } catch {}
+    try { currentSession?.session.close(); } catch {}
 
     // Connect first, then apply session config via the transport
     await session.connect({ apiKey: token });
+    
+    // Update session config - explicitly enable transcription for output audio
     session.transport.updateSessionConfig({
       audio: {
-        input: { turnDetection: { type: 'semantic_vad', createResponse: true } },
-        output: { voice: 'nova' }, // Using 'nova' which is a warmer, more expressive voice suitable for child-like character
+        input: { 
+          turnDetection: { type: 'semantic_vad', createResponse: true },
+        },
+        output: { 
+          voice: 'nova',
+          // Explicitly enable transcription for assistant audio output
+          transcription: {
+            format: 'text',
+          },
+        } as any,
       },
     });
 
-    // Explicitly disable input transcription (SDK defaults include it).
-    // Send raw event to avoid client default re-adding it.
+    // Also send session.update event to ensure transcription is enabled
+    // This is sometimes needed in addition to updateSessionConfig
+    try {
     session.transport.sendEvent({
       type: 'session.update',
       session: {
         type: 'realtime',
-        audio: { input: { transcription: null } },
+          audio: {
+            output: {
+              transcription: {
+                format: 'text',
+              },
+            },
+          },
       },
     } as any);
+      console.log('[realtime] Transcription enabled via session.update event');
+    } catch (e) {
+      console.warn('[realtime] Could not send session.update event:', e);
+    }
 
-    // Transcripts intentionally disabled; no transcript logging
+    // Store session with conversation history and recognition
+    currentSession = {
+      session,
+      conversationHistory,
+    };
+    
+    // Store recognition reference for cleanup
+    if (recognition) {
+      (currentSession as any).recognition = recognition;
+    }
 
     console.log('You are connected!');
   } catch (e) {
@@ -237,7 +501,16 @@ export async function setupSTTMode(
   // Close any existing sessions
   try {
     if (currentSession) {
-      currentSession.close();
+        // Stop recognition if it exists
+        if (currentSession.recognition) {
+          try {
+            currentSession.recognition.stop();
+            currentSession.recognition.abort();
+          } catch (e) {
+            // Ignore errors
+          }
+        }
+        currentSession.session.close();
       currentSession = null;
     }
     if (currentSTTSession) {
@@ -308,6 +581,10 @@ export async function setupSTTMode(
     // Function to send text to chat API and get response
     const getChatResponse = async (userMessage: string): Promise<string> => {
       conversationHistory.push({ role: 'user', content: userMessage });
+      // Update UI
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
 
       const response = await fetch(`${backendUrl}/api/chat`, {
         method: 'POST',
@@ -328,6 +605,10 @@ export async function setupSTTMode(
       const data = await response.json();
       const assistantMessage = data.response || data.message || '';
       conversationHistory.push({ role: 'assistant', content: assistantMessage });
+      // Update UI
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
       return assistantMessage;
     };
 
@@ -421,6 +702,10 @@ export async function setupSTTMode(
     const greeting = "Hi! I'm your learning buddy! I love hearing your thoughts and questions. What are you curious about today?";
     conversationHistory.push({ role: 'assistant', content: greeting });
     await textToSpeech(greeting);
+    // Update UI
+    if (onConversationUpdate) {
+      onConversationUpdate([...conversationHistory]);
+    }
 
     console.log('You are connected! (STT/TTT/TTS mode)');
   } catch (e) {
@@ -447,11 +732,14 @@ export async function setupCounter(
 export default function Page() {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState('idle');
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState<string | null>(null);
   const [selectedOutput, setSelectedOutput] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [isMobile, setIsMobile] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
   
@@ -459,6 +747,36 @@ export default function Page() {
   // "ON" = STT/TTT/TTS mode (cost-effective), "OFF" = Realtime mode (default)
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
   const [useSTTMode, setUseSTTMode] = useState(envMode === 'ON');
+
+  // Handle responsive layout
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Set up callback to receive conversation updates
+  useEffect(() => {
+    onConversationUpdate = (conversationHistory: Array<{ role: string; content: string }>) => {
+      // Filter out system messages for display
+      const displayMessages = conversationHistory.filter(msg => msg.role !== 'system');
+      setMessages(displayMessages);
+    };
+    
+    return () => {
+      onConversationUpdate = null;
+    };
+  }, []);
+
+  // Auto-scroll chat to bottom when new messages arrive
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   const handleLogout = async () => {
     try {
@@ -493,42 +811,192 @@ export default function Page() {
   }, []);
 
   return (
-    <main style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, padding: '20px' }}>
-      {/* User Info and Logout */}
-      <div style={{ position: 'absolute', top: '20px', right: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-        {userData && (
-          <div style={{ textAlign: 'right', marginRight: '12px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 600, color: '#111827' }}>{userData.name}</div>
-            <div style={{ fontSize: '12px', color: '#6b7280' }}>{userData.email}</div>
+    <main style={{ 
+      display: 'flex', 
+      minHeight: '100vh', 
+      padding: 0,
+      flexDirection: isMobile ? 'column' : 'row',
+      gap: 0,
+    }}>
+      {/* Chat UI Section - WhatsApp-like */}
+      <div style={{
+        flex: isMobile ? 'none' : '1',
+        display: 'flex',
+        flexDirection: 'column',
+        height: isMobile ? '50vh' : '100vh',
+        minHeight: isMobile ? '400px' : '100vh',
+        backgroundColor: '#e5ddd5',
+        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
+        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
+        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
+      }}>
+        {/* Chat Header */}
+        <div style={{
+          backgroundColor: '#075e54',
+          color: 'white',
+          padding: '12px 16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              backgroundColor: '#128c7e',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '18px',
+              fontWeight: 'bold',
+            }}>
+              🤖
+            </div>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+              <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+              </div>
+            </div>
           </div>
-        )}
+        {userData && (
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                <div>{userData.name}</div>
+          </div>
         <button
           type="button"
           onClick={handleLogout}
           style={{
-            padding: '8px 16px',
-            fontSize: '14px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
             fontWeight: 500,
-            color: '#6b7280',
-            backgroundColor: 'white',
-            border: '1px solid #e5e7eb',
-            borderRadius: '8px',
+                  color: 'white',
+                  backgroundColor: 'rgba(255,255,255,0.2)',
+                  border: '1px solid rgba(255,255,255,0.3)',
+                  borderRadius: '6px',
             cursor: 'pointer',
             transition: 'all 0.2s',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.backgroundColor = '#f3f4f6';
-            e.currentTarget.style.borderColor = '#d1d5db';
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.backgroundColor = 'white';
-            e.currentTarget.style.borderColor = '#e5e7eb';
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
           }}
         >
           Logout
         </button>
+            </div>
+          )}
       </div>
 
+        {/* Chat Messages Container */}
+        <div 
+          ref={chatContainerRef}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          {messages.length === 0 ? (
+            <div style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#667781',
+              fontSize: '14px',
+              textAlign: 'center',
+            }}>
+              {status === 'connected' 
+                ? 'Start chatting with your learning buddy!' 
+                : 'Connect to start the conversation'}
+            </div>
+          ) : (
+            messages.map((msg, index) => {
+              const isUser = msg.role === 'user';
+              return (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    alignItems: 'flex-end',
+                    gap: '8px',
+                  }}
+                >
+                  {!isUser && (
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: '#128c7e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}>
+                      🤖
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      maxWidth: '70%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: isUser ? '#dcf8c6' : '#ffffff',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                      wordWrap: 'break-word',
+                      fontSize: '14px',
+                      lineHeight: '1.4',
+                      color: '#111b21',
+                    }}
+                  >
+                    {msg.content}
+                  </div>
+                  {isUser && (
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: '#128c7e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}>
+                      👤
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Controls Section */}
+      <div style={{
+        flex: isMobile ? 'none' : '0 0 400px',
+        width: isMobile ? '100%' : 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '20px',
+        gap: '12px',
+        backgroundColor: '#f9fafb',
+        height: isMobile ? 'auto' : '100vh',
+        maxHeight: isMobile ? '50vh' : 'none',
+        overflowY: 'auto',
+      }}>
       {/* Toggle for mode selection */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
         <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
@@ -543,7 +1011,16 @@ export default function Page() {
               // Disconnect first if connected
               try {
                 if (currentSession) {
-                  currentSession.close();
+                  // Stop recognition if it exists
+                  if (currentSession.recognition) {
+                    try {
+                      currentSession.recognition.stop();
+                      currentSession.recognition.abort();
+                    } catch (e) {
+                      // Ignore errors
+                    }
+                  }
+                  currentSession.session.close();
                   currentSession = null;
                 }
                 if (currentSTTSession) {
@@ -560,6 +1037,7 @@ export default function Page() {
                 console.warn('Error disconnecting:', e);
               }
               setStatus('idle');
+              setMessages([]); // Clear messages when disconnecting
             }
             setUseSTTMode(!useSTTMode);
           }}
@@ -693,9 +1171,10 @@ export default function Page() {
                 : 'Connect Realtime'}
       </button>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-      <div style={{ fontSize: 12, color: '#666' }}>Status: {status}</div>
-      <div style={{ fontSize: 12, color: '#666', maxWidth: 480, textAlign: 'center' }}>
-        Speak normally after connecting.
+        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
+        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+          {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
+        </div>
       </div>
     </main>
   );
