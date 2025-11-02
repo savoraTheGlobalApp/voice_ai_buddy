@@ -86,13 +86,16 @@ npm run dev
 
 Frontend will run at `http://localhost:3000`
 
-### 3. Usage
+### 4. Usage
 
 1. Open `http://localhost:3000` in your browser
-2. Select your microphone and speaker devices
-3. Click "Connect Realtime"
-4. Grant microphone permissions when prompted
-5. Start speaking! The AI will respond in real-time
+2. **First-time users**: Enter an access code (generated from the script above)
+3. Sign up with your details (name, age, email, password)
+4. **Returning users**: Click "Sign In" and enter your email and password
+5. After authentication, select your microphone and speaker devices
+6. Click "Connect Realtime"
+7. Grant microphone permissions when prompted
+8. Start speaking! The AI will respond in real-time
 
 ## Environment Variables
 
@@ -107,7 +110,17 @@ Frontend will run at `http://localhost:3000`
 
 ### Frontend (`.env.local` in project root)
 
+**Firebase Configuration (Required):**
+- `NEXT_PUBLIC_FIREBASE_API_KEY`: Firebase API key
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`: Firebase Auth domain
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`: Firebase project ID
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`: Firebase storage bucket
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`: Firebase messaging sender ID
+- `NEXT_PUBLIC_FIREBASE_APP_ID`: Firebase app ID
+
+**Other:**
 - `NEXT_PUBLIC_BACKEND_URL` (optional): Backend API URL. Default: `http://localhost:8000`
+- `NEXT_PUBLIC_USE_STT_MODE` (optional): Mode toggle. Default: `OFF`. Set to `ON` for cost-effective mode
 
 ## Cost Optimization
 
