@@ -75,6 +75,19 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "nova"
 
+class MemoryCandidate(BaseModel):
+    text: str
+    type: str
+    importance: int
+
+class MemoryExtractRequest(BaseModel):
+    messages: List[Dict[str, str]]  # recent user/assistant messages; we focus on user messages
+    top_k: Optional[int] = 5
+    existing_memories: Optional[List[str]] = None
+
+class MemoryExtractResponse(BaseModel):
+    memories: List[MemoryCandidate]
+
 
 @app.get("/health")
 async def health_check():
@@ -221,6 +234,93 @@ async def _generate_gtts(text: str, lang: str = "en") -> bytes:
         return audio_data
     except Exception as e:
         raise Exception(f"gTTS error: {str(e)}")
+
+@app.post("/api/memories/extract", response_model=MemoryExtractResponse)
+async def extract_memories(request: MemoryExtractRequest):
+    """
+    Extract crisp user memories from recent conversation messages.
+    Returns compact memory facts with a type and an importance score (1-10).
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not set on the server")
+
+    model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+
+    system_prompt = (
+        "You are a memory extraction module. From the provided recent user messages, "
+        "extract at most the requested number of crisp, compact memories about the user. "
+        "Each memory must be concise (<= 80 characters), and contain NO emojis. "
+        "Return JSON ONLY with an array named 'memories', where each item has: "
+        "'text' (string), 'type' (one of core_identity, preferences, interests, relationships, achievements, facts), "
+        "and 'importance' (integer 1-10). Use the following guidelines for importance: "
+        "10 = core identity (where they live or core family facts, etc.); 8-9 = deep interests, future career preference, "
+        "important relationships, major achievements, etc.; "
+        "5-7 = preferences, hobbies, regular activities, etc.; 3-4 = temporary likes, recent activities, etc.;"
+        " 1-2 = very specific one-time facts, etc. "
+        "Avoid duplicates, names of the user, and generic statements. If nothing meaningful, return an empty list. "
+        "IMPORTANT: Do not include the user's name in 'text'. Prefer a compact 'key: value' style when possible."
+        "You will also receive an optional list of EXISTING MEMORIES so add only those information that is not" 
+        " already being conveyed directly or indirectly through the information in the existing memories."
+    )
+
+    # Keep only the most recent messages to reduce cost (e.g., last 20)
+    recent = request.messages[-20:]
+    # Removed verbose debug prints
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Extract up to {request.top_k or 5} memories from these messages: {recent}. EXISTING MEMORIES (avoid repeating): {request.existing_memories or []}"},
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 400,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=30.0,
+            )
+
+            if not response.is_success:
+                error_text = response.text
+                raise HTTPException(status_code=500, detail=f"Failed to extract memories: {error_text}")
+
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            try:
+                parsed = httpx.Response(200, text=content).json()
+            except Exception:
+                # Try Python json
+                import json
+                parsed = json.loads(content)
+            memories = parsed.get("memories", [])
+            # no-op
+            # Validate / coerce
+            cleaned = []
+            for m in memories:
+                try:
+                    text = str(m.get("text", "")).strip()
+                    mtype = str(m.get("type", "facts")).strip()
+                    importance = int(m.get("importance", 3))
+                    if not text:
+                        continue
+                    cleaned.append({"text": text, "type": mtype, "importance": importance})
+                except Exception:
+                    continue
+            # no-op
+            return MemoryExtractResponse(memories=cleaned[: (request.top_k or 5)])
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Network error while contacting OpenAI API: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected server error: {str(e)}")
 
 
 async def _generate_edge_tts(text: str, voice: str = "en-US-AriaNeural") -> bytes:
