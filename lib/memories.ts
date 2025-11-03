@@ -20,13 +20,8 @@ export interface UserMemory {
   createdAt: Timestamp;    // Firestore timestamp
 }
 
-const getEnvInt = (name: string, fallback: number): number => {
-  const v = Number(process.env[name]);
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
-};
-
 export async function fetchTopMemories(uid: string, topN?: number): Promise<UserMemory[]> {
-  const n = topN ?? getEnvInt('NEXT_PUBLIC_TOP_MEMORIES_COUNT', 10);
+  const n = topN ?? Number(process.env.NEXT_PUBLIC_TOP_MEMORIES_COUNT || '10');
   const ref = collection(db, 'users', uid, 'memories');
   try {
     // Single-field order avoids composite index requirement
@@ -61,7 +56,7 @@ function normalize(text: string): string {
 
 export async function addMemoriesWithLimit(uid: string, memories: Array<Omit<UserMemory,'createdAt'|'id'>>): Promise<void> {
   if (!memories || memories.length === 0) return;
-  const maxMemories = getEnvInt('NEXT_PUBLIC_MEMORY_LIMIT', 100);
+  const maxMemories = Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || '100');
   const ref = collection(db, 'users', uid, 'memories');
 
   // Fetch existing memories to enforce limit
@@ -96,7 +91,11 @@ export async function addMemoriesWithLimit(uid: string, memories: Array<Omit<Use
       if (mem.importance > least.importance) {
         await deleteDoc(doc(db, 'users', uid, 'memories', least.id!));
         const idx = existing.findIndex(e => e.id === least.id);
-        if (idx >= 0) existing.splice(idx, 1);
+        if (idx >= 0) {
+          existing.splice(idx, 1);
+          const oldNorm = normalize(least.text);
+          if (oldNorm) existingSet.delete(oldNorm);
+        }
       } else {
         // Skip adding this memory (not important enough)
         continue;
@@ -106,6 +105,35 @@ export async function addMemoriesWithLimit(uid: string, memories: Array<Omit<Use
     await addDoc(ref, { ...mem, createdAt: Timestamp.now() });
     existing.push({ ...(mem as any), createdAt: Timestamp.now() });
     existingSet.add(norm);
+  }
+
+  // Final safety: ensure collection does not exceed limit even if concurrent writes occurred
+  await trimMemoriesToLimit(uid, maxMemories);
+}
+
+async function trimMemoriesToLimit(uid: string, maxMemories: number): Promise<void> {
+  const ref = collection(db, 'users', uid, 'memories');
+  const snap = await getDocs(ref);
+  const docs = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as UserMemory[];
+  if (docs.length <= maxMemories) return;
+
+  // Sort by least important first, then oldest first
+  const sortedAsc = docs.sort((a, b) => {
+    if (a.importance !== b.importance) return a.importance - b.importance;
+    const aTime = (a.createdAt as any)?.toMillis?.() ?? 0;
+    const bTime = (b.createdAt as any)?.toMillis?.() ?? 0;
+    return aTime - bTime;
+  });
+
+  const toDelete = sortedAsc.slice(0, docs.length - maxMemories);
+  for (const d of toDelete) {
+    try {
+      if (d.id) {
+        await deleteDoc(doc(db, 'users', uid, 'memories', d.id));
+      }
+    } catch (e) {
+      // Ignore deletion errors
+    }
   }
 }
 
