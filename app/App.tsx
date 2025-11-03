@@ -275,17 +275,12 @@ export async function setupRealtimeMode(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
           });
-          if (!resp.ok) {
-            // ignore if backend temporarily fails
-            return;
-          }
+          if (!resp.ok) return;
           const data = await resp.json();
           const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
           try {
             await addMemoriesWithLimit(uid, memories);
-          } catch (saveErr) {
-            // ignore
-          }
+          } catch (saveErr) {}
         } catch (e) {}
       };
 
@@ -299,6 +294,7 @@ export async function setupRealtimeMode(
         conversationHistory.push({ role: 'user', content: transcript });
         userMsgCounter += 1;
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          console.log('[mem][DEBUG] Realtime mode - triggering extraction at counter:', userMsgCounter);
           maybeExtractMemories();
         }
         
@@ -794,9 +790,7 @@ export async function setupSTTMode(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
         });
-        if (!resp.ok) {
-          return;
-        }
+        if (!resp.ok) return;
         const data = await resp.json();
         const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
         try {
@@ -812,12 +806,16 @@ export async function setupSTTMode(
       console.log('[STT] User said:', transcript);
 
       try {
+        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
+        userMsgCounter += 1;
+        
         // Get chat response
         const response = await getChatResponse(transcript);
         console.log('[TTT] Assistant response:', response);
 
-        userMsgCounter += 1;
+        // Check if we should extract memories after user message is processed
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          console.log('[mem][DEBUG] STT mode - triggering extraction at counter:', userMsgCounter);
           maybeExtractMemories();
         }
 
