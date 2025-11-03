@@ -3,17 +3,20 @@ import React, { useEffect, useRef, useState } from 'react';
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 
 // Function to build personalized instructions with user data
-function buildSocraticTutorInstructions(userName?: string, userAge?: number): string {
+function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
   let userInfoSection = '';
+  let memoriesSection = '';
   
   if (userName && userAge) {
     userInfoSection = `# USER INFORMATION
 - The child's name is ${userName}
 - The child is ${userAge} years old
 - ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
-- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as humans naturally do in conversations - this makes the interaction feel more personal and warm
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as 
+humans naturally do in conversations - this makes the interaction feel more personal and warm
 - Do NOT use the name in every sentence as that would sound repetitive and unnatural
 - When the child asks about their age, you can tell them they are ${userAge} years old
 - Adapt your language complexity to their age (${userAge} years old)
@@ -23,26 +26,36 @@ function buildSocraticTutorInstructions(userName?: string, userAge?: number): st
     userInfoSection = `# USER INFORMATION
 - The child's name is ${userName}
 - ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
-- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as humans naturally do in conversations - this makes the interaction feel more personal and warm
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as 
+humans naturally do in conversations - this makes the interaction feel more personal and warm
 - Do NOT use the name in every sentence as that would sound repetitive and unnatural
 
 `;
+  }
+
+  const topMemoriesCount = Number(process.env.NEXT_PUBLIC_TOP_MEMORIES_COUNT || 10);
+  if (topMemories && topMemories.length > 0) {
+    const items = topMemories.slice(0, topMemoriesCount).map(m => `- (${m.importance}) [${m.type}] ${m.text}`).join('\n');
+    memoriesSection = `# USER MEMORIES (Top ${Math.min(topMemories.length, topMemoriesCount)})\n${items}\n\n`;
   }
 
   return `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
 who helps kids think deeply, be creative, and develop critical thinking skills. You speak with warmth, enthusiasm and 
 always in a playful and curious tone.
 
-${userInfoSection}# CORE ROLE
+${userInfoSection}${memoriesSection}# CORE ROLE
 Your goal is to help children become curious thinkers through guided discovery, not direct answers. You adapt to each 
 child's understanding level and celebrate their thinking process.
 
 # Beginning of the conversation
 - Always start with a warm, personalized greeting that feels natural and engaging
-- For the first greeting, make it dynamic and varied - use different conversation starters like asking about their day, sharing something interesting, asking what they're curious about, or starting with something fun and playful
+- For the first greeting, make it dynamic and varied - use different conversation starters like asking about their day, 
+sharing something interesting, asking what they're curious about, or starting with something fun and playful but use only 
+one of these at a time and keep the first message short and sweet.
 - Vary your greeting style each time - don't use the same greeting repeatedly
 - Make the greeting age-appropriate and warm, suitable for a child
-- If they don't say anything after greeting, continue with something fun and engaging like a story, joke, poem, etc. or ask how was their day, etc.
+- If they don't say anything after greeting, continue with something fun and engaging like a story, joke, poem, etc. or ask 
+how was their day, etc.
 
 # SAFETY PROTOCOL (ALWAYS FIRST)
 Before responding to ANY input, check if it contains:
@@ -153,6 +166,31 @@ let currentSTTSession: {
 // Callback to update chat UI when conversation history changes
 let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) => void) | null = null;
 
+// Make memory text as crisp as possible by removing user's name and connectors
+function crispifyMemoryText(text: string, userName?: string): string {
+  if (!text) return text;
+  let t = text.trim();
+  if (userName && userName.length > 0) {
+    const name = userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const poss = new RegExp(`^${name}'s\s+`, 'i');
+    const subjIs = new RegExp(`^${name}\s+(is|has|likes|loves|enjoys)\s+`, 'i');
+    const subj = new RegExp(`^${name}\s+`, 'i');
+    t = t.replace(poss, '');
+    t = t.replace(subjIs, '');
+    t = t.replace(subj, '');
+  }
+  // Simplify common connectors to key: value style
+  t = t.replace(/\s+is\s+/gi, ': ')
+       .replace(/\s+has\s+/gi, ': ')
+       .replace(/\s+are\s+/gi, ': ')
+       .replace(/\s+likes\s+/gi, ': ')
+       .replace(/\s+loves\s+/gi, ': ')
+       .replace(/\s+enjoys\s+/gi, ': ')
+       .replace(/^my\s+/i, '')
+       .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
+  return t.trim();
+}
+
 // Realtime mode setup (OFF toggle = current implementation)
 export async function setupRealtimeMode(
   element: HTMLButtonElement,
@@ -161,8 +199,16 @@ export async function setupRealtimeMode(
   outputDeviceId?: string | null,
   userName?: string,
   userAge?: number,
+  uid?: string,
 ) {
-  const instructions = buildSocraticTutorInstructions(userName, userAge);
+  // Fetch top memories for personalization
+  let memories: UserMemory[] = [];
+  try {
+    if (uid) {
+      memories = await fetchTopMemories(uid);
+    }
+  } catch {}
+  const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
   const agent = new RealtimeAgent({
     name: 'SocraticTutor',
@@ -215,6 +261,34 @@ export async function setupRealtimeMode(
       recognition.lang = 'en-US';
       
       // Handle user speech transcription
+      let userMsgCounter = 0;
+      const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      const maybeExtractMemories = async () => {
+        if (!uid) return;
+        try {
+          // Fetch existing memories (texts only) to help backend avoid duplicates
+          const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+          const existingTexts = existing.map(m => m.text);
+          const resp = await fetch(`${backendUrl}/api/memories/extract`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+          });
+          if (!resp.ok) {
+            // ignore if backend temporarily fails
+            return;
+          }
+          const data = await resp.json();
+          const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
+          try {
+            await addMemoriesWithLimit(uid, memories);
+          } catch (saveErr) {
+            // ignore
+          }
+        } catch (e) {}
+      };
+
       recognition.onresult = (event: any) => {
         const transcript = event.results[event.results.length - 1][0].transcript.trim();
         if (!transcript) return;
@@ -223,6 +297,10 @@ export async function setupRealtimeMode(
         
         // Add to conversation history
         conversationHistory.push({ role: 'user', content: transcript });
+        userMsgCounter += 1;
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          maybeExtractMemories();
+        }
         
         // Update UI
         if (onConversationUpdate) {
@@ -531,6 +609,7 @@ export async function setupSTTMode(
   outputDeviceId?: string | null,
   userName?: string,
   userAge?: number,
+  uid?: string,
 ) {
   // Close any existing sessions
   try {
@@ -565,7 +644,14 @@ export async function setupSTTMode(
   }
 
   try {
-    const instructions = buildSocraticTutorInstructions(userName, userAge);
+    // Fetch top memories for personalization
+    let memories: UserMemory[] = [];
+    try {
+      if (uid) {
+        memories = await fetchTopMemories(uid);
+      }
+    } catch {}
+    const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
     
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
@@ -695,6 +781,30 @@ export async function setupSTTMode(
     };
 
     // Handle speech recognition results
+    let userMsgCounter = 0;
+    const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
+    const backendUrlMem = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const maybeExtractMemories = async () => {
+      if (!uid) return;
+      try {
+        const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+        const existingTexts = existing.map(m => m.text);
+        const resp = await fetch(`${backendUrlMem}/api/memories/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+        });
+        if (!resp.ok) {
+          return;
+        }
+        const data = await resp.json();
+        const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
+        try {
+          await addMemoriesWithLimit(uid, memories);
+        } catch (saveErr) {}
+      } catch (e) {}
+    };
+
     recognition.onresult = async (event: any) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) return;
@@ -705,6 +815,11 @@ export async function setupSTTMode(
         // Get chat response
         const response = await getChatResponse(transcript);
         console.log('[TTT] Assistant response:', response);
+
+        userMsgCounter += 1;
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          maybeExtractMemories();
+        }
 
         // Convert to speech
         await textToSpeech(response);
@@ -804,11 +919,12 @@ export async function setupCounter(
   useSTTMode: boolean = false,
   userName?: string,
   userAge?: number,
+  uid?: string,
 ) {
   if (useSTTMode) {
-    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge);
+    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   } else {
-    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge);
+    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   }
 }
 
@@ -1196,6 +1312,7 @@ export default function Page() {
             useSTTMode,
             userData?.name,
             userData?.age,
+            currentUser?.uid || userData?.uid,
           )
             .then(() => setStatus('connected'))
             .catch((e) => {
