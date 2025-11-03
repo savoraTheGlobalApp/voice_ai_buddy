@@ -4,18 +4,45 @@ import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/ag
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
-// Shared instructions for both modes
-const SOCRATIC_TUTOR_INSTRUCTIONS = `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
+// Function to build personalized instructions with user data
+function buildSocraticTutorInstructions(userName?: string, userAge?: number): string {
+  let userInfoSection = '';
+  
+  if (userName && userAge) {
+    userInfoSection = `# USER INFORMATION
+- The child's name is ${userName}
+- The child is ${userAge} years old
+- ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as humans naturally do in conversations - this makes the interaction feel more personal and warm
+- Do NOT use the name in every sentence as that would sound repetitive and unnatural
+- When the child asks about their age, you can tell them they are ${userAge} years old
+- Adapt your language complexity to their age (${userAge} years old)
+
+`;
+  } else if (userName) {
+    userInfoSection = `# USER INFORMATION
+- The child's name is ${userName}
+- ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as humans naturally do in conversations - this makes the interaction feel more personal and warm
+- Do NOT use the name in every sentence as that would sound repetitive and unnatural
+
+`;
+  }
+
+  return `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
 who helps kids think deeply, be creative, and develop critical thinking skills. You speak with warmth, enthusiasm and 
 always in a playful and curious tone.
 
-# CORE ROLE
+${userInfoSection}# CORE ROLE
 Your goal is to help children become curious thinkers through guided discovery, not direct answers. You adapt to each 
 child's understanding level and celebrate their thinking process.
 
 # Beginning of the conversation
-- Always start with a warm greeting and ask the child what they want to talk about
-- If they don't say anything, start with something fun and engaging like a story, joke, poem, etc. or how was their day, etc.
+- Always start with a warm, personalized greeting that feels natural and engaging
+- For the first greeting, make it dynamic and varied - use different conversation starters like asking about their day, sharing something interesting, asking what they're curious about, or starting with something fun and playful
+- Vary your greeting style each time - don't use the same greeting repeatedly
+- Make the greeting age-appropriate and warm, suitable for a child
+- If they don't say anything after greeting, continue with something fun and engaging like a story, joke, poem, etc. or ask how was their day, etc.
 
 # SAFETY PROTOCOL (ALWAYS FIRST)
 Before responding to ANY input, check if it contains:
@@ -107,7 +134,9 @@ You: "Great thinking! Let me give you a hint - think about how a rainbow has man
 - Patient with confusion
 - Celebratory of attempts ("Good try!", "Nice thinking!")
 - Use simple Indian English expressions naturally and sparingly
+- Do NOT use emojis or emoticons in any response
 - Age 3-10 appropriate throughout`;
+}
 
 let currentSession: {
   session: RealtimeSession;
@@ -130,11 +159,14 @@ export async function setupRealtimeMode(
   audioEl?: HTMLAudioElement | null,
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
+  userName?: string,
+  userAge?: number,
 ) {
+  const instructions = buildSocraticTutorInstructions(userName, userAge);
 
   const agent = new RealtimeAgent({
     name: 'SocraticTutor',
-    instructions: SOCRATIC_TUTOR_INSTRUCTIONS,
+    instructions: instructions,
   });
   // Capture mic stream explicitly and pass it to the WebRTC transport
   const constraints: MediaStreamConstraints = {
@@ -151,7 +183,7 @@ export async function setupRealtimeMode(
   const conversationHistory: Array<{ role: string; content: string }> = [
     {
       role: 'system',
-      content: SOCRATIC_TUTOR_INSTRUCTIONS,
+      content: instructions,
     },
   ];
   // Automatically connects your microphone and audio output in the browser via WebRTC.
@@ -497,6 +529,8 @@ export async function setupSTTMode(
   audioEl?: HTMLAudioElement | null,
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
+  userName?: string,
+  userAge?: number,
 ) {
   // Close any existing sessions
   try {
@@ -531,11 +565,13 @@ export async function setupSTTMode(
   }
 
   try {
+    const instructions = buildSocraticTutorInstructions(userName, userAge);
+    
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
       {
         role: 'system',
-        content: SOCRATIC_TUTOR_INSTRUCTIONS,
+        content: instructions,
       },
     ];
 
@@ -579,11 +615,15 @@ export async function setupSTTMode(
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
     // Function to send text to chat API and get response
-    const getChatResponse = async (userMessage: string): Promise<string> => {
-      conversationHistory.push({ role: 'user', content: userMessage });
-      // Update UI
-      if (onConversationUpdate) {
-        onConversationUpdate([...conversationHistory]);
+    const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      // Add user message to conversation history
+      // For initial greeting, we still want to send the prompt but it won't be visible in UI
+      if (userMessage) {
+        conversationHistory.push({ role: 'user', content: userMessage });
+        // Update UI (but skip the initial greeting user message for cleaner display)
+        if (onConversationUpdate && !isInitialGreeting) {
+          onConversationUpdate([...conversationHistory]);
+        }
       }
 
       const response = await fetch(`${backendUrl}/api/chat`, {
@@ -698,13 +738,54 @@ export async function setupSTTMode(
     // Start recognition
     recognition.start();
     
-    // Send initial greeting
-    const greeting = "Hi! I'm your learning buddy! I love hearing your thoughts and questions. What are you curious about today?";
-    conversationHistory.push({ role: 'assistant', content: greeting });
-    await textToSpeech(greeting);
-    // Update UI
-    if (onConversationUpdate) {
-      onConversationUpdate([...conversationHistory]);
+    // Generate dynamic initial greeting using the AI
+    // This makes the greeting personalized and varied each time
+    try {
+      // Send a prompt that will generate a dynamic greeting
+      // The AI will use the instructions to greet with the child's name in the first message
+      const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
+      conversationHistory.push({ role: 'user', content: greetingPrompt });
+      
+      // Get the greeting from AI
+      const response = await fetch(`${backendUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: conversationHistory,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Chat API error: ${text}`);
+      }
+
+      const data = await response.json();
+      const greeting = data.response || data.message || '';
+      
+      // Remove the greeting prompt from history (it was just to trigger the greeting)
+      // Keep only the system message and the assistant's greeting
+      conversationHistory.pop(); // Remove the user greeting prompt
+      conversationHistory.push({ role: 'assistant', content: greeting });
+      
+      await textToSpeech(greeting);
+      // Update UI
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
+    } catch (e) {
+      console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
+      // Fallback greeting if AI fails
+      const fallbackGreeting = userName 
+        ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
+        : "Hi! I'm your learning buddy! What would you like to explore today?";
+      conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
+      await textToSpeech(fallbackGreeting);
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
     }
 
     console.log('You are connected! (STT/TTT/TTS mode)');
@@ -721,11 +802,13 @@ export async function setupCounter(
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
   useSTTMode: boolean = false,
+  userName?: string,
+  userAge?: number,
 ) {
   if (useSTTMode) {
-    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId);
+    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge);
   } else {
-    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId);
+    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge);
   }
 }
 
@@ -1111,6 +1194,8 @@ export default function Page() {
             selectedInput,
             selectedOutput,
             useSTTMode,
+            userData?.name,
+            userData?.age,
           )
             .then(() => setStatus('connected'))
             .catch((e) => {
