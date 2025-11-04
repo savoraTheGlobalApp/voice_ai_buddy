@@ -1,19 +1,62 @@
 "use client";
 import React, { useEffect, useRef, useState } from 'react';
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
+import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
+import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 
-// Shared instructions for both modes
-const SOCRATIC_TUTOR_INSTRUCTIONS = `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
+// Function to build personalized instructions with user data
+function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
+  let userInfoSection = '';
+  let memoriesSection = '';
+  
+  if (userName && userAge) {
+    userInfoSection = `# USER INFORMATION
+- The child's name is ${userName}
+- The child is ${userAge} years old
+- ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as 
+humans naturally do in conversations - this makes the interaction feel more personal and warm
+- Do NOT use the name in every sentence as that would sound repetitive and unnatural
+- When the child asks about their age, you can tell them they are ${userAge} years old
+- Adapt your language complexity to their age (${userAge} years old)
+
+`;
+  } else if (userName) {
+    userInfoSection = `# USER INFORMATION
+- The child's name is ${userName}
+- ALWAYS use the child's name (${userName}) in your FIRST greeting message - this is how humans naturally start conversations
+- After the first greeting, use the child's name occasionally in your conversations (approximately once every 2-3 exchanges), as 
+humans naturally do in conversations - this makes the interaction feel more personal and warm
+- Do NOT use the name in every sentence as that would sound repetitive and unnatural
+
+`;
+  }
+
+  const topMemoriesCount = Number(process.env.NEXT_PUBLIC_TOP_MEMORIES_COUNT || 10);
+  if (topMemories && topMemories.length > 0) {
+    const items = topMemories.slice(0, topMemoriesCount).map(m => `- (${m.importance}) [${m.type}] ${m.text}`).join('\n');
+    memoriesSection = `# USER MEMORIES (Top ${Math.min(topMemories.length, topMemoriesCount)})\n${items}\n\n`;
+  }
+
+  return `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
 who helps kids think deeply, be creative, and develop critical thinking skills. You speak with warmth, enthusiasm and 
 always in a playful and curious tone.
 
-# CORE ROLE
+${userInfoSection}${memoriesSection}# CORE ROLE
 Your goal is to help children become curious thinkers through guided discovery, not direct answers. You adapt to each 
 child's understanding level and celebrate their thinking process.
 
 # Beginning of the conversation
-- Always start with a warm greeting and ask the child what they want to talk about
-- If they don't say anything, start with something fun and engaging like a story, joke, poem, etc. or how was their day, etc.
+- Always start with a warm, personalized greeting that feels natural and engaging
+- For the first greeting, make it dynamic and varied - use different conversation starters like asking about their day, 
+sharing something interesting, asking what they're curious about, or starting with something fun and playful but use only 
+one of these at a time and keep the first message short and sweet.
+- Vary your greeting style each time - don't use the same greeting repeatedly
+- Make the greeting age-appropriate and warm, suitable for a child
+- If they don't say anything after greeting, continue with something fun and engaging like a story, joke, poem, etc. or ask 
+how was their day, etc.
 
 # SAFETY PROTOCOL (ALWAYS FIRST)
 Before responding to ANY input, check if it contains:
@@ -105,9 +148,15 @@ You: "Great thinking! Let me give you a hint - think about how a rainbow has man
 - Patient with confusion
 - Celebratory of attempts ("Good try!", "Nice thinking!")
 - Use simple Indian English expressions naturally and sparingly
+- Do NOT use emojis or emoticons in any response
 - Age 3-10 appropriate throughout`;
+}
 
-let currentSession: RealtimeSession | null = null;
+let currentSession: {
+  session: RealtimeSession;
+  conversationHistory: Array<{ role: string; content: string }>;
+  recognition?: any;
+} | null = null;
 let currentSTTSession: {
   recognition: any;
   mediaRecorder: MediaRecorder | null;
@@ -115,17 +164,56 @@ let currentSTTSession: {
   conversationHistory: Array<{ role: string; content: string }>;
 } | null = null;
 
+// Callback to update chat UI when conversation history changes
+let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) => void) | null = null;
+
+// Make memory text as crisp as possible by removing user's name and connectors
+function crispifyMemoryText(text: string, userName?: string): string {
+  if (!text) return text;
+  let t = text.trim();
+  if (userName && userName.length > 0) {
+    const name = userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const poss = new RegExp(`^${name}'s\s+`, 'i');
+    const subjIs = new RegExp(`^${name}\s+(is|has|likes|loves|enjoys)\s+`, 'i');
+    const subj = new RegExp(`^${name}\s+`, 'i');
+    t = t.replace(poss, '');
+    t = t.replace(subjIs, '');
+    t = t.replace(subj, '');
+  }
+  // Simplify common connectors to key: value style
+  t = t.replace(/\s+is\s+/gi, ': ')
+       .replace(/\s+has\s+/gi, ': ')
+       .replace(/\s+are\s+/gi, ': ')
+       .replace(/\s+likes\s+/gi, ': ')
+       .replace(/\s+loves\s+/gi, ': ')
+       .replace(/\s+enjoys\s+/gi, ': ')
+       .replace(/^my\s+/i, '')
+       .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
+  return t.trim();
+}
+
 // Realtime mode setup (OFF toggle = current implementation)
 export async function setupRealtimeMode(
   element: HTMLButtonElement,
   audioEl?: HTMLAudioElement | null,
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
+  userName?: string,
+  userAge?: number,
+  uid?: string,
 ) {
+  // Fetch top memories for personalization
+  let memories: UserMemory[] = [];
+  try {
+    if (uid) {
+      memories = await fetchTopMemories(uid);
+    }
+  } catch {}
+  const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
   const agent = new RealtimeAgent({
     name: 'SocraticTutor',
-    instructions: SOCRATIC_TUTOR_INSTRUCTIONS,
+    instructions: instructions,
   });
   // Capture mic stream explicitly and pass it to the WebRTC transport
   const constraints: MediaStreamConstraints = {
@@ -137,7 +225,26 @@ export async function setupRealtimeMode(
   }
   const transport = new OpenAIRealtimeWebRTC({ mediaStream, audioElement: audioEl ?? undefined });
   const session = new RealtimeSession(agent, { transport });
-  currentSession = session;
+
+  // Initialize conversation history
+  const conversationHistory: Array<{ role: string; content: string }> = [
+    {
+      role: 'system',
+      content: instructions,
+    },
+  ];
+    // Conversation session tracking
+    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let lastSavedMessageIndex = 0;
+    if (uid) {
+      try {
+        await startConversationSession(uid, conversationSessionId, 'realtime');
+        console.log('[conv] Realtime session started:', conversationSessionId);
+      } catch (e) {
+        console.error('[conv] Failed to start realtime conversation session', e);
+      }
+    }
+
   // Automatically connects your microphone and audio output in the browser via WebRTC.
   try {
     // Prompt for microphone permission early to ensure input is available
@@ -156,12 +263,127 @@ export async function setupRealtimeMode(
     }
     const { token } = await resp.json();
 
+    // Initialize Web Speech API for STT to transcribe user speech (free, parallel to Realtime API)
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    let recognition: any = null;
+    
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+      
+      // Handle user speech transcription
+      let userMsgCounter = 0;
+      const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      const maybeExtractMemories = async () => {
+        if (!uid) return;
+        try {
+          // Fetch existing memories (texts only) to help backend avoid duplicates
+          const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+          const existingTexts = existing.map(m => m.text);
+          const resp = await fetch(`${backendUrl}/api/memories/extract`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+          });
+          if (!resp.ok) return;
+          const data = await resp.json();
+          const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
+          try {
+            await addMemoriesWithLimit(uid, memories);
+          } catch (saveErr) {}
+
+          // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
+          try {
+            const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+              .filter(msg => msg.role !== 'system'); // Exclude system messages
+            if (newChunk.length > 0) {
+              const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+              // Update sessionId if document was split
+              if (result.wasSplit) {
+                conversationSessionId = result.sessionId;
+                console.log('[conv] Realtime session split, continuing in:', conversationSessionId);
+              }
+              lastSavedMessageIndex = conversationHistory.length;
+              console.log('[conv] Realtime session appended', newChunk.length, 'messages');
+            }
+          } catch (e) {
+            console.error('[conv] Realtime append failed', e);
+          }
+        } catch (e) {}
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[event.results.length - 1][0].transcript.trim();
+        if (!transcript) return;
+        
+        console.log('[STT] User said:', transcript);
+        
+        // Add to conversation history
+        conversationHistory.push({ role: 'user', content: transcript });
+        userMsgCounter += 1;
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          console.log('[mem][DEBUG] Realtime mode - triggering extraction at counter:', userMsgCounter);
+          maybeExtractMemories();
+        }
+        
+        // Update UI
+        if (onConversationUpdate) {
+          onConversationUpdate([...conversationHistory]);
+        }
+      };
+      
+      recognition.onerror = (event: any) => {
+        if (event.error !== 'no-speech' && event.error !== 'aborted' && 
+            event.error !== 'audio-capture' && event.error !== 'not-allowed') {
+          console.error('[STT] Recognition error:', event.error);
+        }
+      };
+      
+      recognition.onend = () => {
+        // Restart recognition if session is still active
+        if (currentSession && currentSession.session === session) {
+          try {
+            recognition.start();
+          } catch (e) {
+            // Ignore errors when restarting
+          }
+        }
+      };
+    }
+
     // Basic diagnostics — register BEFORE connecting so we don't miss early events
     session.transport.on('connected', () => {
       console.log('[realtime] connected');
       if (session.transport.muted) session.transport.mute(false);
-      // Warm greeting from Socratic tutor
-      session.transport.sendMessage('Hi! I\'m your learning buddy! I love hearing your thoughts and questions. What are you curious about today?', {});
+      
+      // Start Web Speech API recognition for user transcription
+      if (recognition) {
+        try {
+          recognition.start();
+          console.log('[STT] Started for user transcription');
+        } catch (e) {
+          console.warn('[STT] Could not start recognition:', e);
+        }
+      }
+      
+      // Trigger the agent to start speaking automatically
+      // The agent will respond with a greeting based on the instructions
+      // Wait a moment for the session to be fully ready, then trigger
+      setTimeout(() => {
+        try {
+          // Send a trigger message to start the conversation
+          // This will make the agent respond with its greeting based on instructions
+          // Note: This message will be handled by Realtime API, not added to our conversationHistory
+          // The agent's response will be captured by our event listeners
+          session.transport.sendMessage('', {});
+          console.log('[realtime] Triggered agent to start conversation');
+        } catch (e) {
+          console.warn('[realtime] Could not trigger agent:', e);
+        }
+      }, 1500); // Wait 1.5 seconds for session to be fully ready
     });
     session.transport.on('disconnected', () => console.log('[realtime] disconnected'));
     session.transport.on('error', (e: any) => {
@@ -191,33 +413,214 @@ export async function setupRealtimeMode(
         console.error('[realtime] error', e);
       }
     });
-    session.transport.on('turn_started', () => console.log('[realtime] turn_started'));
-    session.transport.on('turn_done', () => console.log('[realtime] turn_done'));
-    session.transport.on('audio_done', () => console.log('[realtime] audio_done'));
+    session.transport.on('turn_started', () => {
+      console.log('[realtime] turn_started');
+    });
+    // Track which messages we've already logged to avoid duplicates
+    let lastLoggedHistoryLength = 0;
+    
+    session.transport.on('turn_done', () => {
+      console.log('[realtime] turn_done');
+      
+      // Access conversation history directly from session.history
+      try {
+        const history = (session as any).history;
+        
+        if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
+          // Get new messages since last check
+          const newMessages = history.slice(lastLoggedHistoryLength);
+          
+          newMessages.forEach((message: any) => {
+            // Extract assistant transcript from the message
+            let assistantText: string | null = null;
+            
+            // Check different possible structures
+            if (message.role === 'assistant') {
+              // Extract transcript from message.content array
+              // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
+              if (message.content && Array.isArray(message.content)) {
+                // Find the content part with transcript (usually output_audio type)
+                for (const part of message.content) {
+                  if (part.transcript && typeof part.transcript === 'string') {
+                    assistantText = part.transcript.trim();
+                    break; // Use first transcript found
+                  }
+                }
+              }
+              
+              // Fallback: Check for transcript property directly on message
+              if (!assistantText && message.transcript && typeof message.transcript === 'string') {
+                assistantText = message.transcript.trim();
+              }
+              
+              // Fallback: Try to get text from content if it's a string
+              if (!assistantText && message.content && typeof message.content === 'string') {
+                assistantText = message.content.trim();
+              }
+              
+              // Fallback: Check for text property directly
+              if (!assistantText && message.text && typeof message.text === 'string') {
+                assistantText = message.text.trim();
+              }
+              
+              // Add to conversation history and update UI if we found assistant text
+              if (assistantText && assistantText.length > 2) {
+                console.log('[realtime] ASSISTANT SAID:', assistantText);
+                
+                // Check if we already have this message to avoid duplicates
+                const existingMessage = conversationHistory.find(
+                  msg => msg.role === 'assistant' && msg.content === assistantText
+                );
+                
+                if (!existingMessage) {
+                  conversationHistory.push({ role: 'assistant', content: assistantText });
+                  
+                  // Update chat UI
+                  if (onConversationUpdate) {
+                    onConversationUpdate([...conversationHistory]);
+                  }
+                }
+              }
+            }
+          });
+          
+          // Update last logged length
+          lastLoggedHistoryLength = history.length;
+        }
+      } catch (e) {
+        console.warn('[realtime] Error accessing session.history:', e);
+      }
+    });
+    session.transport.on('audio_done', () => {
+      console.log('[realtime] audio_done');
+      
+      // When audio is done (assistant finished speaking), check history immediately
+      // This might capture the transcript faster than waiting for turn_done
+      try {
+        const history = (session as any).history;
+        
+        if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
+          // Get the most recent assistant message
+          const recentMessages = history.slice(lastLoggedHistoryLength);
+          
+          let foundNewAssistantMessage = false;
+          
+          recentMessages.forEach((message: any) => {
+            if (message.role === 'assistant') {
+              let assistantText: string | null = null;
+              
+              // Extract transcript from message.content array
+              // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
+              if (message.content && Array.isArray(message.content)) {
+                // Find the content part with transcript (usually output_audio type)
+                for (const part of message.content) {
+                  if (part.transcript && typeof part.transcript === 'string') {
+                    assistantText = part.transcript.trim();
+                    break; // Use first transcript found
+                  }
+                }
+              }
+              
+              // Fallback: Check for transcript property directly on message
+              if (!assistantText && message.transcript && typeof message.transcript === 'string') {
+                assistantText = message.transcript.trim();
+              }
+              
+              // Fallback: Try to get text from content if it's a string
+              if (!assistantText && typeof message.content === 'string') {
+                assistantText = message.content.trim();
+              }
+              
+              // Fallback: Check for text property directly
+              if (!assistantText && message.text && typeof message.text === 'string') {
+                assistantText = message.text.trim();
+              }
+              
+              if (assistantText && assistantText.length > 2) {
+                console.log('[realtime] ASSISTANT SAID:', assistantText);
+                
+                // Add to conversation history and update UI
+                const existingMessage = conversationHistory.find(
+                  msg => msg.role === 'assistant' && msg.content === assistantText
+                );
+                
+                if (!existingMessage) {
+                  conversationHistory.push({ role: 'assistant', content: assistantText });
+                  foundNewAssistantMessage = true;
+                  
+                  // Update chat UI
+                  if (onConversationUpdate) {
+                    onConversationUpdate([...conversationHistory]);
+                  }
+                }
+              }
+            }
+          });
+          
+          // Update counter after processing all messages to prevent duplicates
+          if (foundNewAssistantMessage) {
+            lastLoggedHistoryLength = history.length;
+          }
+        }
+      } catch (e) {
+        console.warn('[realtime] Error checking history on audio_done:', e);
+      }
+    });
+
 
     // Close any previous session to avoid multiple active connections
-    try { currentSession?.close(); } catch {}
+    try { currentSession?.session.close(); } catch {}
 
     // Connect first, then apply session config via the transport
     await session.connect({ apiKey: token });
+    
+    // Update session config - explicitly enable transcription for output audio
     session.transport.updateSessionConfig({
       audio: {
-        input: { turnDetection: { type: 'semantic_vad', createResponse: true } },
-        output: { voice: 'nova' }, // Using 'nova' which is a warmer, more expressive voice suitable for child-like character
+        input: { 
+          turnDetection: { type: 'semantic_vad', createResponse: true },
+        },
+        output: { 
+          voice: 'nova',
+          // Explicitly enable transcription for assistant audio output
+          transcription: {
+            format: 'text',
+          },
+        } as any,
       },
     });
 
-    // Explicitly disable input transcription (SDK defaults include it).
-    // Send raw event to avoid client default re-adding it.
+    // Also send session.update event to ensure transcription is enabled
+    // This is sometimes needed in addition to updateSessionConfig
+    try {
     session.transport.sendEvent({
       type: 'session.update',
       session: {
         type: 'realtime',
-        audio: { input: { transcription: null } },
+          audio: {
+            output: {
+              transcription: {
+                format: 'text',
+              },
+            },
+          },
       },
     } as any);
+      console.log('[realtime] Transcription enabled via session.update event');
+    } catch (e) {
+      console.warn('[realtime] Could not send session.update event:', e);
+    }
 
-    // Transcripts intentionally disabled; no transcript logging
+    // Store session with conversation history and recognition
+    currentSession = {
+      session,
+      conversationHistory,
+    };
+    
+    // Store recognition reference for cleanup
+    if (recognition) {
+      (currentSession as any).recognition = recognition;
+    }
 
     console.log('You are connected!');
   } catch (e) {
@@ -231,11 +634,23 @@ export async function setupSTTMode(
   audioEl?: HTMLAudioElement | null,
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
+  userName?: string,
+  userAge?: number,
+  uid?: string,
 ) {
   // Close any existing sessions
   try {
     if (currentSession) {
-      currentSession.close();
+        // Stop recognition if it exists
+        if (currentSession.recognition) {
+          try {
+            currentSession.recognition.stop();
+            currentSession.recognition.abort();
+          } catch (e) {
+            // Ignore errors
+          }
+        }
+        currentSession.session.close();
       currentSession = null;
     }
     if (currentSTTSession) {
@@ -256,11 +671,32 @@ export async function setupSTTMode(
   }
 
   try {
+    // Fetch top memories for personalization
+    let memories: UserMemory[] = [];
+    try {
+      if (uid) {
+        memories = await fetchTopMemories(uid);
+      }
+    } catch {}
+    const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+
+    // Conversation session tracking
+    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let lastSavedMessageIndex = 0;
+    if (uid) {
+      try {
+        await startConversationSession(uid, conversationSessionId, 'stt');
+        console.log('[conv] STT session started:', conversationSessionId);
+      } catch (e) {
+        console.error('[conv] Failed to start STT conversation session', e);
+      }
+    }
+    
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
       {
         role: 'system',
-        content: SOCRATIC_TUTOR_INSTRUCTIONS,
+        content: instructions,
       },
     ];
 
@@ -303,30 +739,83 @@ export async function setupSTTMode(
     // Get backend URL
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-    // Function to send text to chat API and get response
-    const getChatResponse = async (userMessage: string): Promise<string> => {
-      conversationHistory.push({ role: 'user', content: userMessage });
-
-      const response = await fetch(`${backendUrl}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: conversationHistory,
-          // Model will be determined by backend from environment variable or use default
-        }),
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Chat API error: ${text}`);
+    // Function to send text to chat API and get response with retry logic
+    const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      // Add user message to conversation history
+      // For initial greeting, we still want to send the prompt but it won't be visible in UI
+      if (userMessage) {
+        conversationHistory.push({ role: 'user', content: userMessage });
+        // Update UI (but skip the initial greeting user message for cleaner display)
+        if (onConversationUpdate && !isInitialGreeting) {
+          onConversationUpdate([...conversationHistory]);
+        }
       }
 
-      const data = await response.json();
-      const assistantMessage = data.response || data.message || '';
-      conversationHistory.push({ role: 'assistant', content: assistantMessage });
-      return assistantMessage;
+      // Retry logic for network errors (max 2 retries)
+      let lastError: Error | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        try {
+          // Create timeout controller for compatibility
+          const controller = new AbortController();
+          timeoutId = setTimeout(() => controller.abort(), 35000);
+          
+          const response = await fetch(`${backendUrl}/api/chat`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messages: conversationHistory,
+              // Model will be determined by backend from environment variable or use default
+            }),
+            signal: controller.signal,
+          });
+          
+          if (timeoutId) clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const text = await response.text();
+            // Retry on 5xx errors (server errors), but not on 4xx (client errors)
+            if (response.status >= 500 && attempt < 2) {
+              lastError = new Error(`Chat API error (attempt ${attempt + 1}/3): ${text}`);
+              await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+              continue;
+            }
+            throw new Error(`Chat API error: ${text}`);
+          }
+
+          const data = await response.json();
+          const assistantMessage = data.response || data.message || '';
+          conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          // Update UI
+          if (onConversationUpdate) {
+            onConversationUpdate([...conversationHistory]);
+          }
+          return assistantMessage;
+        } catch (error: any) {
+          if (timeoutId) clearTimeout(timeoutId);
+          lastError = error;
+          // Retry on network errors, timeout, or abort (which indicates timeout)
+          const isRetryable = (
+            error.name === 'TypeError' || 
+            error.name === 'TimeoutError' || 
+            error.name === 'AbortError' ||
+            error.message?.includes('Network') ||
+            error.message?.includes('fetch') ||
+            (error.message && error.message.includes('Network error'))
+          );
+          
+          if (isRetryable && attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+            continue;
+          }
+          // If it's a non-retryable error or we've exhausted retries, throw
+          throw error;
+        }
+      }
+      // If we get here, all retries failed
+      throw lastError || new Error('Chat API error: All retry attempts failed');
     };
 
     // Function to convert text to speech using OpenAI TTS
@@ -372,6 +861,46 @@ export async function setupSTTMode(
     };
 
     // Handle speech recognition results
+    let userMsgCounter = 0;
+    const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
+    const backendUrlMem = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const maybeExtractMemories = async () => {
+      if (!uid) return;
+      try {
+        const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+        const existingTexts = existing.map(m => m.text);
+        const resp = await fetch(`${backendUrlMem}/api/memories/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
+        try {
+          await addMemoriesWithLimit(uid, memories);
+        } catch (saveErr) {}
+
+        // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
+        try {
+          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+            .filter(msg => msg.role !== 'system'); // Exclude system messages
+          if (newChunk.length > 0) {
+            const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+            // Update sessionId if document was split
+            if (result.wasSplit) {
+              conversationSessionId = result.sessionId;
+              console.log('[conv] STT session split, continuing in:', conversationSessionId);
+            }
+            lastSavedMessageIndex = conversationHistory.length;
+            console.log('[conv] STT session appended', newChunk.length, 'messages');
+          }
+        } catch (e) {
+          console.error('[conv] STT append failed', e);
+        }
+      } catch (e) {}
+    };
+
     recognition.onresult = async (event: any) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) return;
@@ -379,9 +908,18 @@ export async function setupSTTMode(
       console.log('[STT] User said:', transcript);
 
       try {
+        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
+        userMsgCounter += 1;
+        
         // Get chat response
         const response = await getChatResponse(transcript);
         console.log('[TTT] Assistant response:', response);
+
+        // Check if we should extract memories after user message is processed
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          console.log('[mem][DEBUG] STT mode - triggering extraction at counter:', userMsgCounter);
+          maybeExtractMemories();
+        }
 
         // Convert to speech
         await textToSpeech(response);
@@ -391,11 +929,14 @@ export async function setupSTTMode(
     };
 
     recognition.onerror = (event: any) => {
-      console.error('[STT] Recognition error:', event.error);
-      // Only log meaningful errors
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        console.error('[STT] Error:', event.error);
+      // Only log meaningful errors - ignore common non-critical errors
+      if (event.error !== 'no-speech' && 
+          event.error !== 'aborted' && 
+          event.error !== 'audio-capture' &&
+          event.error !== 'not-allowed') {
+        console.error('[STT] Recognition error:', event.error);
       }
+      // Silently handle common expected errors
     };
 
     recognition.onend = () => {
@@ -412,10 +953,55 @@ export async function setupSTTMode(
     // Start recognition
     recognition.start();
     
-    // Send initial greeting
-    const greeting = "Hi! I'm your learning buddy! I love hearing your thoughts and questions. What are you curious about today?";
-    conversationHistory.push({ role: 'assistant', content: greeting });
-    await textToSpeech(greeting);
+    // Generate dynamic initial greeting using the AI
+    // This makes the greeting personalized and varied each time
+    try {
+      // Send a prompt that will generate a dynamic greeting
+      // The AI will use the instructions to greet with the child's name in the first message
+      const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
+      conversationHistory.push({ role: 'user', content: greetingPrompt });
+      
+      // Get the greeting from AI
+      const response = await fetch(`${backendUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: conversationHistory,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Chat API error: ${text}`);
+      }
+
+      const data = await response.json();
+      const greeting = data.response || data.message || '';
+      
+      // Remove the greeting prompt from history (it was just to trigger the greeting)
+      // Keep only the system message and the assistant's greeting
+      conversationHistory.pop(); // Remove the user greeting prompt
+      conversationHistory.push({ role: 'assistant', content: greeting });
+      
+      await textToSpeech(greeting);
+      // Update UI
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
+    } catch (e) {
+      console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
+      // Fallback greeting if AI fails
+      const fallbackGreeting = userName 
+        ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
+        : "Hi! I'm your learning buddy! What would you like to explore today?";
+      conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
+      await textToSpeech(fallbackGreeting);
+      if (onConversationUpdate) {
+        onConversationUpdate([...conversationHistory]);
+      }
+    }
 
     console.log('You are connected! (STT/TTT/TTS mode)');
   } catch (e) {
@@ -431,27 +1017,74 @@ export async function setupCounter(
   inputDeviceId?: string | null,
   outputDeviceId?: string | null,
   useSTTMode: boolean = false,
+  userName?: string,
+  userAge?: number,
+  uid?: string,
 ) {
   if (useSTTMode) {
-    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId);
+    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   } else {
-    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId);
+    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   }
 }
 
 export default function Page() {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState('idle');
   const [inputs, setInputs] = useState<MediaDeviceInfo[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
   const [selectedInput, setSelectedInput] = useState<string | null>(null);
   const [selectedOutput, setSelectedOutput] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
+  const [isMobile, setIsMobile] = useState(false);
+  const { currentUser, userData, logout } = useAuth();
+  const router = useRouter();
   
   // Read toggle state from environment variable
   // "ON" = STT/TTT/TTS mode (cost-effective), "OFF" = Realtime mode (default)
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
   const [useSTTMode, setUseSTTMode] = useState(envMode === 'ON');
+
+  // Handle responsive layout
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 1024);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Set up callback to receive conversation updates
+  useEffect(() => {
+    onConversationUpdate = (conversationHistory: Array<{ role: string; content: string }>) => {
+      // Filter out system messages for display
+      const displayMessages = conversationHistory.filter(msg => msg.role !== 'system');
+      setMessages(displayMessages);
+    };
+    
+    return () => {
+      onConversationUpdate = null;
+    };
+  }, []);
+
+  // Auto-scroll chat to bottom when new messages arrive
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('Error logging out:', error);
+    }
+  };
 
   useEffect(() => {
     // enumerate devices when permissions are available
@@ -477,7 +1110,192 @@ export default function Page() {
   }, []);
 
   return (
-    <main style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
+    <main style={{ 
+      display: 'flex', 
+      minHeight: '100vh', 
+      padding: 0,
+      flexDirection: isMobile ? 'column' : 'row',
+      gap: 0,
+    }}>
+      {/* Chat UI Section - WhatsApp-like */}
+      <div style={{
+        flex: isMobile ? 'none' : '1',
+        display: 'flex',
+        flexDirection: 'column',
+        height: isMobile ? '50vh' : '100vh',
+        minHeight: isMobile ? '400px' : '100vh',
+        backgroundColor: '#e5ddd5',
+        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
+        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
+        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
+      }}>
+        {/* Chat Header */}
+        <div style={{
+          backgroundColor: '#075e54',
+          color: 'white',
+          padding: '12px 16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              backgroundColor: '#128c7e',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '18px',
+              fontWeight: 'bold',
+            }}>
+              🤖
+            </div>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+              <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+              </div>
+            </div>
+          </div>
+        {userData && (
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                <div>{userData.name}</div>
+          </div>
+        <button
+          type="button"
+          onClick={handleLogout}
+          style={{
+                  padding: '6px 12px',
+                  fontSize: '12px',
+            fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: 'rgba(255,255,255,0.2)',
+                  border: '1px solid rgba(255,255,255,0.3)',
+                  borderRadius: '6px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+          onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)';
+          }}
+          onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
+          }}
+        >
+          Logout
+        </button>
+            </div>
+          )}
+      </div>
+
+        {/* Chat Messages Container */}
+        <div 
+          ref={chatContainerRef}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          {messages.length === 0 ? (
+            <div style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#667781',
+              fontSize: '14px',
+              textAlign: 'center',
+            }}>
+              {status === 'connected' 
+                ? 'Start chatting with your learning buddy!' 
+                : 'Connect to start the conversation'}
+            </div>
+          ) : (
+            messages.map((msg, index) => {
+              const isUser = msg.role === 'user';
+              return (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    alignItems: 'flex-end',
+                    gap: '8px',
+                  }}
+                >
+                  {!isUser && (
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: '#128c7e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}>
+                      🤖
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      maxWidth: '70%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: isUser ? '#dcf8c6' : '#ffffff',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                      wordWrap: 'break-word',
+                      fontSize: '14px',
+                      lineHeight: '1.4',
+                      color: '#111b21',
+                    }}
+                  >
+                    {msg.content}
+                  </div>
+                  {isUser && (
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: '#128c7e',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}>
+                      👤
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Controls Section */}
+      <div style={{
+        flex: isMobile ? 'none' : '0 0 400px',
+        width: isMobile ? '100%' : 'auto',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '20px',
+        gap: '12px',
+        backgroundColor: '#f9fafb',
+        height: isMobile ? 'auto' : '100vh',
+        maxHeight: isMobile ? '50vh' : 'none',
+        overflowY: 'auto',
+      }}>
       {/* Toggle for mode selection */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
         <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
@@ -492,7 +1310,16 @@ export default function Page() {
               // Disconnect first if connected
               try {
                 if (currentSession) {
-                  currentSession.close();
+                  // Stop recognition if it exists
+                  if (currentSession.recognition) {
+                    try {
+                      currentSession.recognition.stop();
+                      currentSession.recognition.abort();
+                    } catch (e) {
+                      // Ignore errors
+                    }
+                  }
+                  currentSession.session.close();
                   currentSession = null;
                 }
                 if (currentSTTSession) {
@@ -509,6 +1336,7 @@ export default function Page() {
                 console.warn('Error disconnecting:', e);
               }
               setStatus('idle');
+              setMessages([]); // Clear messages when disconnecting
             }
             setUseSTTMode(!useSTTMode);
           }}
@@ -582,6 +1410,9 @@ export default function Page() {
             selectedInput,
             selectedOutput,
             useSTTMode,
+            userData?.name,
+            userData?.age,
+            currentUser?.uid || userData?.uid,
           )
             .then(() => setStatus('connected'))
             .catch((e) => {
@@ -642,9 +1473,10 @@ export default function Page() {
                 : 'Connect Realtime'}
       </button>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-      <div style={{ fontSize: 12, color: '#666' }}>Status: {status}</div>
-      <div style={{ fontSize: 12, color: '#666', maxWidth: 480, textAlign: 'center' }}>
-        Speak normally after connecting.
+        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
+        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+          {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
+        </div>
       </div>
     </main>
   );
