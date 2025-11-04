@@ -4,6 +4,7 @@ import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/ag
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
+import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
@@ -232,6 +233,18 @@ export async function setupRealtimeMode(
       content: instructions,
     },
   ];
+    // Conversation session tracking
+    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let lastSavedMessageIndex = 0;
+    if (uid) {
+      try {
+        await startConversationSession(uid, conversationSessionId, 'realtime');
+        console.log('[conv] Realtime session started:', conversationSessionId);
+      } catch (e) {
+        console.error('[conv] Failed to start realtime conversation session', e);
+      }
+    }
+
   // Automatically connects your microphone and audio output in the browser via WebRTC.
   try {
     // Prompt for microphone permission early to ensure input is available
@@ -281,6 +294,24 @@ export async function setupRealtimeMode(
           try {
             await addMemoriesWithLimit(uid, memories);
           } catch (saveErr) {}
+
+          // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
+          try {
+            const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+              .filter(msg => msg.role !== 'system'); // Exclude system messages
+            if (newChunk.length > 0) {
+              const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+              // Update sessionId if document was split
+              if (result.wasSplit) {
+                conversationSessionId = result.sessionId;
+                console.log('[conv] Realtime session split, continuing in:', conversationSessionId);
+              }
+              lastSavedMessageIndex = conversationHistory.length;
+              console.log('[conv] Realtime session appended', newChunk.length, 'messages');
+            }
+          } catch (e) {
+            console.error('[conv] Realtime append failed', e);
+          }
         } catch (e) {}
       };
 
@@ -648,6 +679,18 @@ export async function setupSTTMode(
       }
     } catch {}
     const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+
+    // Conversation session tracking
+    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let lastSavedMessageIndex = 0;
+    if (uid) {
+      try {
+        await startConversationSession(uid, conversationSessionId, 'stt');
+        console.log('[conv] STT session started:', conversationSessionId);
+      } catch (e) {
+        console.error('[conv] Failed to start STT conversation session', e);
+      }
+    }
     
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
@@ -696,7 +739,7 @@ export async function setupSTTMode(
     // Get backend URL
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
-    // Function to send text to chat API and get response
+    // Function to send text to chat API and get response with retry logic
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
@@ -708,30 +751,71 @@ export async function setupSTTMode(
         }
       }
 
-      const response = await fetch(`${backendUrl}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: conversationHistory,
-          // Model will be determined by backend from environment variable or use default
-        }),
-      });
+      // Retry logic for network errors (max 2 retries)
+      let lastError: Error | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        try {
+          // Create timeout controller for compatibility
+          const controller = new AbortController();
+          timeoutId = setTimeout(() => controller.abort(), 35000);
+          
+          const response = await fetch(`${backendUrl}/api/chat`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messages: conversationHistory,
+              // Model will be determined by backend from environment variable or use default
+            }),
+            signal: controller.signal,
+          });
+          
+          if (timeoutId) clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Chat API error: ${text}`);
-      }
+          if (!response.ok) {
+            const text = await response.text();
+            // Retry on 5xx errors (server errors), but not on 4xx (client errors)
+            if (response.status >= 500 && attempt < 2) {
+              lastError = new Error(`Chat API error (attempt ${attempt + 1}/3): ${text}`);
+              await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+              continue;
+            }
+            throw new Error(`Chat API error: ${text}`);
+          }
 
-      const data = await response.json();
-      const assistantMessage = data.response || data.message || '';
-      conversationHistory.push({ role: 'assistant', content: assistantMessage });
-      // Update UI
-      if (onConversationUpdate) {
-        onConversationUpdate([...conversationHistory]);
+          const data = await response.json();
+          const assistantMessage = data.response || data.message || '';
+          conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          // Update UI
+          if (onConversationUpdate) {
+            onConversationUpdate([...conversationHistory]);
+          }
+          return assistantMessage;
+        } catch (error: any) {
+          if (timeoutId) clearTimeout(timeoutId);
+          lastError = error;
+          // Retry on network errors, timeout, or abort (which indicates timeout)
+          const isRetryable = (
+            error.name === 'TypeError' || 
+            error.name === 'TimeoutError' || 
+            error.name === 'AbortError' ||
+            error.message?.includes('Network') ||
+            error.message?.includes('fetch') ||
+            (error.message && error.message.includes('Network error'))
+          );
+          
+          if (isRetryable && attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+            continue;
+          }
+          // If it's a non-retryable error or we've exhausted retries, throw
+          throw error;
+        }
       }
-      return assistantMessage;
+      // If we get here, all retries failed
+      throw lastError || new Error('Chat API error: All retry attempts failed');
     };
 
     // Function to convert text to speech using OpenAI TTS
@@ -796,6 +880,24 @@ export async function setupSTTMode(
         try {
           await addMemoriesWithLimit(uid, memories);
         } catch (saveErr) {}
+
+        // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
+        try {
+          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+            .filter(msg => msg.role !== 'system'); // Exclude system messages
+          if (newChunk.length > 0) {
+            const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+            // Update sessionId if document was split
+            if (result.wasSplit) {
+              conversationSessionId = result.sessionId;
+              console.log('[conv] STT session split, continuing in:', conversationSessionId);
+            }
+            lastSavedMessageIndex = conversationHistory.length;
+            console.log('[conv] STT session appended', newChunk.length, 'messages');
+          }
+        } catch (e) {
+          console.error('[conv] STT append failed', e);
+        }
       } catch (e) {}
     };
 
