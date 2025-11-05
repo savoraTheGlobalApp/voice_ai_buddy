@@ -1,17 +1,17 @@
 import { db } from '@/lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
-  ts?: number; // client timestamp (ms)
+  ts?: Timestamp | number; // Firestore timestamp (supports number for backward compatibility)
 }
 
 export interface ConversationDoc {
   sessionId: string;
   mode: 'realtime' | 'stt';
-  startedAt: number; // client timestamp
-  updatedAt: number;
+  startedAt: Timestamp | number; // Firestore timestamp (supports number for backward compatibility)
+  updatedAt: Timestamp | number;
   messages: ConversationMessage[];
   continuationId?: string; // If this is a continuation, link to previous part
 }
@@ -45,7 +45,7 @@ export async function startConversationSession(
   mode: 'realtime' | 'stt',
 ): Promise<void> {
   const ref = doc(db, 'users', uid, 'conversations', sessionId);
-  const now = Date.now();
+  const now = Timestamp.now();
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     const payload: ConversationDoc = {
@@ -85,14 +85,14 @@ export async function appendConversationChunk(
     throw new Error(`Failed to load conversation document ${sessionId}`);
   }
 
-  const withTs = messages.map(m => ({ ...m, ts: m.ts ?? Date.now() }));
+  const withTs = messages.map(m => ({ ...m, ts: m.ts ?? Timestamp.now() }));
   const updated = [...existing.messages, ...withTs];
   
   // Estimate size with new messages
   const testDoc: ConversationDoc = {
     ...existing,
     messages: updated,
-    updatedAt: Date.now(),
+    updatedAt: Timestamp.now(),
   };
   const estimatedSize = estimateDocumentSize(testDoc);
 
@@ -103,8 +103,8 @@ export async function appendConversationChunk(
     const continuationDoc: ConversationDoc = {
       sessionId: continuationId,
       mode: existing.mode,
-      startedAt: existing.startedAt, // Keep original start time
-      updatedAt: Date.now(),
+      startedAt: existing.startedAt, // Keep original start time (may be Timestamp or number)
+      updatedAt: Timestamp.now(),
       messages: withTs, // Start continuation with new messages only
       continuationId: sessionId, // Link back to previous part
     };
@@ -119,7 +119,7 @@ export async function appendConversationChunk(
   }
 
   // Normal append within limit
-  await setDoc(ref, { messages: updated, updatedAt: Date.now() }, { merge: true });
+  await setDoc(ref, { messages: updated, updatedAt: Timestamp.now() }, { merge: true });
   return { sessionId, wasSplit: false };
 }
 
