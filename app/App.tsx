@@ -162,6 +162,7 @@ let currentSTTSession: {
   mediaRecorder: MediaRecorder | null;
   audioContext: AudioContext | null;
   conversationHistory: Array<{ role: string; content: string }>;
+  processingAudio?: HTMLAudioElement | null;
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -664,6 +665,11 @@ export async function setupSTTMode(
       if (currentSTTSession.audioContext) {
         await currentSTTSession.audioContext.close();
       }
+      // Stop and clean up processing audio
+      if (currentSTTSession.processingAudio) {
+        currentSTTSession.processingAudio.pause();
+        currentSTTSession.processingAudio.currentTime = 0;
+      }
       currentSTTSession = null;
     }
   } catch (e) {
@@ -729,11 +735,26 @@ export async function setupSTTMode(
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
 
+    // Create processing audio element for feedback when AI is processing
+    const processingAudio = new Audio('/audio/processing.mp3');
+    processingAudio.loop = true;
+    processingAudio.volume = 0.35; // Set volume to 35% so it's not too loud
+    
+    // Set output device if available
+    if (typeof (processingAudio as any).setSinkId === 'function' && outputDeviceId) {
+      try {
+        await (processingAudio as any).setSinkId(outputDeviceId);
+      } catch (e) {
+        console.warn('Failed to set sinkId for processing audio', e);
+      }
+    }
+
     currentSTTSession = {
       recognition,
       mediaRecorder: null,
       audioContext,
       conversationHistory,
+      processingAudio,
     };
 
     // Get backend URL
@@ -820,6 +841,12 @@ export async function setupSTTMode(
 
     // Function to convert text to speech using OpenAI TTS
     const textToSpeech = async (text: string): Promise<void> => {
+      // Stop processing audio before playing TTS
+      if (currentSTTSession?.processingAudio) {
+        currentSTTSession.processingAudio.pause();
+        currentSTTSession.processingAudio.currentTime = 0;
+      }
+      
       try {
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
         const response = await fetch(`${backendUrl}/api/tts`, {
@@ -907,6 +934,16 @@ export async function setupSTTMode(
 
       console.log('[STT] User said:', transcript);
 
+      // Start playing processing audio to give user feedback that voice was detected
+      if (currentSTTSession?.processingAudio) {
+        try {
+          currentSTTSession.processingAudio.currentTime = 0;
+          await currentSTTSession.processingAudio.play();
+        } catch (e) {
+          console.warn('[STT] Could not play processing audio:', e);
+        }
+      }
+
       try {
         // Increment counter BEFORE getting response (user message is added inside getChatResponse)
         userMsgCounter += 1;
@@ -921,10 +958,15 @@ export async function setupSTTMode(
           maybeExtractMemories();
         }
 
-        // Convert to speech
+        // Convert to speech (this will stop the processing audio)
         await textToSpeech(response);
       } catch (e) {
         console.error('[STT/TTT/TTS] Error:', e);
+        // Stop processing audio on error as well
+        if (currentSTTSession?.processingAudio) {
+          currentSTTSession.processingAudio.pause();
+          currentSTTSession.processingAudio.currentTime = 0;
+        }
       }
     };
 
@@ -1329,6 +1371,11 @@ export default function Page() {
                   }
                   if (currentSTTSession.audioContext) {
                     currentSTTSession.audioContext.close();
+                  }
+                  // Stop and clean up processing audio
+                  if (currentSTTSession.processingAudio) {
+                    currentSTTSession.processingAudio.pause();
+                    currentSTTSession.processingAudio.currentTime = 0;
                   }
                   currentSTTSession = null;
                 }
