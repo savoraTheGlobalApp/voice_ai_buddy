@@ -852,10 +852,30 @@ export async function setupSTTMode(
 
     // Function to convert text to speech using OpenAI TTS
     const textToSpeech = async (text: string): Promise<void> => {
-      // Stop processing audio before playing TTS
+      // Stop processing audio completely before playing TTS (critical for Android)
       if (currentSTTSession?.processingAudio) {
-        currentSTTSession.processingAudio.pause();
-        currentSTTSession.processingAudio.currentTime = 0;
+        try {
+          // Disable looping first to prevent restart
+          currentSTTSession.processingAudio.loop = false;
+          // Stop and reset processing audio
+          currentSTTSession.processingAudio.pause();
+          currentSTTSession.processingAudio.currentTime = 0;
+          // Remove all event listeners to prevent any callbacks
+          currentSTTSession.processingAudio.onplay = null;
+          currentSTTSession.processingAudio.onpause = null;
+          currentSTTSession.processingAudio.onended = null;
+          currentSTTSession.processingAudio.onerror = null;
+          // Clear the source to fully stop it and prevent any restart
+          const oldSrc = currentSTTSession.processingAudio.src;
+          currentSTTSession.processingAudio.src = '';
+          currentSTTSession.processingAudio.load();
+          // Small delay to ensure it's fully stopped
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (e) {
+          console.warn('[TTS] Error stopping processing audio:', e);
+        }
+        // Wait a bit for Android to release audio focus (prevents conflicts)
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
       
       // Resume AudioContext if suspended (required for Android Chrome)
@@ -888,10 +908,24 @@ export async function setupSTTMode(
         const audioUrl = URL.createObjectURL(audioBlob);
         
         if (audioEl) {
-          // Clear any previous event listeners and sources
-          audioEl.pause();
-          audioEl.currentTime = 0;
-          audioEl.src = '';
+          // Stop any currently playing audio first (critical for Android)
+          try {
+            audioEl.pause();
+            audioEl.currentTime = 0;
+            // Clear previous event listeners
+            audioEl.onplay = null;
+            audioEl.onpause = null;
+            audioEl.onended = null;
+            audioEl.onerror = null;
+            // Clear source and force reload
+            audioEl.src = '';
+            audioEl.load();
+          } catch (e) {
+            console.warn('[TTS] Error clearing previous audio:', e);
+          }
+          
+          // Small delay to ensure previous audio is fully stopped (Android requirement)
+          await new Promise(resolve => setTimeout(resolve, 50));
           
           // Set up new audio source
           audioEl.src = audioUrl;
@@ -939,6 +973,29 @@ export async function setupSTTMode(
             }
           }
           
+          // Set up event handlers to prevent interruptions (Android audio focus handling)
+          let pauseResumeAttempts = 0;
+          const maxResumeAttempts = 3; // Limit resume attempts to prevent loops
+          const handlePause = () => {
+            // If audio was paused unexpectedly (not by user), try to resume it
+            if (audioEl && !audioEl.ended && pauseResumeAttempts < maxResumeAttempts) {
+              console.log('[TTS] Audio paused unexpectedly, attempting to resume...');
+              pauseResumeAttempts++;
+              setTimeout(async () => {
+                try {
+                  if (audioEl && !audioEl.ended && audioEl.paused) {
+                    await audioEl.play();
+                    console.log('[TTS] Successfully resumed after pause');
+                  }
+                } catch (e) {
+                  console.warn('[TTS] Could not resume after pause:', e);
+                }
+              }, 150);
+            }
+          };
+          
+          audioEl.addEventListener('pause', handlePause);
+          
           // Play the audio
           try {
             await audioEl.play();
@@ -954,6 +1011,7 @@ export async function setupSTTMode(
           
           // Clean up after playback
           audioEl.onended = () => {
+            audioEl.removeEventListener('pause', handlePause);
             URL.revokeObjectURL(audioUrl);
             audioEl.onended = null;
           };
@@ -1019,8 +1077,23 @@ export async function setupSTTMode(
       // Start playing processing audio to give user feedback that voice was detected
       if (currentSTTSession?.processingAudio) {
         try {
-          currentSTTSession.processingAudio.currentTime = 0;
-          await currentSTTSession.processingAudio.play();
+          // Re-enable looping (it might have been disabled previously)
+          currentSTTSession.processingAudio.loop = true;
+          // Ensure processing audio is ready and not conflicting
+          if (currentSTTSession.processingAudio.src) {
+            currentSTTSession.processingAudio.currentTime = 0;
+            // Set volume to ensure it's audible but not too loud
+            currentSTTSession.processingAudio.volume = 0.35;
+            await currentSTTSession.processingAudio.play();
+          } else {
+            // If src was cleared, restore it
+            currentSTTSession.processingAudio.src = '/audio/processing.mp3';
+            currentSTTSession.processingAudio.load();
+            await new Promise(resolve => setTimeout(resolve, 100));
+            currentSTTSession.processingAudio.currentTime = 0;
+            currentSTTSession.processingAudio.volume = 0.35;
+            await currentSTTSession.processingAudio.play();
+          }
         } catch (e) {
           console.warn('[STT] Could not play processing audio:', e);
         }
