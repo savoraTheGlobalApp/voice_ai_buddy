@@ -734,6 +734,17 @@ export async function setupSTTMode(
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Resume AudioContext if suspended (required for Android Chrome)
+    // Android Chrome often starts with AudioContext in suspended state
+    if (audioContext.state === 'suspended') {
+      try {
+        await audioContext.resume();
+        console.log('[STT] AudioContext resumed');
+      } catch (e) {
+        console.warn('[STT] Could not resume AudioContext on init:', e);
+      }
+    }
 
     // Create processing audio element for feedback when AI is processing
     const processingAudio = new Audio('/audio/processing.mp3');
@@ -847,6 +858,15 @@ export async function setupSTTMode(
         currentSTTSession.processingAudio.currentTime = 0;
       }
       
+      // Resume AudioContext if suspended (required for Android Chrome)
+      if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+        try {
+          await currentSTTSession.audioContext.resume();
+        } catch (e) {
+          console.warn('[TTS] Could not resume AudioContext:', e);
+        }
+      }
+      
       try {
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
         const response = await fetch(`${backendUrl}/api/tts`, {
@@ -868,12 +888,74 @@ export async function setupSTTMode(
         const audioUrl = URL.createObjectURL(audioBlob);
         
         if (audioEl) {
+          // Clear any previous event listeners and sources
+          audioEl.pause();
+          audioEl.currentTime = 0;
+          audioEl.src = '';
+          
+          // Set up new audio source
           audioEl.src = audioUrl;
-          await audioEl.play();
+          audioEl.preload = 'auto';
+          
+          // Wait for audio to be ready before playing (critical for Android Chrome)
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(new Error('Audio loading timeout'));
+            }, 10000); // 10 second timeout
+            
+            const onCanPlayThrough = () => {
+              clearTimeout(timeout);
+              audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
+              audioEl?.removeEventListener('error', onError);
+              // Small delay for Android Chrome to process audio setup
+              setTimeout(() => resolve(), 50);
+            };
+            
+            const onError = (e: Event) => {
+              clearTimeout(timeout);
+              audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
+              audioEl?.removeEventListener('error', onError);
+              reject(new Error('Audio loading error'));
+            };
+            
+            if (audioEl.readyState >= 3) {
+              // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
+              clearTimeout(timeout);
+              // Small delay for Android Chrome to process audio setup
+              setTimeout(() => resolve(), 50);
+            } else {
+              audioEl.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+              audioEl.addEventListener('error', onError, { once: true });
+              audioEl.load(); // Explicitly load the audio
+            }
+          });
+          
+          // Ensure AudioContext is resumed before playing (Android Chrome requirement)
+          if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+            try {
+              await currentSTTSession.audioContext.resume();
+            } catch (e) {
+              console.warn('[TTS] Could not resume AudioContext before play:', e);
+            }
+          }
+          
+          // Play the audio
+          try {
+            await audioEl.play();
+          } catch (playError: any) {
+            // If play fails, try resuming AudioContext and retry
+            if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+              await currentSTTSession.audioContext.resume();
+              await audioEl.play();
+            } else {
+              throw playError;
+            }
+          }
           
           // Clean up after playback
           audioEl.onended = () => {
             URL.revokeObjectURL(audioUrl);
+            audioEl.onended = null;
           };
         }
       } catch (e) {
