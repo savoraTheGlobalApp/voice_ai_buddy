@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
+import re
 import httpx
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -48,9 +49,14 @@ if frontend_url:
         if url:
             cors_origins.append(url)
 
+# CORS regex pattern for Vercel preview deployments
+# Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
+vercel_pattern = r"https://.*\.vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=vercel_pattern,  # Allow all Vercel preview and production URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
