@@ -990,9 +990,8 @@ export async function setupSTTMode(
             audioEl.onpause = null;
             audioEl.onended = null;
             audioEl.onerror = null;
-            // Clear source and force reload
-            audioEl.src = '';
-            audioEl.load();
+            // CRITICAL: Don't set src to empty string - this causes "Empty src attribute" error
+            // Instead, just pause and reset, then set new src
           } catch (e) {
             console.warn('[TTS] Error clearing previous audio:', e);
           }
@@ -1000,9 +999,21 @@ export async function setupSTTMode(
           // Small delay to ensure previous audio is fully stopped (Android requirement)
           await new Promise(resolve => setTimeout(resolve, 50));
           
+          // CRITICAL: Validate audioUrl before setting src
+          if (!audioUrl || audioUrl === '' || audioUrl === 'undefined') {
+            console.error('[TTS] Invalid audioUrl, cannot play:', audioUrl);
+            throw new Error('Invalid audio URL');
+          }
+          
           // Set up new audio source
           audioEl.src = audioUrl;
           audioEl.preload = 'auto';
+          
+          // CRITICAL: Verify src was set correctly
+          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href) {
+            console.error('[TTS] Audio src not set correctly:', audioEl.src);
+            throw new Error('Audio source not set correctly');
+          }
           
           // Wait for audio to be ready before playing (critical for Android Chrome)
           await new Promise<void>((resolve, reject) => {
@@ -1205,6 +1216,12 @@ export async function setupSTTMode(
           audioEl.addEventListener('suspend', () => console.log('[TTS][DEBUG] Audio suspend'));
           audioEl.addEventListener('abort', () => console.log('[TTS][DEBUG] Audio abort'));
           
+          // CRITICAL: Final validation before playing - ensure src is valid
+          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || !audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('http')) {
+            console.error('[TTS] Cannot play - invalid src:', audioEl.src);
+            throw new Error('Invalid audio source - cannot play');
+          }
+          
           // Play the audio
           try {
             isPlaying = true;
@@ -1214,11 +1231,22 @@ export async function setupSTTMode(
             // If play fails, try resuming AudioContext and retry
             if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
               await currentSTTSession.audioContext.resume();
-              await audioEl.play();
-              isPlaying = true;
-              console.log('[TTS] Audio playback started after AudioContext resume');
+              // Re-validate src before retry
+              if (audioEl.src && audioEl.src !== '' && audioEl.src !== window.location.href) {
+                await audioEl.play();
+                isPlaying = true;
+                console.log('[TTS] Audio playback started after AudioContext resume');
+              } else {
+                console.error('[TTS] Cannot retry play - invalid src after resume:', audioEl.src);
+                throw new Error('Invalid audio source after resume');
+              }
             } else {
-              console.error('[TTS] Failed to play audio:', playError);
+              console.error('[TTS] Failed to play audio:', playError, {
+                src: audioEl.src,
+                readyState: audioEl.readyState,
+                networkState: audioEl.networkState,
+                error: audioEl.error
+              });
               throw playError;
             }
           }
@@ -1364,11 +1392,23 @@ export async function setupSTTMode(
             });
           }
           
+          // CRITICAL: Validate src before playing
+          if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
+            console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
+            throw new Error('Invalid processing audio source');
+          }
+          
           // Reset to start and play
           audio.currentTime = 0;
           
           // Small delay to ensure audio context is ready (helps with Android)
           await new Promise(resolve => setTimeout(resolve, 50));
+          
+          // Final validation before play
+          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
+            console.error('[STT] Processing audio src invalid before play:', audio.src);
+            throw new Error('Processing audio source became invalid');
+          }
           
           await audio.play();
           console.log('[STT] Started processing audio (processing.mp3)');
@@ -1444,10 +1484,39 @@ export async function setupSTTMode(
 
     recognition.onstart = () => {
       console.log('[STT][DEBUG] Recognition started');
+      // CRITICAL: Stop processing audio when recognition starts (idle listening)
+      // This prevents processing audio from playing during continuous recognition cycles
+      if (currentSTTSession?.processingAudio) {
+        try {
+          const audio = currentSTTSession.processingAudio;
+          if (!audio.paused) {
+            console.log('[STT][DEBUG] Recognition started - stopping processing audio (idle listening)');
+            audio.pause();
+            audio.currentTime = 0;
+          }
+        } catch (e) {
+          console.warn('[STT][DEBUG] Error stopping processing audio on recognition start:', e);
+        }
+      }
     };
 
     recognition.onend = () => {
       console.log('[STT][DEBUG] Recognition ended - restarting if session active');
+      // CRITICAL: Ensure processing audio is stopped when recognition ends
+      // This prevents it from playing during the restart cycle
+      if (currentSTTSession?.processingAudio) {
+        try {
+          const audio = currentSTTSession.processingAudio;
+          if (!audio.paused) {
+            console.log('[STT][DEBUG] Recognition ended - stopping processing audio');
+            audio.pause();
+            audio.currentTime = 0;
+          }
+        } catch (e) {
+          console.warn('[STT][DEBUG] Error stopping processing audio on recognition end:', e);
+        }
+      }
+      
       // Restart recognition if session is still active
       if (currentSTTSession && currentSTTSession.recognition === recognition) {
         try {
@@ -1488,6 +1557,20 @@ export async function setupSTTMode(
 
     recognition.onnomatch = () => {
       console.log('[STT][DEBUG] Recognition no match');
+      // CRITICAL: Stop processing audio when no match (no user speech detected)
+      // This prevents processing audio from playing during idle periods
+      if (currentSTTSession?.processingAudio) {
+        try {
+          const audio = currentSTTSession.processingAudio;
+          if (!audio.paused) {
+            console.log('[STT][DEBUG] No match - stopping processing audio');
+            audio.pause();
+            audio.currentTime = 0;
+          }
+        } catch (e) {
+          console.warn('[STT][DEBUG] Error stopping processing audio on no match:', e);
+        }
+      }
     };
 
     // Start recognition
