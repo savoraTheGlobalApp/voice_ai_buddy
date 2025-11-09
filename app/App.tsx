@@ -720,6 +720,12 @@ export async function setupSTTMode(
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    console.log('[STT][DEBUG] AudioContext created, state:', audioContext.state);
+    
+    // Monitor AudioContext state changes
+    audioContext.addEventListener('statechange', () => {
+      console.log('[STT][DEBUG] AudioContext state changed to:', audioContext.state);
+    });
     
     // Resume AudioContext if suspended (required for Android Chrome)
     // Android Chrome often starts with AudioContext in suspended state
@@ -743,9 +749,14 @@ export async function setupSTTMode(
     // Track if processing audio is currently playing
     let isProcessingAudioPlaying = false;
     
-    // Set up error handling for audio loading
+    // Set up extensive logging for processing audio events
     processingAudio.onerror = (e) => {
-      console.error('[STT] Processing audio failed to load:', e);
+      console.error('[STT][DEBUG] Processing audio error:', e, {
+        error: processingAudio.error,
+        src: processingAudio.src,
+        networkState: processingAudio.networkState,
+        readyState: processingAudio.readyState
+      });
       isProcessingAudioPlaying = false;
     };
     
@@ -754,16 +765,40 @@ export async function setupSTTMode(
     };
     
     processingAudio.onplay = () => {
+      console.log('[STT][DEBUG] Processing audio play event');
       isProcessingAudioPlaying = true;
     };
     
     processingAudio.onpause = () => {
+      console.log('[STT][DEBUG] Processing audio pause event');
       isProcessingAudioPlaying = false;
     };
     
     processingAudio.onended = () => {
+      console.log('[STT][DEBUG] Processing audio ended event');
       isProcessingAudioPlaying = false;
     };
+    
+    // Add extensive logging for all processing audio events
+    processingAudio.addEventListener('loadstart', () => console.log('[STT][DEBUG] Processing audio loadstart'));
+    processingAudio.addEventListener('loadeddata', () => console.log('[STT][DEBUG] Processing audio loadeddata'));
+    processingAudio.addEventListener('canplay', () => console.log('[STT][DEBUG] Processing audio canplay'));
+    processingAudio.addEventListener('waiting', () => console.log('[STT][DEBUG] Processing audio waiting'));
+    processingAudio.addEventListener('stalled', () => console.log('[STT][DEBUG] Processing audio stalled'));
+    processingAudio.addEventListener('suspend', () => console.log('[STT][DEBUG] Processing audio suspend'));
+    processingAudio.addEventListener('abort', () => console.log('[STT][DEBUG] Processing audio abort'));
+    processingAudio.addEventListener('timeupdate', () => {
+      // Log periodically (every 5 seconds) to track if it's playing in background
+      if (Math.floor(processingAudio.currentTime) % 5 === 0 && processingAudio.currentTime > 0) {
+        console.log('[STT][DEBUG] Processing audio timeupdate:', {
+          currentTime: processingAudio.currentTime,
+          duration: processingAudio.duration,
+          paused: processingAudio.paused,
+          ended: processingAudio.ended,
+          isPlaying: isProcessingAudioPlaying
+        });
+      }
+    });
     
     // Preload the audio by loading it immediately
     try {
@@ -1021,8 +1056,26 @@ export async function setupSTTMode(
           
           const handlePause = async () => {
             const now = Date.now();
+            const audioState = {
+              ended: audioEl?.ended,
+              paused: audioEl?.paused,
+              currentTime: audioEl?.currentTime,
+              duration: audioEl?.duration,
+              readyState: audioEl?.readyState,
+              isPlaying,
+              pauseResumeAttempts
+            };
+            console.log('[TTS][DEBUG] handlePause triggered:', audioState);
+            
+            // CRITICAL: Don't handle pause if audio has ended - this prevents beeps after playback
+            if (!audioEl || audioEl.ended) {
+              console.log('[TTS][DEBUG] Ignoring pause - audio has ended');
+              return;
+            }
+            
             // Debounce: ignore pauses that happen too quickly after the last one
             if (now - lastPauseTime < PAUSE_DEBOUNCE_MS) {
+              console.log('[TTS][DEBUG] Ignoring pause - debounced (time since last:', now - lastPauseTime, 'ms)');
               return;
             }
             lastPauseTime = now;
@@ -1031,21 +1084,31 @@ export async function setupSTTMode(
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
+              console.log('[TTS][DEBUG] Cleared pending resume timeout');
             }
             
             // Only resume if we were actually playing and it wasn't intentional
             if (audioEl && !audioEl.ended && isPlaying && pauseResumeAttempts < maxResumeAttempts) {
               pauseResumeAttempts++;
+              console.log('[TTS][DEBUG] Attempting to resume (attempt', pauseResumeAttempts, 'of', maxResumeAttempts, ')');
               
               // Debounced resume - wait a bit before attempting to resume
               pauseResumeTimeout = setTimeout(async () => {
                 try {
-                  // Double-check state before resuming
+                  // Double-check state before resuming - audio might have ended while waiting
+                  if (!audioEl || audioEl.ended) {
+                    console.log('[TTS][DEBUG] Aborting resume - audio ended while waiting');
+                    pauseResumeTimeout = null;
+                    return;
+                  }
+                  
                   if (audioEl && !audioEl.ended && audioEl.paused && isPlaying) {
+                    console.log('[TTS][DEBUG] Resuming audio playback...');
                     // Ensure AudioContext is resumed
                     if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
                       try {
                         await currentSTTSession.audioContext.resume();
+                        console.log('[TTS][DEBUG] AudioContext resumed');
                       } catch (e) {
                         console.warn('[TTS] Could not resume AudioContext:', e);
                       }
@@ -1058,17 +1121,39 @@ export async function setupSTTMode(
                       await audioEl.play();
                       isPlaying = true;
                       console.log('[TTS] Successfully resumed after pause (attempt', pauseResumeAttempts, ')');
+                    } else {
+                      console.log('[TTS][DEBUG] Audio state changed - not resuming:', {
+                        ended: audioEl?.ended,
+                        paused: audioEl?.paused,
+                        isPlaying
+                      });
                     }
+                  } else {
+                    console.log('[TTS][DEBUG] Not resuming - state check failed:', {
+                      hasAudioEl: !!audioEl,
+                      ended: audioEl?.ended,
+                      paused: audioEl?.paused,
+                      isPlaying
+                    });
                   }
                 } catch (e) {
                   console.warn('[TTS] Could not resume after pause:', e);
                 }
                 pauseResumeTimeout = null;
               }, PAUSE_DEBOUNCE_MS);
+            } else {
+              console.log('[TTS][DEBUG] Not attempting resume:', {
+                hasAudioEl: !!audioEl,
+                ended: audioEl?.ended,
+                isPlaying,
+                attempts: pauseResumeAttempts,
+                maxAttempts: maxResumeAttempts
+              });
             }
           };
           
           const handlePlay = () => {
+            console.log('[TTS][DEBUG] handlePlay triggered');
             isPlaying = true;
             pauseResumeAttempts = 0; // Reset attempts on successful play
             lastPauseTime = 0; // Reset pause time
@@ -1076,11 +1161,49 @@ export async function setupSTTMode(
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
+              console.log('[TTS][DEBUG] Cleared resume timeout on play');
             }
           };
           
+          const handleEnded = () => {
+            console.log('[TTS][DEBUG] handleEnded triggered - cleaning up');
+            isPlaying = false;
+            // Clear any pending resume attempts
+            if (pauseResumeTimeout) {
+              clearTimeout(pauseResumeTimeout);
+              pauseResumeTimeout = null;
+              console.log('[TTS][DEBUG] Cleared resume timeout on ended');
+            }
+            // Remove event listeners to prevent beeps after audio ends
+            if (audioEl) {
+              audioEl.removeEventListener('pause', handlePause);
+              audioEl.removeEventListener('play', handlePlay);
+              audioEl.removeEventListener('ended', handleEnded);
+            }
+            URL.revokeObjectURL(audioUrl);
+            console.log('[TTS][DEBUG] Event listeners removed and URL revoked');
+          };
+          
+          // Add extensive logging for all audio events
           audioEl.addEventListener('pause', handlePause);
           audioEl.addEventListener('play', handlePlay);
+          audioEl.addEventListener('ended', handleEnded);
+          audioEl.addEventListener('error', (e) => {
+            console.error('[TTS][DEBUG] Audio error event:', e, {
+              error: audioEl.error,
+              src: audioEl.src,
+              networkState: audioEl.networkState,
+              readyState: audioEl.readyState
+            });
+          });
+          audioEl.addEventListener('loadstart', () => console.log('[TTS][DEBUG] Audio loadstart'));
+          audioEl.addEventListener('loadeddata', () => console.log('[TTS][DEBUG] Audio loadeddata'));
+          audioEl.addEventListener('canplay', () => console.log('[TTS][DEBUG] Audio canplay'));
+          audioEl.addEventListener('canplaythrough', () => console.log('[TTS][DEBUG] Audio canplaythrough'));
+          audioEl.addEventListener('waiting', () => console.log('[TTS][DEBUG] Audio waiting'));
+          audioEl.addEventListener('stalled', () => console.log('[TTS][DEBUG] Audio stalled'));
+          audioEl.addEventListener('suspend', () => console.log('[TTS][DEBUG] Audio suspend'));
+          audioEl.addEventListener('abort', () => console.log('[TTS][DEBUG] Audio abort'));
           
           // Play the audio
           try {
@@ -1100,19 +1223,7 @@ export async function setupSTTMode(
             }
           }
           
-          // Clean up after playback
-          audioEl.onended = () => {
-            isPlaying = false;
-            // Clear any pending resume attempts
-            if (pauseResumeTimeout) {
-              clearTimeout(pauseResumeTimeout);
-              pauseResumeTimeout = null;
-            }
-            audioEl.removeEventListener('pause', handlePause);
-            audioEl.removeEventListener('play', handlePlay);
-            URL.revokeObjectURL(audioUrl);
-            audioEl.onended = null;
-          };
+          // Note: Cleanup is now handled by handleEnded event listener above
         }
       } catch (e) {
         console.error('TTS error:', e);
@@ -1167,8 +1278,12 @@ export async function setupSTTMode(
     };
 
     recognition.onresult = async (event: any) => {
+      console.log('[STT][DEBUG] Recognition result event triggered, results count:', event.results.length);
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
-      if (!transcript) return;
+      if (!transcript) {
+        console.log('[STT][DEBUG] Empty transcript, ignoring');
+        return;
+      }
 
       console.log('[STT] User said:', transcript);
 
@@ -1316,6 +1431,7 @@ export async function setupSTTMode(
     };
 
     recognition.onerror = (event: any) => {
+      console.log('[STT][DEBUG] Recognition error event:', event.error);
       // Only log meaningful errors - ignore common non-critical errors
       if (event.error !== 'no-speech' && 
           event.error !== 'aborted' && 
@@ -1326,15 +1442,52 @@ export async function setupSTTMode(
       // Silently handle common expected errors
     };
 
+    recognition.onstart = () => {
+      console.log('[STT][DEBUG] Recognition started');
+    };
+
     recognition.onend = () => {
+      console.log('[STT][DEBUG] Recognition ended - restarting if session active');
       // Restart recognition if session is still active
       if (currentSTTSession && currentSTTSession.recognition === recognition) {
         try {
           recognition.start();
+          console.log('[STT][DEBUG] Recognition restarted');
         } catch (e) {
+          console.log('[STT][DEBUG] Error restarting recognition:', e);
           // Ignore errors when restarting
         }
+      } else {
+        console.log('[STT][DEBUG] Not restarting - session inactive or recognition changed');
       }
+    };
+
+    recognition.onaudiostart = () => {
+      console.log('[STT][DEBUG] Recognition audio start');
+    };
+
+    recognition.onaudioend = () => {
+      console.log('[STT][DEBUG] Recognition audio end');
+    };
+
+    recognition.onsoundstart = () => {
+      console.log('[STT][DEBUG] Recognition sound start');
+    };
+
+    recognition.onsoundend = () => {
+      console.log('[STT][DEBUG] Recognition sound end');
+    };
+
+    recognition.onspeechstart = () => {
+      console.log('[STT][DEBUG] Recognition speech start');
+    };
+
+    recognition.onspeechend = () => {
+      console.log('[STT][DEBUG] Recognition speech end');
+    };
+
+    recognition.onnomatch = () => {
+      console.log('[STT][DEBUG] Recognition no match');
     };
 
     // Start recognition
