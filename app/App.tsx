@@ -656,6 +656,11 @@ export async function setupSTTMode(
         currentSTTSession.processingAudio.pause();
         currentSTTSession.processingAudio.currentTime = 0;
       }
+      // Clear any pending recognition restart timeout
+      if ((currentSTTSession as any).recognitionRestartTimeout) {
+        clearTimeout((currentSTTSession as any).recognitionRestartTimeout);
+        (currentSTTSession as any).recognitionRestartTimeout = null;
+      }
       currentSTTSession = null;
     }
   } catch (e) {
@@ -978,7 +983,30 @@ export async function setupSTTMode(
         }
 
         const audioBlob = await response.blob();
+        
+        // CRITICAL: Validate blob before creating URL to prevent ERR_FILE_NOT_FOUND
+        if (!audioBlob || audioBlob.size === 0) {
+          console.error('[TTS] Invalid audio blob received:', {
+            blob: audioBlob,
+            size: audioBlob?.size,
+            type: audioBlob?.type
+          });
+          throw new Error('Invalid or empty audio blob received from server');
+        }
+        
+        // Validate blob type
+        if (!audioBlob.type || !audioBlob.type.startsWith('audio/')) {
+          console.warn('[TTS] Unexpected blob type:', audioBlob.type, '- expected audio/*');
+          // Still proceed, but log warning
+        }
+        
+        console.log('[TTS][DEBUG] Audio blob received:', {
+          size: audioBlob.size,
+          type: audioBlob.type
+        });
+        
         const audioUrl = URL.createObjectURL(audioBlob);
+        console.log('[TTS][DEBUG] Blob URL created:', audioUrl);
         
         if (audioEl) {
           // Stop any currently playing audio first (critical for Android)
@@ -1033,6 +1061,22 @@ export async function setupSTTMode(
               clearTimeout(timeout);
               audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
               audioEl?.removeEventListener('error', onError);
+              
+              // Log detailed error information
+              if (audioEl) {
+                const errorInfo = {
+                  error: audioEl.error ? {
+                    code: audioEl.error.code,
+                    message: audioEl.error.message
+                  } : null,
+                  src: audioEl.src,
+                  networkState: audioEl.networkState,
+                  readyState: audioEl.readyState,
+                  blobUrl: audioUrl
+                };
+                console.error('[TTS] Audio loading error in promise:', errorInfo);
+              }
+              
               reject(new Error('Audio loading error'));
             };
             
@@ -1191,8 +1235,19 @@ export async function setupSTTMode(
               audioEl.removeEventListener('play', handlePlay);
               audioEl.removeEventListener('ended', handleEnded);
             }
-            URL.revokeObjectURL(audioUrl);
-            console.log('[TTS][DEBUG] Event listeners removed and URL revoked');
+            // CRITICAL: Only revoke URL after a small delay to ensure audio is fully done
+            // This prevents ERR_FILE_NOT_FOUND if browser is still processing
+            setTimeout(() => {
+              try {
+                if (audioUrl && audioUrl.startsWith('blob:')) {
+                  URL.revokeObjectURL(audioUrl);
+                  console.log('[TTS][DEBUG] Blob URL revoked after playback ended');
+                }
+              } catch (e) {
+                console.warn('[TTS] Error revoking blob URL:', e);
+              }
+            }, 100); // Small delay to ensure browser is done with the blob
+            console.log('[TTS][DEBUG] Event listeners removed, URL revocation scheduled');
           };
           
           // Add extensive logging for all audio events
@@ -1200,12 +1255,48 @@ export async function setupSTTMode(
           audioEl.addEventListener('play', handlePlay);
           audioEl.addEventListener('ended', handleEnded);
           audioEl.addEventListener('error', (e) => {
-            console.error('[TTS][DEBUG] Audio error event:', e, {
-              error: audioEl.error,
+            const errorDetails = {
+              error: audioEl.error ? {
+                code: audioEl.error.code,
+                message: audioEl.error.message,
+                MEDIA_ERR_ABORTED: audioEl.error.MEDIA_ERR_ABORTED,
+                MEDIA_ERR_NETWORK: audioEl.error.MEDIA_ERR_NETWORK,
+                MEDIA_ERR_DECODE: audioEl.error.MEDIA_ERR_DECODE,
+                MEDIA_ERR_SRC_NOT_SUPPORTED: audioEl.error.MEDIA_ERR_SRC_NOT_SUPPORTED
+              } : null,
               src: audioEl.src,
               networkState: audioEl.networkState,
-              readyState: audioEl.readyState
-            });
+              readyState: audioEl.readyState,
+              paused: audioEl.paused,
+              ended: audioEl.ended,
+              currentTime: audioEl.currentTime,
+              duration: audioEl.duration,
+              blobUrl: audioUrl
+            };
+            
+            console.error('[TTS][DEBUG] Audio error event:', errorDetails);
+            
+            // CRITICAL: Clean up on error to prevent memory leaks
+            // But don't revoke URL immediately - let it try to recover
+            // Only revoke if it's a permanent error
+            if (audioEl.error) {
+              const errorCode = audioEl.error.code;
+              // MEDIA_ERR_SRC_NOT_SUPPORTED (4) or MEDIA_ERR_DECODE (3) are permanent
+              if (errorCode === 4 || errorCode === 3) {
+                console.error('[TTS] Permanent audio error, cleaning up blob URL');
+                // Don't revoke here - let handleEnded do it, but mark for cleanup
+                setTimeout(() => {
+                  if (audioEl && audioEl.src === audioUrl) {
+                    try {
+                      URL.revokeObjectURL(audioUrl);
+                      console.log('[TTS][DEBUG] Blob URL revoked after permanent error');
+                    } catch (e) {
+                      console.warn('[TTS] Error revoking blob URL:', e);
+                    }
+                  }
+                }, 1000);
+              }
+            }
           });
           audioEl.addEventListener('loadstart', () => console.log('[TTS][DEBUG] Audio loadstart'));
           audioEl.addEventListener('loadeddata', () => console.log('[TTS][DEBUG] Audio loadeddata'));
@@ -1500,6 +1591,11 @@ export async function setupSTTMode(
       }
     };
 
+    // Detect if we're on Android to handle beep issue
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
+    let lastRecognitionEndTime = 0;
+    
     recognition.onend = () => {
       console.log('[STT][DEBUG] Recognition ended - restarting if session active');
       // CRITICAL: Ensure processing audio is stopped when recognition ends
@@ -1517,14 +1613,51 @@ export async function setupSTTMode(
         }
       }
       
+      // Clear any pending restart
+      if (recognitionRestartTimeout) {
+        clearTimeout(recognitionRestartTimeout);
+        recognitionRestartTimeout = null;
+      }
+      
       // Restart recognition if session is still active
       if (currentSTTSession && currentSTTSession.recognition === recognition) {
-        try {
-          recognition.start();
-          console.log('[STT][DEBUG] Recognition restarted');
-        } catch (e) {
-          console.log('[STT][DEBUG] Error restarting recognition:', e);
-          // Ignore errors when restarting
+        const now = Date.now();
+        const timeSinceLastEnd = now - lastRecognitionEndTime;
+        lastRecognitionEndTime = now;
+        
+        // CRITICAL FIX: Add delay before restarting on Android to prevent beep sounds
+        // Android Chrome plays a system beep when microphone is activated/deactivated
+        // By adding a delay, we reduce the frequency of these beeps
+        const restartDelay = isAndroid ? 2000 : 500; // 2 seconds on Android, 500ms on other platforms
+        
+        // If recognition ended very quickly (less than delay), wait longer to prevent rapid cycling
+        const actualDelay = timeSinceLastEnd < restartDelay ? restartDelay + 1000 : restartDelay;
+        
+        console.log('[STT][DEBUG] Scheduling recognition restart in', actualDelay, 'ms (Android:', isAndroid, ')');
+        
+        recognitionRestartTimeout = setTimeout(() => {
+          recognitionRestartTimeout = null;
+          // Clear timeout reference from session
+          if (currentSTTSession) {
+            (currentSTTSession as any).recognitionRestartTimeout = null;
+          }
+          // Double-check session is still active before restarting
+          if (currentSTTSession && currentSTTSession.recognition === recognition) {
+            try {
+              recognition.start();
+              console.log('[STT][DEBUG] Recognition restarted after delay');
+            } catch (e) {
+              console.log('[STT][DEBUG] Error restarting recognition:', e);
+              // Ignore errors when restarting
+            }
+          } else {
+            console.log('[STT][DEBUG] Session changed during delay, not restarting');
+          }
+        }, actualDelay);
+        
+        // Store timeout reference in session for cleanup
+        if (currentSTTSession) {
+          (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
         }
       } else {
         console.log('[STT][DEBUG] Not restarting - session inactive or recognition changed');
