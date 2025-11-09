@@ -135,6 +135,7 @@ let currentSTTSession: {
   processingAudio?: HTMLAudioElement | null;
   processingOscillator?: OscillatorNode | null;
   processingGain?: GainNode | null;
+  isProcessingAudioPlaying?: () => boolean;
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -732,18 +733,36 @@ export async function setupSTTMode(
     }
 
     // Create processing audio element for feedback when AI is processing
-    const processingAudio = new Audio('/audio/processing.mp3');
+    // Use cache-busting query parameter to avoid caching issues (fixes incognito vs regular mode)
+    const cacheBuster = Date.now();
+    const processingAudio = new Audio(`/audio/processing.mp3?v=${cacheBuster}`);
     processingAudio.loop = true;
     processingAudio.volume = 0.4; // Set volume for better feedback
     processingAudio.preload = 'auto'; // Preload the audio for faster playback
     
+    // Track if processing audio is currently playing
+    let isProcessingAudioPlaying = false;
+    
     // Set up error handling for audio loading
     processingAudio.onerror = (e) => {
       console.error('[STT] Processing audio failed to load:', e);
+      isProcessingAudioPlaying = false;
     };
     
     processingAudio.oncanplaythrough = () => {
       console.log('[STT] Processing audio ready to play');
+    };
+    
+    processingAudio.onplay = () => {
+      isProcessingAudioPlaying = true;
+    };
+    
+    processingAudio.onpause = () => {
+      isProcessingAudioPlaying = false;
+    };
+    
+    processingAudio.onended = () => {
+      isProcessingAudioPlaying = false;
     };
     
     // Preload the audio by loading it immediately
@@ -771,6 +790,7 @@ export async function setupSTTMode(
       processingAudio,
       processingOscillator: null,
       processingGain: null,
+      isProcessingAudioPlaying: () => isProcessingAudioPlaying,
     };
 
     // Get backend URL
@@ -879,24 +899,21 @@ export async function setupSTTMode(
         }
         
         // Stop HTMLAudioElement processing audio
+        // Don't clear src - just pause and reset (prevents state issues and cache problems)
         if (currentSTTSession.processingAudio) {
           try {
-            currentSTTSession.processingAudio.loop = false;
+            // Stop playing immediately
             currentSTTSession.processingAudio.pause();
             currentSTTSession.processingAudio.currentTime = 0;
-            currentSTTSession.processingAudio.onplay = null;
-            currentSTTSession.processingAudio.onpause = null;
-            currentSTTSession.processingAudio.onended = null;
-            currentSTTSession.processingAudio.onerror = null;
-            currentSTTSession.processingAudio.src = '';
-            currentSTTSession.processingAudio.load();
+            // Don't clear src or remove event listeners - just pause
+            // This prevents cache issues and state problems
           } catch (e) {
             console.warn('[TTS] Error stopping processing audio:', e);
           }
         }
         
         // Wait for Android to release audio focus (prevents conflicts)
-        await new Promise(resolve => setTimeout(resolve, 150));
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
       
       // Resume AudioContext if suspended (required for Android Chrome)
@@ -997,40 +1014,69 @@ export async function setupSTTMode(
           // Set up event handlers to prevent interruptions (Android audio focus handling)
           let isPlaying = false;
           let pauseResumeAttempts = 0;
-          const maxResumeAttempts = 5; // Increased attempts for Android
+          const maxResumeAttempts = 3; // Reduced attempts to prevent beep sounds
+          let pauseResumeTimeout: ReturnType<typeof setTimeout> | null = null;
+          let lastPauseTime = 0;
+          const PAUSE_DEBOUNCE_MS = 500; // Debounce pause/resume to prevent beep sounds
           
           const handlePause = async () => {
+            const now = Date.now();
+            // Debounce: ignore pauses that happen too quickly after the last one
+            if (now - lastPauseTime < PAUSE_DEBOUNCE_MS) {
+              return;
+            }
+            lastPauseTime = now;
+            
+            // Clear any pending resume attempts
+            if (pauseResumeTimeout) {
+              clearTimeout(pauseResumeTimeout);
+              pauseResumeTimeout = null;
+            }
+            
             // Only resume if we were actually playing and it wasn't intentional
             if (audioEl && !audioEl.ended && isPlaying && pauseResumeAttempts < maxResumeAttempts) {
-              console.log('[TTS] Audio paused unexpectedly, attempting to resume (attempt', pauseResumeAttempts + 1, ')');
               pauseResumeAttempts++;
               
-              // Ensure AudioContext is resumed
-              if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+              // Debounced resume - wait a bit before attempting to resume
+              pauseResumeTimeout = setTimeout(async () => {
                 try {
-                  await currentSTTSession.audioContext.resume();
-                } catch (e) {
-                  console.warn('[TTS] Could not resume AudioContext:', e);
-                }
-              }
-              
-              setTimeout(async () => {
-                try {
-                  if (audioEl && !audioEl.ended && audioEl.paused) {
-                    await audioEl.play();
-                    isPlaying = true;
-                    console.log('[TTS] Successfully resumed after pause');
+                  // Double-check state before resuming
+                  if (audioEl && !audioEl.ended && audioEl.paused && isPlaying) {
+                    // Ensure AudioContext is resumed
+                    if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+                      try {
+                        await currentSTTSession.audioContext.resume();
+                      } catch (e) {
+                        console.warn('[TTS] Could not resume AudioContext:', e);
+                      }
+                    }
+                    
+                    // Small delay before resuming to let Android settle
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    
+                    if (audioEl && !audioEl.ended && audioEl.paused) {
+                      await audioEl.play();
+                      isPlaying = true;
+                      console.log('[TTS] Successfully resumed after pause (attempt', pauseResumeAttempts, ')');
+                    }
                   }
                 } catch (e) {
                   console.warn('[TTS] Could not resume after pause:', e);
                 }
-              }, 200);
+                pauseResumeTimeout = null;
+              }, PAUSE_DEBOUNCE_MS);
             }
           };
           
           const handlePlay = () => {
             isPlaying = true;
             pauseResumeAttempts = 0; // Reset attempts on successful play
+            lastPauseTime = 0; // Reset pause time
+            // Clear any pending resume attempts since we're playing
+            if (pauseResumeTimeout) {
+              clearTimeout(pauseResumeTimeout);
+              pauseResumeTimeout = null;
+            }
           };
           
           audioEl.addEventListener('pause', handlePause);
@@ -1057,6 +1103,11 @@ export async function setupSTTMode(
           // Clean up after playback
           audioEl.onended = () => {
             isPlaying = false;
+            // Clear any pending resume attempts
+            if (pauseResumeTimeout) {
+              clearTimeout(pauseResumeTimeout);
+              pauseResumeTimeout = null;
+            }
             audioEl.removeEventListener('pause', handlePause);
             audioEl.removeEventListener('play', handlePlay);
             URL.revokeObjectURL(audioUrl);
@@ -1124,6 +1175,17 @@ export async function setupSTTMode(
       // Start playing processing audio to give user feedback that voice was detected
       if (currentSTTSession?.processingAudio) {
         try {
+          // Check if processing audio is already playing to prevent conflicts
+          const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
+          if (isAlreadyPlaying) {
+            console.log('[STT] Processing audio already playing, skipping');
+            // Still ensure it's looping and at correct volume
+            const audio = currentSTTSession.processingAudio;
+            audio.loop = true;
+            audio.volume = 0.4;
+            return; // Don't try to play again if already playing
+          }
+          
           // Ensure AudioContext is resumed (helps with Android)
           if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
             await currentSTTSession.audioContext.resume();
@@ -1151,9 +1213,10 @@ export async function setupSTTMode(
           audio.loop = true;
           audio.volume = 0.4;
           
-          // If src was cleared or empty, restore it
+          // If src was cleared or empty, restore it with cache-busting
           if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            audio.src = '/audio/processing.mp3';
+            const cacheBuster = Date.now();
+            audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
             audio.load();
             // Wait for audio to be ready
             await new Promise<void>((resolve, reject) => {
@@ -1188,6 +1251,10 @@ export async function setupSTTMode(
           
           // Reset to start and play
           audio.currentTime = 0;
+          
+          // Small delay to ensure audio context is ready (helps with Android)
+          await new Promise(resolve => setTimeout(resolve, 50));
+          
           await audio.play();
           console.log('[STT] Started processing audio (processing.mp3)');
         } catch (e) {
@@ -1197,7 +1264,9 @@ export async function setupSTTMode(
             console.error('[STT] Audio element state:', {
               src: currentSTTSession.processingAudio.src,
               readyState: currentSTTSession.processingAudio.readyState,
-              error: currentSTTSession.processingAudio.error
+              error: currentSTTSession.processingAudio.error,
+              paused: currentSTTSession.processingAudio.paused,
+              ended: currentSTTSession.processingAudio.ended
             });
           }
         }
