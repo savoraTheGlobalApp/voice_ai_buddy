@@ -714,6 +714,8 @@ export async function setupSTTMode(
     // Initialize Web Speech API for STT
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
+      const errorMsg = 'Speech Recognition API is not supported. User Agent: ' + navigator.userAgent;
+      console.error('[STT]', errorMsg);
       throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
     }
 
@@ -721,6 +723,14 @@ export async function setupSTTMode(
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.lang = 'en-US';
+    
+    // Log recognition setup for debugging
+    console.log('[STT] Speech Recognition initialized. User Agent:', navigator.userAgent);
+    console.log('[STT] Recognition settings:', {
+      continuous: recognition.continuous,
+      interimResults: recognition.interimResults,
+      lang: recognition.lang,
+    });
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -1284,8 +1294,14 @@ export async function setupSTTMode(
     };
 
     recognition.onresult = async (event: any) => {
+      console.log('[STT] Recognition result event received', {
+        resultsLength: event.results.length,
+        isFinal: event.results[event.results.length - 1]?.isFinal,
+      });
+      
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) {
+        console.log('[STT] Empty transcript, ignoring');
         return;
       }
 
@@ -1435,14 +1451,40 @@ export async function setupSTTMode(
     };
 
     recognition.onerror = (event: any) => {
-      // Only log meaningful errors - ignore common non-critical errors
-      if (event.error !== 'no-speech' && 
-          event.error !== 'aborted' && 
-          event.error !== 'audio-capture' &&
-          event.error !== 'not-allowed') {
-        console.error('[STT] Recognition error:', event.error);
+      // Log all errors for debugging on mobile
+      const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      
+      if (isMobile) {
+        // On mobile, log all errors for debugging
+        console.error('[STT] Recognition error:', {
+          error: event.error,
+          message: event.message || 'No message',
+          userAgent: navigator.userAgent,
+        });
+      } else {
+        // On desktop, only log meaningful errors
+        if (event.error !== 'no-speech' && 
+            event.error !== 'aborted' && 
+            event.error !== 'audio-capture' &&
+            event.error !== 'not-allowed') {
+          console.error('[STT] Recognition error:', event.error);
+        }
       }
-      // Silently handle common expected errors
+      
+      // Handle critical errors
+      if (event.error === 'not-allowed') {
+        console.error('[STT] Microphone permission denied. Please grant microphone access.');
+      } else if (event.error === 'no-speech') {
+        // This is normal - just means no speech was detected
+      } else if (event.error === 'aborted') {
+        // This is normal - recognition was stopped
+      } else if (event.error === 'audio-capture') {
+        console.error('[STT] No microphone found or microphone not accessible.');
+      } else if (event.error === 'network') {
+        console.error('[STT] Network error in speech recognition.');
+      } else if (event.error === 'service-not-allowed') {
+        console.error('[STT] Speech recognition service not allowed.');
+      }
     };
 
     recognition.onstart = () => {
@@ -1555,16 +1597,26 @@ export async function setupSTTMode(
       }
     };
 
-    // Start recognition
-    recognition.start();
+    // Start recognition with error handling
+    try {
+      recognition.start();
+      console.log('[STT] Recognition started successfully');
+    } catch (e: any) {
+      console.error('[STT] Error starting recognition:', e);
+      // If already started, that's okay
+      if (e && !(e.message?.includes('already') || e.message?.includes('started'))) {
+        throw new Error(`Failed to start speech recognition: ${e.message || e}`);
+      }
+    }
     
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
     try {
-      // Send a prompt that will generate a dynamic greeting
-      // The AI will use the instructions to greet with the child's name in the first message
+      // Create a temporary conversation history with the greeting prompt
+      // Don't add it to the actual conversationHistory yet - we'll remove it after
+      const tempHistory = [...conversationHistory];
       const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
-      conversationHistory.push({ role: 'user', content: greetingPrompt });
+      tempHistory.push({ role: 'user', content: greetingPrompt });
       
       // Get the greeting from AI
       const response = await fetch(`${backendUrl}/api/chat`, {
@@ -1573,7 +1625,7 @@ export async function setupSTTMode(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          messages: conversationHistory,
+          messages: tempHistory,
         }),
       });
 
@@ -1585,13 +1637,12 @@ export async function setupSTTMode(
       const data = await response.json();
       const greeting = data.response || data.message || '';
       
-      // Remove the greeting prompt from history (it was just to trigger the greeting)
-      // Keep only the system message and the assistant's greeting
-      conversationHistory.pop(); // Remove the user greeting prompt
+      // Add only the assistant's greeting to the actual conversation history
+      // Don't add the user greeting prompt - it was just to trigger the greeting
       conversationHistory.push({ role: 'assistant', content: greeting });
       
       await textToSpeech(greeting);
-      // Update UI
+      // Update UI - only show the assistant's greeting, not the prompt
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
