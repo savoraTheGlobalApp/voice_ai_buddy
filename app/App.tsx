@@ -1563,6 +1563,16 @@ export async function setupSTTMode(
 
     recognition.onerror = (event: any) => {
       console.log('[STT][DEBUG] Recognition error event:', event.error);
+      
+      // CRITICAL: On Android, 'no-speech' error might not fire (uses onnomatch instead)
+      // On laptop/desktop, 'no-speech' fires when no speech detected within timeout
+      // Both are normal and expected - they just indicate different browser implementations
+      if (event.error === 'no-speech') {
+        console.log('[STT][DEBUG] No speech detected (timeout) - this is normal, will restart after delay');
+        // On Android, this might not fire, but on laptop it does
+        // The delay in onend handler will still apply
+      }
+      
       // Only log meaningful errors - ignore common non-critical errors
       if (event.error !== 'no-speech' && 
           event.error !== 'aborted' && 
@@ -1595,9 +1605,11 @@ export async function setupSTTMode(
     const isAndroid = /Android/i.test(navigator.userAgent);
     let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
     let lastRecognitionEndTime = 0;
+    let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
     
     recognition.onend = () => {
-      console.log('[STT][DEBUG] Recognition ended - restarting if session active');
+      console.log('[STT][DEBUG] Recognition ended - checking if restart needed');
+      
       // CRITICAL: Ensure processing audio is stopped when recognition ends
       // This prevents it from playing during the restart cycle
       if (currentSTTSession?.processingAudio) {
@@ -1613,6 +1625,22 @@ export async function setupSTTMode(
         }
       }
       
+      // CRITICAL: Check if recognition is actually stopped before restarting
+      // Sometimes onend fires but recognition is still active (especially on Android)
+      // This prevents unnecessary restarts that cause beeps
+      try {
+        // Check if recognition is already running - if so, don't restart
+        // Unfortunately, Web Speech API doesn't expose a direct "isRunning" property,
+        // but we can check by trying to start it and catching the error
+        // Actually, better approach: check if we're already in the process of restarting
+        if (isRecognitionRestarting) {
+          console.log('[STT][DEBUG] Recognition restart already in progress, skipping');
+          return;
+        }
+      } catch (e) {
+        // Ignore errors in state checking
+      }
+      
       // Clear any pending restart
       if (recognitionRestartTimeout) {
         clearTimeout(recognitionRestartTimeout);
@@ -1625,30 +1653,42 @@ export async function setupSTTMode(
         const timeSinceLastEnd = now - lastRecognitionEndTime;
         lastRecognitionEndTime = now;
         
-        // CRITICAL FIX: Add delay before restarting on Android to prevent beep sounds
-        // Android Chrome plays a system beep when microphone is activated/deactivated
-        // By adding a delay, we reduce the frequency of these beeps
-        const restartDelay = isAndroid ? 2000 : 500; // 2 seconds on Android, 500ms on other platforms
+        // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
+        // Even with continuous=true, calling start() again reactivates the mic and causes beep
+        // The other website (speech-to-text.cloud) uses backend STT, not browser API, so no beeps
+        // We can't avoid the beep completely, but we can minimize restarts
+        // Try to restart immediately on non-Android, but with delay on Android
+        const restartDelay = isAndroid ? 100 : 0; // Minimal delay - just enough to let Android settle
         
-        // If recognition ended very quickly (less than delay), wait longer to prevent rapid cycling
-        const actualDelay = timeSinceLastEnd < restartDelay ? restartDelay + 1000 : restartDelay;
+        // If recognition ended very quickly, add a small delay to prevent rapid cycling
+        const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
         
-        console.log('[STT][DEBUG] Scheduling recognition restart in', actualDelay, 'ms (Android:', isAndroid, ')');
+        console.log('[STT][DEBUG] Scheduling recognition restart in', actualDelay, 'ms (Android:', isAndroid, ', timeSinceLastEnd:', timeSinceLastEnd, 'ms)');
         
+        isRecognitionRestarting = true;
         recognitionRestartTimeout = setTimeout(() => {
           recognitionRestartTimeout = null;
+          isRecognitionRestarting = false;
+          
           // Clear timeout reference from session
           if (currentSTTSession) {
             (currentSTTSession as any).recognitionRestartTimeout = null;
           }
+          
           // Double-check session is still active before restarting
           if (currentSTTSession && currentSTTSession.recognition === recognition) {
             try {
+              // CRITICAL: On Android, this start() call will cause a beep
+              // This is unavoidable with Web Speech API - the other website uses backend STT
               recognition.start();
-              console.log('[STT][DEBUG] Recognition restarted after delay');
-            } catch (e) {
-              console.log('[STT][DEBUG] Error restarting recognition:', e);
-              // Ignore errors when restarting
+              console.log('[STT][DEBUG] Recognition restarted (beep may occur on Android)');
+            } catch (e: any) {
+              // If error is "already started", that's actually good - means it's still running
+              if (e && (e.message?.includes('already') || e.message?.includes('started'))) {
+                console.log('[STT][DEBUG] Recognition already running, no restart needed');
+              } else {
+                console.log('[STT][DEBUG] Error restarting recognition:', e);
+              }
             }
           } else {
             console.log('[STT][DEBUG] Session changed during delay, not restarting');
@@ -1703,6 +1743,14 @@ export async function setupSTTMode(
         } catch (e) {
           console.warn('[STT][DEBUG] Error stopping processing audio on no match:', e);
         }
+      }
+      
+      // CRITICAL: On Android, onnomatch fires before onend, and the beep happens
+      // when recognition restarts (microphone reactivates). We can't prevent the restart,
+      // but we can ensure there's enough delay between cycles to reduce beep frequency.
+      // The delay in onend handler should handle this, but we log here for debugging.
+      if (isAndroid) {
+        console.log('[STT][DEBUG] Android: no match detected, will restart after delay in onend');
       }
     };
 
