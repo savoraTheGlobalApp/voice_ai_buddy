@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
+import re
 import httpx
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -29,6 +30,13 @@ except ImportError:
     EDGE_TTS_AVAILABLE = False
     edge_tts = None
 
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    AudioSegment = None
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -48,9 +56,14 @@ if frontend_url:
         if url:
             cors_origins.append(url)
 
+# CORS regex pattern for Vercel preview deployments
+# Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
+vercel_pattern = r"https://.*\.vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=vercel_pattern,  # Allow all Vercel preview and production URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -211,6 +224,7 @@ async def _generate_gtts(text: str, lang: str = "en") -> bytes:
     """
     Generate speech using gTTS (Google Text-to-Speech) - free and reliable.
     This is the default free TTS option.
+    Optimized for mobile playback using pydub for better Android compatibility.
     """
     if not GTTS_AVAILABLE or gTTS is None:
         raise Exception(
@@ -223,15 +237,47 @@ async def _generate_gtts(text: str, lang: str = "en") -> bytes:
         tts = gTTS(text=text, lang=lang, slow=False)
         
         # Save to bytes buffer
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-        audio_data = audio_buffer.read()
+        mp3_fp = io.BytesIO()
+        tts.write_to_fp(mp3_fp)
+        mp3_fp.seek(0)
         
-        if not audio_data:
-            raise Exception("No audio data generated from gTTS")
-        
-        return audio_data
+        # If pydub is available, convert to mobile-optimized format
+        if PYDUB_AVAILABLE and AudioSegment is not None:
+            try:
+                # Load the MP3 from gTTS
+                audio = AudioSegment.from_mp3(mp3_fp)
+                
+                # Export with optimized settings for mobile (especially Android)
+                # 44.1kHz sample rate, stereo, 128kbps bitrate for better compatibility
+                output = io.BytesIO()
+                audio.export(
+                    output,
+                    format="mp3",
+                    bitrate="128k",
+                    parameters=["-ar", "44100", "-ac", "2"]  # 44.1kHz, stereo
+                )
+                output.seek(0)
+                audio_data = output.read()
+                
+                if not audio_data:
+                    raise Exception("No audio data after pydub conversion")
+                
+                print("gTTS audio optimized with pydub for mobile compatibility")
+                return audio_data
+            except Exception as pydub_error:
+                # If pydub conversion fails, fall back to raw gTTS output
+                print(f"pydub conversion failed, using raw gTTS output: {str(pydub_error)[:100]}")
+                mp3_fp.seek(0)
+                audio_data = mp3_fp.read()
+                if not audio_data:
+                    raise Exception("No audio data generated from gTTS")
+                return audio_data
+        else:
+            # Fallback to raw gTTS output if pydub is not available
+            audio_data = mp3_fp.read()
+            if not audio_data:
+                raise Exception("No audio data generated from gTTS")
+            return audio_data
     except Exception as e:
         raise Exception(f"gTTS error: {str(e)}")
 

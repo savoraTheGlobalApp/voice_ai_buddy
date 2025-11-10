@@ -1,0 +1,12 @@
+# Nixpacks configuration for Railway
+# This ensures ffmpeg is installed for pydub audio processing
+
+[phases.setup]
+nixPkgs = ["ffmpeg", "python311"]
+
+[phases.install]
+cmds = ["pip install --no-cache-dir -r requirements.txt"]
+
+[start]
+cmd = "gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT"
+
