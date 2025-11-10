@@ -301,7 +301,6 @@ export async function setupRealtimeMode(
         conversationHistory.push({ role: 'user', content: transcript });
         userMsgCounter += 1;
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          console.log('[mem][DEBUG] Realtime mode - triggering extraction at counter:', userMsgCounter);
           maybeExtractMemories();
         }
         
@@ -725,12 +724,6 @@ export async function setupSTTMode(
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    console.log('[STT][DEBUG] AudioContext created, state:', audioContext.state);
-    
-    // Monitor AudioContext state changes
-    audioContext.addEventListener('statechange', () => {
-      console.log('[STT][DEBUG] AudioContext state changed to:', audioContext.state);
-    });
     
     // Resume AudioContext if suspended (required for Android Chrome)
     // Android Chrome often starts with AudioContext in suspended state
@@ -754,14 +747,9 @@ export async function setupSTTMode(
     // Track if processing audio is currently playing
     let isProcessingAudioPlaying = false;
     
-    // Set up extensive logging for processing audio events
+    // Set up error handling for processing audio
     processingAudio.onerror = (e) => {
-      console.error('[STT][DEBUG] Processing audio error:', e, {
-        error: processingAudio.error,
-        src: processingAudio.src,
-        networkState: processingAudio.networkState,
-        readyState: processingAudio.readyState
-      });
+      console.error('[STT] Processing audio error:', e);
       isProcessingAudioPlaying = false;
     };
     
@@ -770,40 +758,16 @@ export async function setupSTTMode(
     };
     
     processingAudio.onplay = () => {
-      console.log('[STT][DEBUG] Processing audio play event');
       isProcessingAudioPlaying = true;
     };
     
     processingAudio.onpause = () => {
-      console.log('[STT][DEBUG] Processing audio pause event');
       isProcessingAudioPlaying = false;
     };
     
     processingAudio.onended = () => {
-      console.log('[STT][DEBUG] Processing audio ended event');
       isProcessingAudioPlaying = false;
     };
-    
-    // Add extensive logging for all processing audio events
-    processingAudio.addEventListener('loadstart', () => console.log('[STT][DEBUG] Processing audio loadstart'));
-    processingAudio.addEventListener('loadeddata', () => console.log('[STT][DEBUG] Processing audio loadeddata'));
-    processingAudio.addEventListener('canplay', () => console.log('[STT][DEBUG] Processing audio canplay'));
-    processingAudio.addEventListener('waiting', () => console.log('[STT][DEBUG] Processing audio waiting'));
-    processingAudio.addEventListener('stalled', () => console.log('[STT][DEBUG] Processing audio stalled'));
-    processingAudio.addEventListener('suspend', () => console.log('[STT][DEBUG] Processing audio suspend'));
-    processingAudio.addEventListener('abort', () => console.log('[STT][DEBUG] Processing audio abort'));
-    processingAudio.addEventListener('timeupdate', () => {
-      // Log periodically (every 5 seconds) to track if it's playing in background
-      if (Math.floor(processingAudio.currentTime) % 5 === 0 && processingAudio.currentTime > 0) {
-        console.log('[STT][DEBUG] Processing audio timeupdate:', {
-          currentTime: processingAudio.currentTime,
-          duration: processingAudio.duration,
-          paused: processingAudio.paused,
-          ended: processingAudio.ended,
-          isPlaying: isProcessingAudioPlaying
-        });
-      }
-    });
     
     // Preload the audio by loading it immediately
     try {
@@ -1000,13 +964,7 @@ export async function setupSTTMode(
           // Still proceed, but log warning
         }
         
-        console.log('[TTS][DEBUG] Audio blob received:', {
-          size: audioBlob.size,
-          type: audioBlob.type
-        });
-        
         const audioUrl = URL.createObjectURL(audioBlob);
-        console.log('[TTS][DEBUG] Blob URL created:', audioUrl);
         
         if (audioEl) {
           // Stop any currently playing audio first (critical for Android)
@@ -1111,26 +1069,14 @@ export async function setupSTTMode(
           
           const handlePause = async () => {
             const now = Date.now();
-            const audioState = {
-              ended: audioEl?.ended,
-              paused: audioEl?.paused,
-              currentTime: audioEl?.currentTime,
-              duration: audioEl?.duration,
-              readyState: audioEl?.readyState,
-              isPlaying,
-              pauseResumeAttempts
-            };
-            console.log('[TTS][DEBUG] handlePause triggered:', audioState);
             
             // CRITICAL: Don't handle pause if audio has ended - this prevents beeps after playback
             if (!audioEl || audioEl.ended) {
-              console.log('[TTS][DEBUG] Ignoring pause - audio has ended');
               return;
             }
             
             // Debounce: ignore pauses that happen too quickly after the last one
             if (now - lastPauseTime < PAUSE_DEBOUNCE_MS) {
-              console.log('[TTS][DEBUG] Ignoring pause - debounced (time since last:', now - lastPauseTime, 'ms)');
               return;
             }
             lastPauseTime = now;
@@ -1139,31 +1085,26 @@ export async function setupSTTMode(
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
-              console.log('[TTS][DEBUG] Cleared pending resume timeout');
             }
             
             // Only resume if we were actually playing and it wasn't intentional
             if (audioEl && !audioEl.ended && isPlaying && pauseResumeAttempts < maxResumeAttempts) {
               pauseResumeAttempts++;
-              console.log('[TTS][DEBUG] Attempting to resume (attempt', pauseResumeAttempts, 'of', maxResumeAttempts, ')');
               
               // Debounced resume - wait a bit before attempting to resume
               pauseResumeTimeout = setTimeout(async () => {
                 try {
                   // Double-check state before resuming - audio might have ended while waiting
                   if (!audioEl || audioEl.ended) {
-                    console.log('[TTS][DEBUG] Aborting resume - audio ended while waiting');
                     pauseResumeTimeout = null;
                     return;
                   }
                   
                   if (audioEl && !audioEl.ended && audioEl.paused && isPlaying) {
-                    console.log('[TTS][DEBUG] Resuming audio playback...');
                     // Ensure AudioContext is resumed
                     if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
                       try {
                         await currentSTTSession.audioContext.resume();
-                        console.log('[TTS][DEBUG] AudioContext resumed');
                       } catch (e) {
                         console.warn('[TTS] Could not resume AudioContext:', e);
                       }
@@ -1175,40 +1116,18 @@ export async function setupSTTMode(
                     if (audioEl && !audioEl.ended && audioEl.paused) {
                       await audioEl.play();
                       isPlaying = true;
-                      console.log('[TTS] Successfully resumed after pause (attempt', pauseResumeAttempts, ')');
-                    } else {
-                      console.log('[TTS][DEBUG] Audio state changed - not resuming:', {
-                        ended: audioEl?.ended,
-                        paused: audioEl?.paused,
-                        isPlaying
-                      });
+                      console.log('[TTS] Successfully resumed after pause');
                     }
-                  } else {
-                    console.log('[TTS][DEBUG] Not resuming - state check failed:', {
-                      hasAudioEl: !!audioEl,
-                      ended: audioEl?.ended,
-                      paused: audioEl?.paused,
-                      isPlaying
-                    });
                   }
                 } catch (e) {
                   console.warn('[TTS] Could not resume after pause:', e);
                 }
                 pauseResumeTimeout = null;
               }, PAUSE_DEBOUNCE_MS);
-            } else {
-              console.log('[TTS][DEBUG] Not attempting resume:', {
-                hasAudioEl: !!audioEl,
-                ended: audioEl?.ended,
-                isPlaying,
-                attempts: pauseResumeAttempts,
-                maxAttempts: maxResumeAttempts
-              });
             }
           };
           
           const handlePlay = () => {
-            console.log('[TTS][DEBUG] handlePlay triggered');
             isPlaying = true;
             pauseResumeAttempts = 0; // Reset attempts on successful play
             lastPauseTime = 0; // Reset pause time
@@ -1216,18 +1135,15 @@ export async function setupSTTMode(
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
-              console.log('[TTS][DEBUG] Cleared resume timeout on play');
             }
           };
           
           const handleEnded = () => {
-            console.log('[TTS][DEBUG] handleEnded triggered - cleaning up');
             isPlaying = false;
             // Clear any pending resume attempts
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
-              console.log('[TTS][DEBUG] Cleared resume timeout on ended');
             }
             // Remove event listeners to prevent beeps after audio ends
             if (audioEl) {
@@ -1241,55 +1157,34 @@ export async function setupSTTMode(
               try {
                 if (audioUrl && audioUrl.startsWith('blob:')) {
                   URL.revokeObjectURL(audioUrl);
-                  console.log('[TTS][DEBUG] Blob URL revoked after playback ended');
                 }
               } catch (e) {
                 console.warn('[TTS] Error revoking blob URL:', e);
               }
             }, 100); // Small delay to ensure browser is done with the blob
-            console.log('[TTS][DEBUG] Event listeners removed, URL revocation scheduled');
           };
           
-          // Add extensive logging for all audio events
+          // Add event listeners for audio playback
           audioEl.addEventListener('pause', handlePause);
           audioEl.addEventListener('play', handlePlay);
           audioEl.addEventListener('ended', handleEnded);
           audioEl.addEventListener('error', (e) => {
-            const errorDetails = {
-              error: audioEl.error ? {
-                code: audioEl.error.code,
-                message: audioEl.error.message,
-                MEDIA_ERR_ABORTED: audioEl.error.MEDIA_ERR_ABORTED,
-                MEDIA_ERR_NETWORK: audioEl.error.MEDIA_ERR_NETWORK,
-                MEDIA_ERR_DECODE: audioEl.error.MEDIA_ERR_DECODE,
-                MEDIA_ERR_SRC_NOT_SUPPORTED: audioEl.error.MEDIA_ERR_SRC_NOT_SUPPORTED
-              } : null,
-              src: audioEl.src,
-              networkState: audioEl.networkState,
-              readyState: audioEl.readyState,
-              paused: audioEl.paused,
-              ended: audioEl.ended,
-              currentTime: audioEl.currentTime,
-              duration: audioEl.duration,
-              blobUrl: audioUrl
-            };
-            
-            console.error('[TTS][DEBUG] Audio error event:', errorDetails);
+            console.error('[TTS] Audio error:', {
+              code: audioEl.error?.code,
+              message: audioEl.error?.message,
+              src: audioEl.src
+            });
             
             // CRITICAL: Clean up on error to prevent memory leaks
-            // But don't revoke URL immediately - let it try to recover
             // Only revoke if it's a permanent error
             if (audioEl.error) {
               const errorCode = audioEl.error.code;
               // MEDIA_ERR_SRC_NOT_SUPPORTED (4) or MEDIA_ERR_DECODE (3) are permanent
               if (errorCode === 4 || errorCode === 3) {
-                console.error('[TTS] Permanent audio error, cleaning up blob URL');
-                // Don't revoke here - let handleEnded do it, but mark for cleanup
                 setTimeout(() => {
                   if (audioEl && audioEl.src === audioUrl) {
                     try {
                       URL.revokeObjectURL(audioUrl);
-                      console.log('[TTS][DEBUG] Blob URL revoked after permanent error');
                     } catch (e) {
                       console.warn('[TTS] Error revoking blob URL:', e);
                     }
@@ -1298,14 +1193,6 @@ export async function setupSTTMode(
               }
             }
           });
-          audioEl.addEventListener('loadstart', () => console.log('[TTS][DEBUG] Audio loadstart'));
-          audioEl.addEventListener('loadeddata', () => console.log('[TTS][DEBUG] Audio loadeddata'));
-          audioEl.addEventListener('canplay', () => console.log('[TTS][DEBUG] Audio canplay'));
-          audioEl.addEventListener('canplaythrough', () => console.log('[TTS][DEBUG] Audio canplaythrough'));
-          audioEl.addEventListener('waiting', () => console.log('[TTS][DEBUG] Audio waiting'));
-          audioEl.addEventListener('stalled', () => console.log('[TTS][DEBUG] Audio stalled'));
-          audioEl.addEventListener('suspend', () => console.log('[TTS][DEBUG] Audio suspend'));
-          audioEl.addEventListener('abort', () => console.log('[TTS][DEBUG] Audio abort'));
           
           // CRITICAL: Final validation before playing - ensure src is valid
           if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || !audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('http')) {
@@ -1397,10 +1284,8 @@ export async function setupSTTMode(
     };
 
     recognition.onresult = async (event: any) => {
-      console.log('[STT][DEBUG] Recognition result event triggered, results count:', event.results.length);
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) {
-        console.log('[STT][DEBUG] Empty transcript, ignoring');
         return;
       }
 
@@ -1412,7 +1297,6 @@ export async function setupSTTMode(
           // Check if processing audio is already playing to prevent conflicts
           const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
           if (isAlreadyPlaying) {
-            console.log('[STT] Processing audio already playing, skipping');
             // Still ensure it's looping and at correct volume
             const audio = currentSTTSession.processingAudio;
             audio.loop = true;
@@ -1505,16 +1389,6 @@ export async function setupSTTMode(
           console.log('[STT] Started processing audio (processing.mp3)');
         } catch (e) {
           console.error('[STT] Could not play processing audio:', e);
-          // Log more details for debugging
-          if (currentSTTSession.processingAudio) {
-            console.error('[STT] Audio element state:', {
-              src: currentSTTSession.processingAudio.src,
-              readyState: currentSTTSession.processingAudio.readyState,
-              error: currentSTTSession.processingAudio.error,
-              paused: currentSTTSession.processingAudio.paused,
-              ended: currentSTTSession.processingAudio.ended
-            });
-          }
         }
       }
 
@@ -1528,7 +1402,6 @@ export async function setupSTTMode(
 
         // Check if we should extract memories after user message is processed
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          console.log('[mem][DEBUG] STT mode - triggering extraction at counter:', userMsgCounter);
           maybeExtractMemories();
         }
 
@@ -1562,17 +1435,6 @@ export async function setupSTTMode(
     };
 
     recognition.onerror = (event: any) => {
-      console.log('[STT][DEBUG] Recognition error event:', event.error);
-      
-      // CRITICAL: On Android, 'no-speech' error might not fire (uses onnomatch instead)
-      // On laptop/desktop, 'no-speech' fires when no speech detected within timeout
-      // Both are normal and expected - they just indicate different browser implementations
-      if (event.error === 'no-speech') {
-        console.log('[STT][DEBUG] No speech detected (timeout) - this is normal, will restart after delay');
-        // On Android, this might not fire, but on laptop it does
-        // The delay in onend handler will still apply
-      }
-      
       // Only log meaningful errors - ignore common non-critical errors
       if (event.error !== 'no-speech' && 
           event.error !== 'aborted' && 
@@ -1584,19 +1446,17 @@ export async function setupSTTMode(
     };
 
     recognition.onstart = () => {
-      console.log('[STT][DEBUG] Recognition started');
       // CRITICAL: Stop processing audio when recognition starts (idle listening)
       // This prevents processing audio from playing during continuous recognition cycles
       if (currentSTTSession?.processingAudio) {
         try {
           const audio = currentSTTSession.processingAudio;
           if (!audio.paused) {
-            console.log('[STT][DEBUG] Recognition started - stopping processing audio (idle listening)');
             audio.pause();
             audio.currentTime = 0;
           }
         } catch (e) {
-          console.warn('[STT][DEBUG] Error stopping processing audio on recognition start:', e);
+          console.warn('[STT] Error stopping processing audio on recognition start:', e);
         }
       }
     };
@@ -1608,37 +1468,25 @@ export async function setupSTTMode(
     let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
     
     recognition.onend = () => {
-      console.log('[STT][DEBUG] Recognition ended - checking if restart needed');
-      
       // CRITICAL: Ensure processing audio is stopped when recognition ends
       // This prevents it from playing during the restart cycle
       if (currentSTTSession?.processingAudio) {
         try {
           const audio = currentSTTSession.processingAudio;
           if (!audio.paused) {
-            console.log('[STT][DEBUG] Recognition ended - stopping processing audio');
             audio.pause();
             audio.currentTime = 0;
           }
         } catch (e) {
-          console.warn('[STT][DEBUG] Error stopping processing audio on recognition end:', e);
+          console.warn('[STT] Error stopping processing audio on recognition end:', e);
         }
       }
       
       // CRITICAL: Check if recognition is actually stopped before restarting
       // Sometimes onend fires but recognition is still active (especially on Android)
       // This prevents unnecessary restarts that cause beeps
-      try {
-        // Check if recognition is already running - if so, don't restart
-        // Unfortunately, Web Speech API doesn't expose a direct "isRunning" property,
-        // but we can check by trying to start it and catching the error
-        // Actually, better approach: check if we're already in the process of restarting
-        if (isRecognitionRestarting) {
-          console.log('[STT][DEBUG] Recognition restart already in progress, skipping');
-          return;
-        }
-      } catch (e) {
-        // Ignore errors in state checking
+      if (isRecognitionRestarting) {
+        return;
       }
       
       // Clear any pending restart
@@ -1655,15 +1503,11 @@ export async function setupSTTMode(
         
         // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
         // Even with continuous=true, calling start() again reactivates the mic and causes beep
-        // The other website (speech-to-text.cloud) uses backend STT, not browser API, so no beeps
-        // We can't avoid the beep completely, but we can minimize restarts
-        // Try to restart immediately on non-Android, but with delay on Android
-        const restartDelay = isAndroid ? 100 : 0; // Minimal delay - just enough to let Android settle
+        // Add delay on Android to reduce beep frequency
+        const restartDelay = isAndroid ? 100 : 0;
         
         // If recognition ended very quickly, add a small delay to prevent rapid cycling
         const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
-        
-        console.log('[STT][DEBUG] Scheduling recognition restart in', actualDelay, 'ms (Android:', isAndroid, ', timeSinceLastEnd:', timeSinceLastEnd, 'ms)');
         
         isRecognitionRestarting = true;
         recognitionRestartTimeout = setTimeout(() => {
@@ -1678,20 +1522,13 @@ export async function setupSTTMode(
           // Double-check session is still active before restarting
           if (currentSTTSession && currentSTTSession.recognition === recognition) {
             try {
-              // CRITICAL: On Android, this start() call will cause a beep
-              // This is unavoidable with Web Speech API - the other website uses backend STT
               recognition.start();
-              console.log('[STT][DEBUG] Recognition restarted (beep may occur on Android)');
             } catch (e: any) {
               // If error is "already started", that's actually good - means it's still running
-              if (e && (e.message?.includes('already') || e.message?.includes('started'))) {
-                console.log('[STT][DEBUG] Recognition already running, no restart needed');
-              } else {
-                console.log('[STT][DEBUG] Error restarting recognition:', e);
+              if (e && !(e.message?.includes('already') || e.message?.includes('started'))) {
+                console.warn('[STT] Error restarting recognition:', e);
               }
             }
-          } else {
-            console.log('[STT][DEBUG] Session changed during delay, not restarting');
           }
         }, actualDelay);
         
@@ -1699,58 +1536,22 @@ export async function setupSTTMode(
         if (currentSTTSession) {
           (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
         }
-      } else {
-        console.log('[STT][DEBUG] Not restarting - session inactive or recognition changed');
       }
     };
 
-    recognition.onaudiostart = () => {
-      console.log('[STT][DEBUG] Recognition audio start');
-    };
-
-    recognition.onaudioend = () => {
-      console.log('[STT][DEBUG] Recognition audio end');
-    };
-
-    recognition.onsoundstart = () => {
-      console.log('[STT][DEBUG] Recognition sound start');
-    };
-
-    recognition.onsoundend = () => {
-      console.log('[STT][DEBUG] Recognition sound end');
-    };
-
-    recognition.onspeechstart = () => {
-      console.log('[STT][DEBUG] Recognition speech start');
-    };
-
-    recognition.onspeechend = () => {
-      console.log('[STT][DEBUG] Recognition speech end');
-    };
-
     recognition.onnomatch = () => {
-      console.log('[STT][DEBUG] Recognition no match');
       // CRITICAL: Stop processing audio when no match (no user speech detected)
       // This prevents processing audio from playing during idle periods
       if (currentSTTSession?.processingAudio) {
         try {
           const audio = currentSTTSession.processingAudio;
           if (!audio.paused) {
-            console.log('[STT][DEBUG] No match - stopping processing audio');
             audio.pause();
             audio.currentTime = 0;
           }
         } catch (e) {
-          console.warn('[STT][DEBUG] Error stopping processing audio on no match:', e);
+          console.warn('[STT] Error stopping processing audio on no match:', e);
         }
-      }
-      
-      // CRITICAL: On Android, onnomatch fires before onend, and the beep happens
-      // when recognition restarts (microphone reactivates). We can't prevent the restart,
-      // but we can ensure there's enough delay between cycles to reduce beep frequency.
-      // The delay in onend handler should handle this, but we log here for debugging.
-      if (isAndroid) {
-        console.log('[STT][DEBUG] Android: no match detected, will restart after delay in onend');
       }
     };
 
