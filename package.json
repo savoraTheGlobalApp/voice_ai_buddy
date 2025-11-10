@@ -6,9 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "build:android": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:sync": "npx cap sync android",
+    "android:build": "npm run build:android && cd android && ./gradlew assembleDebug",
+    "android:build:release": "npm run build:android && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
+    "@capacitor/android": "^7.4.4",
+    "@capacitor/cli": "^7.4.4",
+    "@capacitor/core": "^7.4.4",
     "@openai/agents": "^0.2.1",
     "dotenv": "^17.2.3",
     "firebase": "^12.5.0",

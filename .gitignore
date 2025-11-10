@@ -17,6 +17,11 @@
 /.next/
 /out/
 
+# Capacitor
+/android/app/build/
+/android/.gradle/
+/android/local.properties
+
 # production
 /build
 

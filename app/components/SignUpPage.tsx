@@ -15,8 +15,18 @@ export default function SignUpPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [accessCode, setAccessCode] = useState('');
+  const [isMobile, setIsMobile] = useState(false);
   const { signUp } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     // Get access code from sessionStorage
@@ -117,16 +127,17 @@ export default function SignUpPage() {
       <div
         style={{
           backgroundColor: 'white',
-          padding: '40px',
+          padding: isMobile ? '24px' : '40px',
           borderRadius: '12px',
           boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
           maxWidth: '450px',
           width: '100%',
+          margin: '0 16px',
         }}
       >
         <h1
           style={{
-            fontSize: '28px',
+            fontSize: isMobile ? '24px' : '28px',
             fontWeight: 700,
             marginBottom: '8px',
             color: '#111827',
@@ -137,7 +148,7 @@ export default function SignUpPage() {
         </h1>
         <p
           style={{
-            fontSize: '16px',
+            fontSize: isMobile ? '14px' : '16px',
             color: '#6b7280',
             marginBottom: '32px',
             textAlign: 'center',

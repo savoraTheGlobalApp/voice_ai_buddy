@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Voice AI Buddy</string>
+    <string name="title_activity_main">Voice AI Buddy</string>
+    <string name="package_name">com.voiceaibuddy.app</string>
+    <string name="custom_url_scheme">com.voiceaibuddy.app</string>
+</resources>

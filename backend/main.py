@@ -42,11 +42,15 @@ load_dotenv()
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
 
-# CORS configuration - allow Next.js frontend
+# CORS configuration - allow Next.js frontend and mobile apps
 frontend_url = os.getenv("FRONTEND_URL", "")
 cors_origins = [
     "http://localhost:3000",  # Next.js dev
     "http://127.0.0.1:3000",
+    "capacitor://localhost",  # Capacitor Android
+    "ionic://localhost",  # Ionic/Capacitor
+    "http://localhost",  # Capacitor local
+    "https://localhost",  # Capacitor HTTPS local
 ]
 # Add production frontend URL if provided
 if frontend_url:
@@ -56,14 +60,14 @@ if frontend_url:
         if url:
             cors_origins.append(url)
 
-# CORS regex pattern for Vercel preview deployments
-# Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
-vercel_pattern = r"https://.*\.vercel\.app"
+# CORS regex patterns
+vercel_pattern = r"https://.*\.vercel\.app"  # Vercel preview and production URLs
+capacitor_pattern = r"(capacitor|ionic|https?)://.*"  # Capacitor mobile app URLs
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=vercel_pattern,  # Allow all Vercel preview and production URLs
+    allow_origin_regex=f"({vercel_pattern}|{capacitor_pattern})",  # Allow Vercel and Capacitor URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

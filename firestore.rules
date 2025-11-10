@@ -1,0 +1,175 @@
+// firestore.rules
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Access Codes
+    // ────────────────────────────────────────────────────────────────────────────
+    match /accessCodes/{codeId} {
+      allow read: if true;
+
+      allow update: if request.auth != null
+        // Only these fields may change
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['used', 'usedBy', 'usedAt'])
+        // Can only transition from unused -> used
+        && resource.data.used == false
+        && request.resource.data.used == true
+        // Must mark used by the caller
+        && request.resource.data.usedBy == request.auth.uid
+        // usedAt must be a valid timestamp (Firestore Timestamp type)
+        && request.resource.data.usedAt is timestamp;
+
+      allow create: if false;
+      allow delete: if false;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Users
+    // ────────────────────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && allowedUserFieldsOnCreate();
+
+      allow update: if isOwner(userId)
+        && allowedUserFieldsOnUpdate()
+        && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isOwner(userId);
+
+      // ────────────────────────────────────────────────────────────────────────
+      // Memories subcollection: users/{userId}/memories/{memoryId}
+      // ────────────────────────────────────────────────────────────────────────
+      match /memories/{memoryId} {
+        allow read: if isOwner(userId);
+
+        allow create: if isOwner(userId)
+          && isValidMemoryCreate();
+
+        allow update: if isOwner(userId)
+          && isValidMemoryUpdate()
+          && request.resource.data.createdAt == resource.data.createdAt;
+
+        allow delete: if isOwner(userId);
+      }
+
+      // ────────────────────────────────────────────────────────────────────────
+      // Conversations subcollection: users/{userId}/conversations/{sessionId}
+      // Store one document per session and append new chunks to 'messages'
+      // ────────────────────────────────────────────────────────────────────────
+      match /conversations/{sessionId} {
+        allow read: if isOwner(userId);
+
+        // Create a new conversation session doc
+        allow create: if isOwner(userId)
+          && allowedConversationCreate();
+
+        // Append to an existing session; do not allow changing identity fields
+        allow update: if isOwner(userId)
+          && allowedConversationUpdate()
+          // Immutable identity fields
+          && request.resource.data.sessionId == resource.data.sessionId
+          && request.resource.data.mode == resource.data.mode
+          && request.resource.data.startedAt == resource.data.startedAt;
+
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Helper functions
+    // ────────────────────────────────────────────────────────────────────────────
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Users doc: allowed fields and types (adjust if you add more)
+    function allowedUserFieldsOnCreate() {
+      return request.resource.data.keys().hasOnly([
+        'uid', 'name', 'age', 'email', 'accessCode', 'createdAt'
+      ])
+      && request.resource.data.uid == request.auth.uid
+      && request.resource.data.name is string
+      && request.resource.data.age is int
+      && request.resource.data.email is string
+      && request.resource.data.accessCode is string
+      && request.resource.data.createdAt is timestamp;
+    }
+
+    function allowedUserFieldsOnUpdate() {
+      return request.resource.data.keys().hasOnly([
+        'uid', 'name', 'age', 'email', 'accessCode', 'createdAt'
+      ])
+      && request.resource.data.uid == request.auth.uid
+      && request.resource.data.name is string
+      && request.resource.data.age is int
+      && request.resource.data.email is string
+      && request.resource.data.accessCode is string
+      && request.resource.data.createdAt is timestamp;
+    }
+
+    // Memories schema validation
+    function allowedMemoryKeys() {
+      return request.resource.data.keys().hasOnly([
+        'text', 'type', 'importance', 'createdAt'
+      ]);
+    }
+
+    function validMemoryCommon() {
+      return request.resource.data.text is string
+        && request.resource.data.text.matches('^.{1,160}$')
+        && request.resource.data.type in [
+          'core_identity', 'preferences', 'interests',
+          'relationships', 'achievements', 'facts'
+        ]
+        && request.resource.data.importance is int
+        && request.resource.data.importance >= 1
+        && request.resource.data.importance <= 10;
+    }
+
+    function isValidMemoryCreate() {
+      return allowedMemoryKeys()
+        && validMemoryCommon()
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    function isValidMemoryUpdate() {
+      return allowedMemoryKeys()
+        && validMemoryCommon()
+        && request.resource.data.createdAt is timestamp;
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+    // Conversations schema validation
+    // ────────────────────────────────────────────────────────────────────────────
+
+    // Create: identity + metadata + initial empty messages array
+    function allowedConversationCreate() {
+      return request.resource.data.keys().hasOnly([
+        'sessionId', 'mode', 'startedAt', 'updatedAt', 'messages'
+      ])
+      && request.resource.data.sessionId is string
+      && request.resource.data.mode in ['realtime','stt']
+      && (request.resource.data.startedAt is timestamp || request.resource.data.startedAt is int)
+      && (request.resource.data.updatedAt is timestamp || request.resource.data.updatedAt is int)
+      && request.resource.data.messages is list
+      && request.resource.data.messages.size() <= 10000;
+    }
+
+    // Update: allow appending to messages + updating updatedAt; identity fields immutable
+    function allowedConversationUpdate() {
+      return request.resource.data.keys().hasOnly([
+        'sessionId', 'mode', 'startedAt', 'updatedAt', 'messages', 'continuationId'
+      ])
+      && (request.resource.data.updatedAt is timestamp || request.resource.data.updatedAt is int)
+      && request.resource.data.messages is list
+      && request.resource.data.messages.size() <= 10000;
+    }
+
+    // Note: Per-element validation for arrays is limited in rules language.
+    // We validate that messages is a list and cap its maximum size.
+  }
+}

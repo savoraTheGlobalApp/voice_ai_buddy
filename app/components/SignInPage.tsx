@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -9,8 +9,18 @@ export default function SignInPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const { signIn } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,16 +60,17 @@ export default function SignInPage() {
       <div
         style={{
           backgroundColor: 'white',
-          padding: '40px',
+          padding: isMobile ? '24px' : '40px',
           borderRadius: '12px',
           boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
           maxWidth: '400px',
           width: '100%',
+          margin: '0 16px',
         }}
       >
         <h1
           style={{
-            fontSize: '28px',
+            fontSize: isMobile ? '24px' : '28px',
             fontWeight: 700,
             marginBottom: '8px',
             color: '#111827',
@@ -70,7 +81,7 @@ export default function SignInPage() {
         </h1>
         <p
           style={{
-            fontSize: '16px',
+            fontSize: isMobile ? '14px' : '16px',
             color: '#6b7280',
             marginBottom: '32px',
             textAlign: 'center',

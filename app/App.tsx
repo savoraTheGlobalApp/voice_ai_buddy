@@ -556,7 +556,7 @@ export async function setupRealtimeMode(
           turnDetection: { type: 'semantic_vad', createResponse: true },
         },
         output: { 
-          voice: 'nova',
+          voice: 'verse',
           // Explicitly enable transcription for assistant audio output
           transcription: {
             format: 'text',
@@ -1853,13 +1853,13 @@ export default function Page() {
                   )}
                   <div
                     style={{
-                      maxWidth: '70%',
-                      padding: '8px 12px',
+                      maxWidth: isMobile ? '85%' : '70%',
+                      padding: isMobile ? '10px 14px' : '8px 12px',
                       borderRadius: '8px',
                       backgroundColor: isUser ? '#dcf8c6' : '#ffffff',
                       boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                       wordWrap: 'break-word',
-                      fontSize: '14px',
+                      fontSize: isMobile ? '15px' : '14px',
                       lineHeight: '1.4',
                       color: '#111b21',
                     }}
@@ -1894,7 +1894,7 @@ export default function Page() {
         width: isMobile ? '100%' : 'auto',
         display: 'flex',
         flexDirection: 'column',
-        padding: '20px',
+        padding: isMobile ? '16px' : '20px',
         gap: '12px',
         backgroundColor: '#f9fafb',
         height: isMobile ? 'auto' : '100vh',
@@ -1902,8 +1902,8 @@ export default function Page() {
         overflowY: 'auto',
       }}>
       {/* Toggle for mode selection */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
-        <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
+      <div style={{ display: 'flex', gap: isMobile ? 8 : 12, alignItems: 'center', marginBottom: 8, padding: isMobile ? '10px' : '12px', backgroundColor: '#f3f4f6', borderRadius: '8px', flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+        <label style={{ fontSize: isMobile ? 12 : 14, fontWeight: 500, color: '#374151' }}>
           {useSTTMode ? '💰 Cost-Effective Mode' : '🎙️ Realtime Mode'}
         </label>
         <button
@@ -1988,18 +1988,18 @@ export default function Page() {
             }}
           />
         </button>
-        <div style={{ fontSize: 11, color: '#6b7280', maxWidth: '200px' }}>
+        <div style={{ fontSize: isMobile ? 10 : 11, color: '#6b7280', maxWidth: isMobile ? '100%' : '200px', width: isMobile ? '100%' : 'auto' }}>
           {useSTTMode 
             ? 'Using STT → GPT-4o-mini → TTS (cheaper)' 
             : 'Using Realtime API (better UX, more expensive)'}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <label style={{ fontSize: 12 }}>Mic:</label>
+      <div style={{ display: 'flex', gap: isMobile ? 4 : 8, alignItems: 'center', marginBottom: 8, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
+        <label style={{ fontSize: isMobile ? 11 : 12 }}>Mic:</label>
         <select
           value={selectedInput ?? ''}
           onChange={(e) => setSelectedInput(e.target.value)}
-          style={{ fontSize: 12 }}
+          style={{ fontSize: isMobile ? 11 : 12, flex: isMobile ? '1 1 100%' : '1', minWidth: 0 }}
           title="Select microphone input device"
           aria-label="Microphone input device"
         >
@@ -2007,11 +2007,11 @@ export default function Page() {
             <option key={d.deviceId} value={d.deviceId}>{d.label || 'Microphone'}</option>
           ))}
         </select>
-        <label style={{ fontSize: 12, marginLeft: 12 }}>Speaker:</label>
+        <label style={{ fontSize: isMobile ? 11 : 12, marginLeft: isMobile ? 0 : 12, width: isMobile ? '100%' : 'auto', marginTop: isMobile ? 4 : 0 }}>Speaker:</label>
         <select
           value={selectedOutput ?? ''}
           onChange={(e) => setSelectedOutput(e.target.value)}
-          style={{ fontSize: 12 }}
+          style={{ fontSize: isMobile ? 11 : 12, flex: isMobile ? '1 1 100%' : '1', minWidth: 0 }}
           title="Select speaker output device"
           aria-label="Speaker output device"
         >
@@ -2044,8 +2044,8 @@ export default function Page() {
         disabled={status === 'connecting...'}
         type="button"
         style={{
-          padding: '14px 32px',
-          fontSize: 16,
+          padding: isMobile ? '12px 24px' : '14px 32px',
+          fontSize: isMobile ? 14 : 16,
           fontWeight: 600,
           color: '#ffffff',
           backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
@@ -2054,7 +2054,8 @@ export default function Page() {
           cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
           boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
           transition: 'all 0.2s ease-in-out',
-          minWidth: '180px',
+          minWidth: isMobile ? '100%' : '180px',
+          width: isMobile ? '100%' : 'auto',
         }}
         onMouseEnter={(e) => {
           if (status !== 'connecting...') {
@@ -2094,8 +2095,8 @@ export default function Page() {
                 : 'Connect Realtime'}
       </button>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+        <div style={{ fontSize: isMobile ? 11 : 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
+        <div style={{ fontSize: isMobile ? 11 : 12, color: '#666', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
         </div>
       </div>
