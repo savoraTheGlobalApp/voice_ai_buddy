@@ -747,6 +747,31 @@ export async function setupSTTMode(
     // Track if processing audio is currently playing
     let isProcessingAudioPlaying = false;
     
+    // Latency tracking for benchmarking
+    interface LatencyStats {
+      count: number;
+      total: number;
+      min: number;
+      max: number;
+    }
+    
+    const latencyStats = {
+      stt: { count: 0, total: 0, min: Infinity, max: 0 } as LatencyStats,
+      ttt: { count: 0, total: 0, min: Infinity, max: 0 } as LatencyStats,
+      tts: { count: 0, total: 0, min: Infinity, max: 0 } as LatencyStats,
+      total: { count: 0, total: 0, min: Infinity, max: 0 } as LatencyStats,
+    };
+    
+    const currentRequestTimestamps: {
+      sttStart?: number;
+      tttStart?: number;
+      tttEnd?: number;
+      ttsStart?: number;
+      ttsEnd?: number;
+    } = {};
+    
+    const STATS_LOG_INTERVAL = 5; // Log aggregate stats every N requests
+    
     // Set up error handling for processing audio
     processingAudio.onerror = (e) => {
       console.error('[STT] Processing audio error:', e);
@@ -812,6 +837,10 @@ export async function setupSTTMode(
         }
       }
 
+      // Record TTT start time
+      const tttStartTime = performance.now();
+      currentRequestTimestamps.tttStart = tttStartTime;
+
       // Retry logic for network errors (max 2 retries)
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -848,6 +877,18 @@ export async function setupSTTMode(
 
           const data = await response.json();
           const assistantMessage = data.response || data.message || '';
+          
+          // Record TTT end time and calculate latency
+          const tttEndTime = performance.now();
+          currentRequestTimestamps.tttEnd = tttEndTime;
+          const tttLatency = tttEndTime - tttStartTime;
+          
+          // Update TTT stats
+          latencyStats.ttt.count++;
+          latencyStats.ttt.total += tttLatency;
+          latencyStats.ttt.min = Math.min(latencyStats.ttt.min, tttLatency);
+          latencyStats.ttt.max = Math.max(latencyStats.ttt.max, tttLatency);
+          
           conversationHistory.push({ role: 'assistant', content: assistantMessage });
           // Update UI
           if (onConversationUpdate) {
@@ -876,11 +917,18 @@ export async function setupSTTMode(
         }
       }
       // If we get here, all retries failed
+      // Clear TTT timestamps on error
+      currentRequestTimestamps.tttStart = undefined;
+      currentRequestTimestamps.tttEnd = undefined;
       throw lastError || new Error('Chat API error: All retry attempts failed');
     };
 
     // Function to convert text to speech using OpenAI TTS
     const textToSpeech = async (text: string): Promise<void> => {
+      // Record TTS start time
+      const ttsStartTime = performance.now();
+      currentRequestTimestamps.ttsStart = ttsStartTime;
+      
       // Stop processing audio completely before playing TTS (critical for Android)
       if (currentSTTSession) {
         // Stop Web Audio API processing sound first (if any)
@@ -1128,6 +1176,76 @@ export async function setupSTTMode(
           };
           
           const handlePlay = () => {
+            // Record TTS end time when audio playback starts
+            const ttsEndTime = performance.now();
+            console.log('[BENCHMARK DEBUG] handlePlay called, ttsStart:', currentRequestTimestamps.ttsStart, 'sttStart:', currentRequestTimestamps.sttStart);
+            if (currentRequestTimestamps.ttsStart) {
+              currentRequestTimestamps.ttsEnd = ttsEndTime;
+              const ttsLatency = ttsEndTime - currentRequestTimestamps.ttsStart;
+              
+              // Update TTS stats
+              latencyStats.tts.count++;
+              latencyStats.tts.total += ttsLatency;
+              latencyStats.tts.min = Math.min(latencyStats.tts.min, ttsLatency);
+              latencyStats.tts.max = Math.max(latencyStats.tts.max, ttsLatency);
+              
+              // Calculate total pipeline latency (STT result to TTS playback start)
+              if (currentRequestTimestamps.sttStart) {
+                const totalLatency = ttsEndTime - currentRequestTimestamps.sttStart;
+                
+                // Update total stats
+                latencyStats.total.count++;
+                latencyStats.total.total += totalLatency;
+                latencyStats.total.min = Math.min(latencyStats.total.min, totalLatency);
+                latencyStats.total.max = Math.max(latencyStats.total.max, totalLatency);
+                
+                // Get individual latencies for logging
+                // STT latency: time from receiving result to starting TTT
+                const sttLatency = currentRequestTimestamps.tttStart && currentRequestTimestamps.sttStart
+                  ? currentRequestTimestamps.tttStart - currentRequestTimestamps.sttStart
+                  : 0;
+                // TTT latency: time for the chat API call
+                const tttLatency = currentRequestTimestamps.tttEnd && currentRequestTimestamps.tttStart
+                  ? currentRequestTimestamps.tttEnd - currentRequestTimestamps.tttStart
+                  : 0;
+                
+                // Update STT stats (only if we have valid STT latency)
+                if (sttLatency > 0) {
+                  latencyStats.stt.count++;
+                  latencyStats.stt.total += sttLatency;
+                  latencyStats.stt.min = Math.min(latencyStats.stt.min, sttLatency);
+                  latencyStats.stt.max = Math.max(latencyStats.stt.max, sttLatency);
+                }
+                
+                // Log individual request latencies
+                console.log(`[BENCHMARK] STT: ${Math.round(sttLatency)}ms | TTT: ${Math.round(tttLatency)}ms | TTS: ${Math.round(ttsLatency)}ms | Total: ${Math.round(totalLatency)}ms`);
+                console.log('[BENCHMARK] Latency breakdown:', {
+                  stt: Math.round(sttLatency),
+                  ttt: Math.round(tttLatency),
+                  tts: Math.round(ttsLatency),
+                  total: Math.round(totalLatency)
+                });
+                
+                // Log aggregate stats periodically
+                if (latencyStats.total.count % STATS_LOG_INTERVAL === 0) {
+                  const formatStats = (stats: LatencyStats, name: string) => {
+                    const avg = stats.count > 0 ? stats.total / stats.count : 0;
+                    const min = stats.min === Infinity ? 0 : stats.min;
+                    return `${name}: avg=${Math.round(avg)}ms min=${Math.round(min)}ms max=${Math.round(stats.max)}ms (n=${stats.count})`;
+                  };
+                  
+                  console.log(`[BENCHMARK STATS] ${formatStats(latencyStats.stt, 'STT')} | ${formatStats(latencyStats.ttt, 'TTT')} | ${formatStats(latencyStats.tts, 'TTS')} | ${formatStats(latencyStats.total, 'Total')}`);
+                }
+                
+                // Clear timestamps for next request
+                currentRequestTimestamps.sttStart = undefined;
+                currentRequestTimestamps.tttStart = undefined;
+                currentRequestTimestamps.tttEnd = undefined;
+                currentRequestTimestamps.ttsStart = undefined;
+                currentRequestTimestamps.ttsEnd = undefined;
+              }
+            }
+            
             isPlaying = true;
             pauseResumeAttempts = 0; // Reset attempts on successful play
             lastPauseTime = 0; // Reset pause time
@@ -1166,7 +1284,10 @@ export async function setupSTTMode(
           
           // Add event listeners for audio playback
           audioEl.addEventListener('pause', handlePause);
-          audioEl.addEventListener('play', handlePlay);
+          audioEl.addEventListener('play', () => {
+            console.log('[BENCHMARK] handlePlay event fired');
+            handlePlay();
+          });
           audioEl.addEventListener('ended', handleEnded);
           audioEl.addEventListener('error', (e) => {
             console.error('[TTS] Audio error:', {
@@ -1233,6 +1354,9 @@ export async function setupSTTMode(
         }
       } catch (e) {
         console.error('TTS error:', e);
+        // Clear TTS timestamps on error
+        currentRequestTimestamps.ttsStart = undefined;
+        currentRequestTimestamps.ttsEnd = undefined;
         // Fallback: Use Web Speech Synthesis API
         if ('speechSynthesis' in window) {
           const utterance = new SpeechSynthesisUtterance(text);
@@ -1284,12 +1408,19 @@ export async function setupSTTMode(
     };
 
     recognition.onresult = async (event: any) => {
+      // Record STT start time (when we receive the result)
+      const sttStartTime = performance.now();
+      currentRequestTimestamps.sttStart = sttStartTime;
+      
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) {
         return;
       }
 
       console.log('[STT] User said:', transcript);
+      
+      // Note: STT latency will be calculated when TTT starts (time from result to TTT start)
+      // We'll update stats in handlePlay after we have all timestamps
 
       // Start playing processing audio to give user feedback that voice was detected
       if (currentSTTSession?.processingAudio) {
@@ -1409,6 +1540,12 @@ export async function setupSTTMode(
         await textToSpeech(response);
       } catch (e) {
         console.error('[STT/TTT/TTS] Error:', e);
+        // Clear timestamps on error to prevent stale data
+        currentRequestTimestamps.sttStart = undefined;
+        currentRequestTimestamps.tttStart = undefined;
+        currentRequestTimestamps.tttEnd = undefined;
+        currentRequestTimestamps.ttsStart = undefined;
+        currentRequestTimestamps.ttsEnd = undefined;
         // Stop processing audio on error as well
         if (currentSTTSession) {
           // Stop Web Audio API oscillator if any
