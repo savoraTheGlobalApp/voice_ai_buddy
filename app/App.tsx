@@ -141,6 +141,53 @@ let currentSTTSession: {
 // Callback to update chat UI when conversation history changes
 let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) => void) | null = null;
 
+// Cached backend configuration (fetched once on startup)
+let backendConfig: { stt_provider: string; tts_provider: string } | null = null;
+let configFetchPromise: Promise<{ stt_provider: string; tts_provider: string }> | null = null;
+
+// Function to fetch and cache backend configuration
+async function getBackendConfig(): Promise<{ stt_provider: string; tts_provider: string }> {
+  // Return cached config if available
+  if (backendConfig) {
+    return backendConfig;
+  }
+  
+  // If a fetch is already in progress, wait for it
+  if (configFetchPromise) {
+    return configFetchPromise;
+  }
+  
+  // Fetch config from backend
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  configFetchPromise = fetch(`${backendUrl}/api/config`)
+    .then(async (response) => {
+      if (!response.ok) {
+        // If config endpoint fails, fall back to default values
+        console.warn('[Config] Failed to fetch backend config, using defaults');
+        return { stt_provider: 'webspeech', tts_provider: 'gtts' };
+      }
+      const data = await response.json();
+      return {
+        stt_provider: data.stt_provider || 'webspeech',
+        tts_provider: data.tts_provider || 'gtts',
+      };
+    })
+    .catch((error) => {
+      console.error('[Config] Error fetching backend config:', error);
+      // Fall back to defaults on error
+      return { stt_provider: 'webspeech', tts_provider: 'gtts' };
+    })
+    .then((config) => {
+      // Cache the config
+      backendConfig = config;
+      configFetchPromise = null; // Clear the promise
+      console.log('[Config] Backend configuration loaded:', config);
+      return config;
+    });
+  
+  return configFetchPromise;
+}
+
 // Make memory text as crisp as possible by removing user's name and connectors
 function crispifyMemoryText(text: string, userName?: string): string {
   if (!text) return text;
@@ -660,6 +707,18 @@ export async function setupSTTMode(
         clearTimeout((currentSTTSession as any).recognitionRestartTimeout);
         (currentSTTSession as any).recognitionRestartTimeout = null;
       }
+      // Clean up WebSocket if it exists
+      if ((currentSTTSession as any)?.sttWebSocket) {
+        try {
+          const ws = (currentSTTSession as any).sttWebSocket as WebSocket;
+          if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            ws.send(JSON.stringify({ type: 'close' }));
+            ws.close();
+          }
+        } catch (e) {
+          console.warn('Error closing WebSocket:', e);
+        }
+      }
       currentSTTSession = null;
     }
   } catch (e) {
@@ -711,16 +770,41 @@ export async function setupSTTMode(
       }
     }
 
-    // Initialize Web Speech API for STT
+    // Get STT provider from backend configuration (fetched once and cached)
+    // This ensures single source of truth - backend configuration
+    const backendConfigData = await getBackendConfig();
+    const sttProvider = backendConfigData.stt_provider.toLowerCase();
+    
+    // Initialize STT based on provider
+    let recognition: any = null;
+    let mediaRecorder: MediaRecorder | null = null;
+    let audioChunks: Blob[] = [];
+    let isRecording = false;
+    let recognitionInterval: ReturnType<typeof setInterval> | null = null;
+    
+    // Check if STT provider is an OpenAI model (starts with "gpt-") or legacy format
+    const isOpenAISTT = (
+      sttProvider.startsWith('gpt-') ||
+      sttProvider === 'gpt4ominitranscribe' ||
+      sttProvider === 'gpt4otranscribe'
+    );
+    
+    if (isOpenAISTT) {
+      // Use OpenAI Realtime API for transcription - MediaRecorder will be set up after audio context is ready
+      console.log(`[STT] Using OpenAI STT: ${sttProvider}`);
+    } else {
+      // Use Web Speech API (default)
+      console.log('[STT] Using Web Speech API');
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
     }
 
-    const recognition = new SpeechRecognition();
+      recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.lang = 'en-US';
+    }
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -786,29 +870,245 @@ export async function setupSTTMode(
       }
     }
 
+    // Set up Google Cloud STT with WebSocket streaming if selected
+    let sttWebSocket: WebSocket | null = null;
+    
+    // Define setup function that will be called after handleTranscript is ready
+    // Note: This function will be defined inline later when handleTranscript is available
+    let setupGoogleCloudSTTWebSocketFn: ((mediaStream: MediaStream, audioContext: AudioContext) => WebSocket | null) | null = null;
+    
+    // Note: Google Cloud STT setup function is defined inline later (after handleTranscript is defined)
+    // to allow it to capture handleTranscript via closure
+
     currentSTTSession = {
       recognition,
-      mediaRecorder: null,
+      mediaRecorder,
       audioContext,
       conversationHistory,
       processingAudio,
       processingOscillator: null,
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
-    };
+    } as any;
+    // Store WebSocket reference for cleanup (using any to avoid TypeScript errors)
+    (currentSTTSession as any).sttWebSocket = sttWebSocket;
 
     // Get backend URL
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    
+    // Handle speech recognition results - shared variables
+    let userMsgCounter = 0;
+    const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
+    const backendUrlMem = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const maybeExtractMemories = async () => {
+      if (!uid) return;
+      try {
+        const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+        const existingTexts = existing.map(m => m.text);
+        const resp = await fetch(`${backendUrlMem}/api/memories/extract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
+        try {
+          await addMemoriesWithLimit(uid, memories);
+        } catch (saveErr) {}
+
+        // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
+        try {
+          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+            .filter(msg => msg.role !== 'system'); // Exclude system messages
+          if (newChunk.length > 0) {
+            const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+            // Update sessionId if document was split
+            if (result.wasSplit) {
+              conversationSessionId = result.sessionId;
+              console.log('[conv] STT session split, continuing in:', conversationSessionId);
+            }
+            lastSavedMessageIndex = conversationHistory.length;
+            console.log('[conv] STT session appended', newChunk.length, 'messages');
+          }
+        } catch (e) {
+          console.error('[conv] STT append failed', e);
+        }
+      } catch (e) {}
+    };
+    
+    // Note: processGoogleCloudSTT is not used in streaming mode
+    // It's kept for potential future chunk-based approach if needed
+    const processGoogleCloudSTT = async (audioBlob: Blob, sampleRate: number, mimeType: string): Promise<void> => {
+      // Not implemented - using WebSocket streaming instead
+      console.warn('[STT] processGoogleCloudSTT called but not used in streaming mode');
+    };
+    
+    // Function to handle transcript (shared between Web Speech and Google Cloud STT)
+    const handleTranscript = async (transcript: string) => {
+      if (!transcript) {
+        console.log('[STT] No transcript received------');
+        return;
+      }
+
+      console.log('[STT] User said:', transcript);
+
+      // Start playing processing audio to give user feedback that voice was detected
+      if (currentSTTSession?.processingAudio) {
+        try {
+          // Check if processing audio is already playing to prevent conflicts
+          const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
+          if (!isAlreadyPlaying) {
+            // Ensure AudioContext is resumed (helps with Android)
+            if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+              await currentSTTSession.audioContext.resume();
+            }
+            
+            // Stop any existing Web Audio API oscillator (if any)
+            if (currentSTTSession.processingOscillator) {
+              try {
+                currentSTTSession.processingOscillator.stop();
+                currentSTTSession.processingOscillator.disconnect();
+                currentSTTSession.processingOscillator = null;
+              } catch (e) {}
+            }
+            if (currentSTTSession.processingGain) {
+              try {
+                currentSTTSession.processingGain.disconnect();
+                currentSTTSession.processingGain = null;
+              } catch (e) {}
+            }
+            
+            // Ensure processing audio is ready and play it
+            const audio = currentSTTSession.processingAudio;
+            
+            // Reset and ensure audio is ready
+            audio.loop = true;
+            audio.volume = 0.4;
+            
+            // If src was cleared or empty, restore it with cache-busting
+            if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
+              const cacheBuster = Date.now();
+              audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
+              audio.load();
+              // Wait for audio to be ready
+              await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  reject(new Error('Processing audio loading timeout'));
+                }, 3000);
+                
+                const onCanPlay = () => {
+                  clearTimeout(timeout);
+                  audio.removeEventListener('canplaythrough', onCanPlay);
+                  audio.removeEventListener('error', onError);
+                  resolve();
+                };
+                
+                const onError = (e: Event) => {
+                  clearTimeout(timeout);
+                  audio.removeEventListener('canplaythrough', onCanPlay);
+                  audio.removeEventListener('error', onError);
+                  reject(new Error('Processing audio loading error'));
+                };
+                
+                if (audio.readyState >= 3) {
+                  // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
+                  clearTimeout(timeout);
+                  resolve();
+                } else {
+                  audio.addEventListener('canplaythrough', onCanPlay, { once: true });
+                  audio.addEventListener('error', onError, { once: true });
+                }
+              });
+            }
+            
+            // CRITICAL: Validate src before playing
+            if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
+              console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
+              throw new Error('Invalid processing audio source');
+            }
+            
+            // Reset to start and play
+            audio.currentTime = 0;
+            
+            // Small delay to ensure audio context is ready (helps with Android)
+            await new Promise(resolve => setTimeout(resolve, 50));
+            
+            // Final validation before play
+            if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
+              console.error('[STT] Processing audio src invalid before play:', audio.src);
+              throw new Error('Processing audio source became invalid');
+            }
+            
+            await audio.play();
+            console.log('[STT] Started processing audio (processing.mp3)');
+          } else {
+            // Already playing - just ensure settings are correct
+            const audio = currentSTTSession.processingAudio;
+            audio.loop = true;
+            audio.volume = 0.4;
+          }
+        } catch (e) {
+          console.error('[STT] Could not play processing audio:', e);
+        }
+      }
+
+      try {
+        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
+        userMsgCounter += 1;
+        
+        // Get chat response
+        const response = await getChatResponse(transcript);
+        console.log('[TTT] Assistant response:', response);
+
+        // Check if we should extract memories after user message is processed
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          maybeExtractMemories();
+        }
+
+        // Convert to speech (this will stop the processing audio)
+        await textToSpeech(response);
+      } catch (e) {
+        console.error('[STT/TTT/TTS] Error:', e);
+        // Stop processing audio on error as well
+        if (currentSTTSession) {
+          // Stop Web Audio API oscillator if any
+          if (currentSTTSession.processingOscillator) {
+            try {
+              currentSTTSession.processingOscillator.stop();
+              currentSTTSession.processingOscillator.disconnect();
+              currentSTTSession.processingOscillator = null;
+            } catch (e) {}
+          }
+          if (currentSTTSession.processingGain) {
+            try {
+              currentSTTSession.processingGain.disconnect();
+              currentSTTSession.processingGain = null;
+            } catch (e) {}
+          }
+          // Stop HTMLAudioElement
+          if (currentSTTSession.processingAudio) {
+            currentSTTSession.processingAudio.pause();
+            currentSTTSession.processingAudio.currentTime = 0;
+          }
+        }
+      }
+    };
 
     // Function to send text to chat API and get response with retry logic
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      console.log(`[TTT] Getting chat response for: '${userMessage}'`);
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
       if (userMessage) {
         conversationHistory.push({ role: 'user', content: userMessage });
+        console.log(`[TTT] Added user message to history. Total messages: ${conversationHistory.length}`);
         // Update UI (but skip the initial greeting user message for cleaner display)
         if (onConversationUpdate && !isInitialGreeting) {
+          console.log('[TTT] Updating UI with conversation history');
           onConversationUpdate([...conversationHistory]);
+        } else if (!onConversationUpdate) {
+          console.warn('[TTT] onConversationUpdate is not set!');
         }
       }
 
@@ -848,10 +1148,14 @@ export async function setupSTTMode(
 
           const data = await response.json();
           const assistantMessage = data.response || data.message || '';
+          console.log(`[TTT] ✅ Received assistant response: '${assistantMessage.substring(0, 50)}...'`);
           conversationHistory.push({ role: 'assistant', content: assistantMessage });
           // Update UI
           if (onConversationUpdate) {
+            console.log('[TTT] Updating UI with assistant response');
             onConversationUpdate([...conversationHistory]);
+          } else {
+            console.warn('[TTT] onConversationUpdate is not set!');
           }
           return assistantMessage;
         } catch (error: any) {
@@ -964,7 +1268,36 @@ export async function setupSTTMode(
           // Still proceed, but log warning
         }
         
-        const audioUrl = URL.createObjectURL(audioBlob);
+        // CRITICAL: Convert blob to data URL instead of blob URL for better reliability
+        // Data URLs are more stable and don't get revoked/garbage collected
+        const audioUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (reader.result && typeof reader.result === 'string') {
+              resolve(reader.result);
+            } else {
+              reject(new Error('Failed to convert blob to data URL'));
+            }
+          };
+          reader.onerror = () => {
+            reject(new Error('FileReader error while converting blob'));
+          };
+          reader.readAsDataURL(audioBlob);
+        });
+        
+        // Store blob and URL in session to prevent garbage collection
+        if (currentSTTSession) {
+          // Revoke previous blob URL if it exists (only if it was a blob URL)
+          if ((currentSTTSession as any).currentAudioBlobUrl && (currentSTTSession as any).currentAudioBlobUrl.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL((currentSTTSession as any).currentAudioBlobUrl);
+            } catch (e) {
+              // Ignore errors when revoking old URL
+            }
+          }
+          (currentSTTSession as any).currentAudioBlob = audioBlob;
+          (currentSTTSession as any).currentAudioBlobUrl = audioUrl;
+        }
         
         if (audioEl) {
           // Stop any currently playing audio first (critical for Android)
@@ -976,49 +1309,93 @@ export async function setupSTTMode(
             audioEl.onpause = null;
             audioEl.onended = null;
             audioEl.onerror = null;
-            // CRITICAL: Don't set src to empty string - this causes "Empty src attribute" error
-            // Instead, just pause and reset, then set new src
+            
+            // CRITICAL: Revoke previous blob URL if it exists to prevent memory leaks
+            // (data URLs don't need revocation)
+            if (audioEl.src && audioEl.src.startsWith('blob:')) {
+              try {
+                URL.revokeObjectURL(audioEl.src);
+              } catch (e) {
+                // Ignore errors when revoking old URL
+              }
+            }
           } catch (e) {
             console.warn('[TTS] Error clearing previous audio:', e);
           }
           
           // Small delay to ensure previous audio is fully stopped (Android requirement)
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise(resolve => setTimeout(resolve, 100));
           
-          // CRITICAL: Validate audioUrl before setting src
-          if (!audioUrl || audioUrl === '' || audioUrl === 'undefined') {
-            console.error('[TTS] Invalid audioUrl, cannot play:', audioUrl);
+          // CRITICAL: Verify audioUrl is valid before setting (can be blob: or data:)
+          if (!audioUrl || audioUrl === '' || (!audioUrl.startsWith('blob:') && !audioUrl.startsWith('data:'))) {
+            console.error('[TTS] Invalid audioUrl before setting src:', audioUrl);
             throw new Error('Invalid audio URL');
           }
           
+          // CRITICAL: Verify blob still exists in session (prevents GC issues)
+          if (!(currentSTTSession as any)?.currentAudioBlob || (currentSTTSession as any)?.currentAudioBlobUrl !== audioUrl) {
+            console.error('[TTS] Blob reference lost - blob may have been garbage collected');
+            throw new Error('Audio blob reference lost');
+          }
+          
           // Set up new audio source
+          // CRITICAL: Store old src before clearing to revoke it later
+          const oldSrc = audioEl.src;
+          
+          // Set new src directly - don't remove attribute first as it can cause issues with blob URLs
           audioEl.src = audioUrl;
           audioEl.preload = 'auto';
           
-          // CRITICAL: Verify src was set correctly
-          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href) {
+          // Revoke old blob URL after setting new one (if it was a blob URL)
+          // Data URLs don't need revocation
+          if (oldSrc && oldSrc.startsWith('blob:') && oldSrc !== audioUrl) {
+            try {
+              URL.revokeObjectURL(oldSrc);
+            } catch (e) {
+              // Ignore errors when revoking old URL
+            }
+          }
+          
+          // CRITICAL: Verify src was set correctly (can be blob: or data:)
+          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || (!audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('data:'))) {
             console.error('[TTS] Audio src not set correctly:', audioEl.src);
             throw new Error('Audio source not set correctly');
           }
           
+          // CRITICAL: Don't call load() explicitly with blob URLs - let browser handle it
           // Wait for audio to be ready before playing (critical for Android Chrome)
           await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
-              reject(new Error('Audio loading timeout'));
-            }, 10000); // 10 second timeout
+              // Don't reject, just log and resolve - audio might still work
+              console.warn('[TTS] Audio loading timeout - proceeding anyway');
+              resolve();
+            }, 15000); // 15 second timeout, but don't fail - just proceed
             
             const onCanPlayThrough = () => {
               clearTimeout(timeout);
               audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
               audioEl?.removeEventListener('error', onError);
+              audioEl?.removeEventListener('loadeddata', onLoadedData);
               // Small delay for Android Chrome to process audio setup
-              setTimeout(() => resolve(), 50);
+              setTimeout(() => resolve(), 100);
+            };
+            
+            const onLoadedData = () => {
+              // Also resolve on loadeddata as a fallback
+              if (audioEl && audioEl.readyState >= 2) {
+                clearTimeout(timeout);
+                audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
+                audioEl?.removeEventListener('error', onError);
+                audioEl?.removeEventListener('loadeddata', onLoadedData);
+                setTimeout(() => resolve(), 100);
+              }
             };
             
             const onError = (e: Event) => {
               clearTimeout(timeout);
               audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
               audioEl?.removeEventListener('error', onError);
+              audioEl?.removeEventListener('loadeddata', onLoadedData);
               
               // Log detailed error information
               if (audioEl) {
@@ -1030,23 +1407,29 @@ export async function setupSTTMode(
                   src: audioEl.src,
                   networkState: audioEl.networkState,
                   readyState: audioEl.readyState,
-                  blobUrl: audioUrl
+                  blobUrl: audioUrl,
+                  blobSize: (currentSTTSession as any)?.currentAudioBlob?.size
                 };
                 console.error('[TTS] Audio loading error in promise:', errorInfo);
               }
               
-              reject(new Error('Audio loading error'));
+              // Don't reject immediately - might be a temporary network error
+              // Let the timeout handle it instead
+              console.warn('[TTS] Audio error during loading, but continuing...');
             };
             
+            // Check if already ready
             if (audioEl.readyState >= 3) {
               // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
               clearTimeout(timeout);
               // Small delay for Android Chrome to process audio setup
-              setTimeout(() => resolve(), 50);
+              setTimeout(() => resolve(), 100);
             } else {
+              // Add multiple event listeners for better reliability
               audioEl.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+              audioEl.addEventListener('loadeddata', onLoadedData, { once: true });
               audioEl.addEventListener('error', onError, { once: true });
-              audioEl.load(); // Explicitly load the audio
+              // DO NOT call load() - browser will handle blob URLs automatically
             }
           });
           
@@ -1151,17 +1534,28 @@ export async function setupSTTMode(
               audioEl.removeEventListener('play', handlePlay);
               audioEl.removeEventListener('ended', handleEnded);
             }
-            // CRITICAL: Only revoke URL after a small delay to ensure audio is fully done
+            // CRITICAL: Only revoke blob URL after a longer delay (data URLs don't need revocation)
             // This prevents ERR_FILE_NOT_FOUND if browser is still processing
             setTimeout(() => {
               try {
                 if (audioUrl && audioUrl.startsWith('blob:')) {
-                  URL.revokeObjectURL(audioUrl);
+                  // Only revoke if this is still the current URL
+                  if (currentSTTSession && (currentSTTSession as any).currentAudioBlobUrl === audioUrl) {
+                    URL.revokeObjectURL(audioUrl);
+                    (currentSTTSession as any).currentAudioBlob = null;
+                    (currentSTTSession as any).currentAudioBlobUrl = null;
+                  }
+                } else if (audioUrl && audioUrl.startsWith('data:')) {
+                  // Data URLs don't need revocation, just clear the reference
+                  if (currentSTTSession && (currentSTTSession as any).currentAudioBlobUrl === audioUrl) {
+                    (currentSTTSession as any).currentAudioBlob = null;
+                    (currentSTTSession as any).currentAudioBlobUrl = null;
+                  }
                 }
               } catch (e) {
-                console.warn('[TTS] Error revoking blob URL:', e);
+                console.warn('[TTS] Error cleaning up audio URL:', e);
               }
-            }, 100); // Small delay to ensure browser is done with the blob
+            }, 1000); // Longer delay (1 second) to ensure browser is completely done with the audio
           };
           
           // Add event listeners for audio playback
@@ -1172,33 +1566,58 @@ export async function setupSTTMode(
             console.error('[TTS] Audio error:', {
               code: audioEl.error?.code,
               message: audioEl.error?.message,
-              src: audioEl.src
+              src: audioEl.src,
+              networkState: audioEl.networkState,
+              readyState: audioEl.readyState
             });
             
-            // CRITICAL: Clean up on error to prevent memory leaks
-            // Only revoke if it's a permanent error
+            // CRITICAL: Don't revoke blob URL on loading errors (code 2 = MEDIA_ERR_NETWORK)
+            // Only revoke on permanent errors (code 3 = MEDIA_ERR_DECODE, code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED)
+            // Network errors might be temporary and the blob should remain available
             if (audioEl.error) {
               const errorCode = audioEl.error.code;
               // MEDIA_ERR_SRC_NOT_SUPPORTED (4) or MEDIA_ERR_DECODE (3) are permanent
+              // MEDIA_ERR_NETWORK (2) or MEDIA_ERR_ABORTED (1) might be temporary
               if (errorCode === 4 || errorCode === 3) {
                 setTimeout(() => {
                   if (audioEl && audioEl.src === audioUrl) {
                     try {
-                      URL.revokeObjectURL(audioUrl);
+                      if (currentSTTSession && (currentSTTSession as any).currentAudioBlobUrl === audioUrl) {
+                        URL.revokeObjectURL(audioUrl);
+                        (currentSTTSession as any).currentAudioBlob = null;
+                        (currentSTTSession as any).currentAudioBlobUrl = null;
+                      }
                     } catch (e) {
                       console.warn('[TTS] Error revoking blob URL:', e);
                     }
                   }
                 }, 1000);
               }
+              // For network errors (code 2), don't revoke - the blob might still be valid
+              // The error might be due to browser processing, not the blob itself
             }
           });
           
           // CRITICAL: Final validation before playing - ensure src is valid
-          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || !audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('http')) {
+          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || (!audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('data:') && !audioEl.src.startsWith('http'))) {
             console.error('[TTS] Cannot play - invalid src:', audioEl.src);
             throw new Error('Invalid audio source - cannot play');
           }
+          
+          // CRITICAL: Verify blob/data URL is still valid before playing
+          if (audioEl.src.startsWith('blob:') || audioEl.src.startsWith('data:')) {
+            if (!(currentSTTSession as any)?.currentAudioBlob || (currentSTTSession as any)?.currentAudioBlobUrl !== audioEl.src) {
+              console.error('[TTS] Audio URL invalidated before playback - blob may have been revoked or GC\'d', {
+                src: audioEl.src,
+                storedUrl: (currentSTTSession as any)?.currentAudioBlobUrl,
+                hasBlob: !!(currentSTTSession as any)?.currentAudioBlob
+              });
+              throw new Error('Audio URL invalidated');
+            }
+          }
+          
+          // Small delay to ensure browser has processed the blob URL
+          await new Promise(resolve => setTimeout(resolve, 50));
           
           // Play the audio
           try {
@@ -1242,196 +1661,12 @@ export async function setupSTTMode(
       }
     };
 
-    // Handle speech recognition results
-    let userMsgCounter = 0;
-    const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
-    const backendUrlMem = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-    const maybeExtractMemories = async () => {
-      if (!uid) return;
-      try {
-        const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
-        const existingTexts = existing.map(m => m.text);
-        const resp = await fetch(`${backendUrlMem}/api/memories/extract`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
-        });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
-        try {
-          await addMemoriesWithLimit(uid, memories);
-        } catch (saveErr) {}
 
-        // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
-        try {
-          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
-            .filter(msg => msg.role !== 'system'); // Exclude system messages
-          if (newChunk.length > 0) {
-            const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
-            // Update sessionId if document was split
-            if (result.wasSplit) {
-              conversationSessionId = result.sessionId;
-              console.log('[conv] STT session split, continuing in:', conversationSessionId);
-            }
-            lastSavedMessageIndex = conversationHistory.length;
-            console.log('[conv] STT session appended', newChunk.length, 'messages');
-          }
-        } catch (e) {
-          console.error('[conv] STT append failed', e);
-        }
-      } catch (e) {}
-    };
-
+    // Set up Web Speech API recognition handlers (only if using webspeech)
+    if (recognition) {
     recognition.onresult = async (event: any) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
-      if (!transcript) {
-        return;
-      }
-
-      console.log('[STT] User said:', transcript);
-
-      // Start playing processing audio to give user feedback that voice was detected
-      if (currentSTTSession?.processingAudio) {
-        try {
-          // Check if processing audio is already playing to prevent conflicts
-          const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
-          if (isAlreadyPlaying) {
-            // Still ensure it's looping and at correct volume
-            const audio = currentSTTSession.processingAudio;
-            audio.loop = true;
-            audio.volume = 0.4;
-            return; // Don't try to play again if already playing
-          }
-          
-          // Ensure AudioContext is resumed (helps with Android)
-          if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-            await currentSTTSession.audioContext.resume();
-          }
-          
-          // Stop any existing Web Audio API oscillator (if any)
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) {}
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) {}
-          }
-          
-          // Ensure processing audio is ready and play it
-          const audio = currentSTTSession.processingAudio;
-          
-          // Reset and ensure audio is ready
-          audio.loop = true;
-          audio.volume = 0.4;
-          
-          // If src was cleared or empty, restore it with cache-busting
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            const cacheBuster = Date.now();
-            audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
-            audio.load();
-            // Wait for audio to be ready
-            await new Promise<void>((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                reject(new Error('Processing audio loading timeout'));
-              }, 3000);
-              
-              const onCanPlay = () => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                resolve();
-              };
-              
-              const onError = (e: Event) => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                reject(new Error('Processing audio loading error'));
-              };
-              
-              if (audio.readyState >= 3) {
-                // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
-                clearTimeout(timeout);
-                resolve();
-              } else {
-                audio.addEventListener('canplaythrough', onCanPlay, { once: true });
-                audio.addEventListener('error', onError, { once: true });
-              }
-            });
-          }
-          
-          // CRITICAL: Validate src before playing
-          if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
-            throw new Error('Invalid processing audio source');
-          }
-          
-          // Reset to start and play
-          audio.currentTime = 0;
-          
-          // Small delay to ensure audio context is ready (helps with Android)
-          await new Promise(resolve => setTimeout(resolve, 50));
-          
-          // Final validation before play
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Processing audio src invalid before play:', audio.src);
-            throw new Error('Processing audio source became invalid');
-          }
-          
-          await audio.play();
-          console.log('[STT] Started processing audio (processing.mp3)');
-        } catch (e) {
-          console.error('[STT] Could not play processing audio:', e);
-        }
-      }
-
-      try {
-        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
-        userMsgCounter += 1;
-        
-        // Get chat response
-        const response = await getChatResponse(transcript);
-        console.log('[TTT] Assistant response:', response);
-
-        // Check if we should extract memories after user message is processed
-        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          maybeExtractMemories();
-        }
-
-        // Convert to speech (this will stop the processing audio)
-        await textToSpeech(response);
-      } catch (e) {
-        console.error('[STT/TTT/TTS] Error:', e);
-        // Stop processing audio on error as well
-        if (currentSTTSession) {
-          // Stop Web Audio API oscillator if any
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) {}
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) {}
-          }
-          // Stop HTMLAudioElement
-          if (currentSTTSession.processingAudio) {
-            currentSTTSession.processingAudio.pause();
-            currentSTTSession.processingAudio.currentTime = 0;
-          }
-        }
-      }
+        await handleTranscript(transcript);
     };
 
     recognition.onerror = (event: any) => {
@@ -1555,12 +1790,23 @@ export async function setupSTTMode(
       }
     };
 
-    // Start recognition
+      // Start recognition (only for Web Speech API)
     recognition.start();
+    }
     
-    // Generate dynamic initial greeting using the AI
-    // This makes the greeting personalized and varied each time
-    try {
+    // IMPORTANT: Generate greeting AFTER WebSocket setup but don't block setup completion
+    // The greeting should run in background so setupSTTMode can complete immediately
+    // This allows the status to change to "connected" right away
+    console.log('[STT] Setup complete, starting greeting generation in background...');
+    
+    // Generate greeting asynchronously without blocking (only once per session)
+    if ((currentSTTSession as any)?.greetingPlayed) {
+      console.log('[STT] Greeting already played for this session, skipping...');
+    } else {
+      (currentSTTSession as any).greetingPlayed = true;
+      (async () => {
+        try {
+          console.log('[STT] Starting greeting generation...');
       // Send a prompt that will generate a dynamic greeting
       // The AI will use the instructions to greet with the child's name in the first message
       const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
@@ -1590,11 +1836,15 @@ export async function setupSTTMode(
       conversationHistory.pop(); // Remove the user greeting prompt
       conversationHistory.push({ role: 'assistant', content: greeting });
       
-      await textToSpeech(greeting);
-      // Update UI
+        // Update UI IMMEDIATELY with the greeting message (before TTS)
       if (onConversationUpdate) {
+          console.log('[STT] Updating UI with greeting message');
         onConversationUpdate([...conversationHistory]);
       }
+        
+        console.log('[STT] Greeting received, converting to speech...');
+        await textToSpeech(greeting);
+        console.log('[STT] Greeting played successfully');
     } catch (e) {
       console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
       // Fallback greeting if AI fails
@@ -1602,9 +1852,297 @@ export async function setupSTTMode(
         ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
         : "Hi! I'm your learning buddy! What would you like to explore today?";
       conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
-      await textToSpeech(fallbackGreeting);
+        
+        // Update UI IMMEDIATELY with fallback greeting (before TTS)
       if (onConversationUpdate) {
+          console.log('[STT] Updating UI with fallback greeting message');
         onConversationUpdate([...conversationHistory]);
+      }
+        
+        try {
+          await textToSpeech(fallbackGreeting);
+        } catch (ttsError) {
+          console.error('[STT/TTT/TTS] Error playing fallback greeting:', ttsError);
+        }
+      }
+      })(); // Immediately invoked async function - runs in background
+    }
+
+    // OpenAI STT setup - non-streaming transcription (like Web Speech API)
+    if (isOpenAISTT) {
+      try {
+        console.log(`[STT] Using OpenAI STT (${sttProvider}) - non-streaming transcription`);
+        
+        // Detect best mimeType for MediaRecorder
+        let mimeType = 'audio/webm';
+        const supportedTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/ogg',
+        ];
+        for (const type of supportedTypes) {
+          if (MediaRecorder.isTypeSupported(type)) {
+            mimeType = type;
+            break;
+          }
+        }
+        
+        // Create MediaRecorder for non-streaming transcription
+        const recorder = new MediaRecorder(mediaStream, {
+          mimeType: mimeType,
+          audioBitsPerSecond: 16000,
+        });
+        
+        let audioChunks: Blob[] = [];
+        let isRecording = false;
+        let silenceTimeout: ReturnType<typeof setTimeout> | null = null;
+        let recordingStartTime = 0;
+        let hasDetectedSpeech = false;
+        const SILENCE_DURATION = 1000; // 1 second of silence to stop recording (reduced from 2s)
+        const MIN_RECORDING_DURATION = 500; // Minimum 500ms of recording before sending
+        const SILENCE_THRESHOLD = 0.02; // Increased threshold to reduce false positives (was 0.01)
+        const SPEECH_THRESHOLD = 0.03; // Minimum level to consider as speech
+        
+        // Function to analyze audio for silence detection
+        const analyzeAudioForSilence = async () => {
+          if (!isRecording) return;
+          
+          try {
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.8; // Smooth audio analysis
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            source.connect(analyser);
+            
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            const checkSilence = () => {
+              if (!isRecording) return;
+              
+              analyser.getByteTimeDomainData(dataArray);
+              let sum = 0;
+              for (let i = 0; i < bufferLength; i++) {
+                const normalized = (dataArray[i] - 128) / 128;
+                sum += Math.abs(normalized);
+              }
+              const average = sum / bufferLength;
+              
+              // Check if we have detected speech (above threshold)
+              if (average >= SPEECH_THRESHOLD) {
+                hasDetectedSpeech = true;
+              }
+              
+              // Threshold for silence detection (increased to reduce false positives)
+              if (average < SILENCE_THRESHOLD) {
+                // Silence detected - stop recording after timeout (only if we had speech)
+                if (hasDetectedSpeech && silenceTimeout) {
+                  clearTimeout(silenceTimeout);
+                }
+                if (hasDetectedSpeech) {
+                  silenceTimeout = setTimeout(() => {
+                    if (isRecording && recorder.state === 'recording') {
+                      const recordingDuration = Date.now() - recordingStartTime;
+                      // Only stop if we've recorded for at least minimum duration
+                      if (recordingDuration >= MIN_RECORDING_DURATION) {
+                        console.log('[STT] Silence detected, stopping recording...');
+                        recorder.stop();
+                      }
+                    }
+                  }, SILENCE_DURATION);
+                }
+              } else {
+                // Sound detected - clear silence timeout
+                if (silenceTimeout) {
+                  clearTimeout(silenceTimeout);
+                  silenceTimeout = null;
+                }
+              }
+              
+              if (isRecording) {
+                requestAnimationFrame(checkSilence);
+              }
+            };
+            
+            checkSilence();
+          } catch (e) {
+            console.warn('[STT] Could not analyze audio for silence, using timeout only:', e);
+          }
+        };
+        
+        recorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+        
+        recorder.onstop = async () => {
+          isRecording = false;
+          if (silenceTimeout) {
+            clearTimeout(silenceTimeout);
+            silenceTimeout = null;
+          }
+          
+          const recordingDuration = Date.now() - recordingStartTime;
+          
+          // Check if we had actual speech and minimum duration
+          if (!hasDetectedSpeech || recordingDuration < MIN_RECORDING_DURATION) {
+            console.log(`[STT] No speech detected or recording too short (${recordingDuration}ms), ignoring...`);
+            audioChunks = [];
+            hasDetectedSpeech = false;
+            // Restart recording immediately
+            if (currentSTTSession && !currentSTTSession.recognition) {
+              setTimeout(() => {
+                audioChunks = [];
+                isRecording = true;
+                hasDetectedSpeech = false;
+                recordingStartTime = Date.now();
+                recorder.start();
+                analyzeAudioForSilence();
+              }, 200);
+            }
+            return;
+          }
+          
+          if (audioChunks.length === 0) {
+            console.log('[STT] No audio recorded, restarting...');
+            hasDetectedSpeech = false;
+            // Restart recording after a short delay
+            setTimeout(() => {
+              if (currentSTTSession && !currentSTTSession.recognition) {
+                audioChunks = [];
+                isRecording = true;
+                hasDetectedSpeech = false;
+                recordingStartTime = Date.now();
+                recorder.start();
+                analyzeAudioForSilence();
+              }
+            }, 200);
+            return;
+          }
+          
+          // Combine audio chunks into a single blob
+          const audioBlob = new Blob(audioChunks, { type: mimeType });
+          audioChunks = []; // Reset for next recording
+          hasDetectedSpeech = false; // Reset for next recording
+          
+          console.log(`[STT] Recording stopped (${recordingDuration}ms), sending ${audioBlob.size} bytes for transcription...`);
+          
+          // Play processing audio
+          if (currentSTTSession?.processingAudio) {
+            try {
+              const audio = currentSTTSession.processingAudio;
+              if (audio.paused) {
+                await audio.play();
+              }
+            } catch (e) {
+              console.warn('[STT] Could not play processing audio:', e);
+            }
+          }
+          
+          // Send audio to backend for transcription
+          try {
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'audio.webm');
+            
+            const response = await fetch(`${backendUrl}/api/stt/transcribe`, {
+              method: 'POST',
+              body: formData,
+            });
+            
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(`Transcription failed: ${errorText}`);
+            }
+            
+            const result = await response.json();
+            const transcript = result.transcript?.trim();
+            
+            // Stop processing audio
+            if (currentSTTSession?.processingAudio) {
+              try {
+                const audio = currentSTTSession.processingAudio;
+                if (!audio.paused) {
+                  audio.pause();
+                  audio.currentTime = 0;
+                }
+              } catch (e) {
+                console.warn('[STT] Could not stop processing audio:', e);
+              }
+            }
+            
+            if (transcript && transcript.length > 0) {
+              console.log(`[STT] ✅ Transcription: '${transcript}'`);
+              try {
+                await handleTranscript(transcript);
+                console.log('[STT] ✅ Transcript processed successfully');
+              } catch (e) {
+                console.error('[STT] ❌ Error processing transcript:', e);
+                // Still restart recording even if processing failed
+              }
+            } else {
+              console.log('[STT] Empty transcript, restarting recording...');
+            }
+            
+            // Restart recording after processing
+            if (currentSTTSession && !currentSTTSession.recognition) {
+              setTimeout(() => {
+                audioChunks = [];
+                isRecording = true;
+                hasDetectedSpeech = false;
+                recordingStartTime = Date.now();
+                recorder.start();
+                analyzeAudioForSilence();
+              }, 300);
+            }
+          } catch (e) {
+            console.error('[STT] Error transcribing audio:', e);
+            // Stop processing audio on error
+            if (currentSTTSession?.processingAudio) {
+              try {
+                const audio = currentSTTSession.processingAudio;
+                if (!audio.paused) {
+                  audio.pause();
+                  audio.currentTime = 0;
+                }
+              } catch (err) {
+                // Ignore
+              }
+            }
+            // Restart recording after error
+            if (currentSTTSession && !currentSTTSession.recognition) {
+              setTimeout(() => {
+                audioChunks = [];
+                isRecording = true;
+                hasDetectedSpeech = false;
+                recordingStartTime = Date.now();
+                recorder.start();
+                analyzeAudioForSilence();
+              }, 500);
+            }
+          }
+        };
+        
+        recorder.onerror = (event) => {
+          console.error('[STT] MediaRecorder error:', event);
+        };
+        
+        // Start recording
+        isRecording = true;
+        hasDetectedSpeech = false;
+        recordingStartTime = Date.now();
+        recorder.start();
+        analyzeAudioForSilence();
+        
+        // Store references for cleanup
+        mediaRecorder = recorder;
+        if (currentSTTSession) {
+          currentSTTSession.mediaRecorder = recorder;
+        }
+      } catch (e) {
+        console.error(`[STT] Error setting up OpenAI STT (${sttProvider}):`, e);
+        throw new Error(`Failed to set up OpenAI STT (${sttProvider}): ${e}`);
       }
     }
 
@@ -1950,6 +2488,14 @@ export default function Page() {
                   if (currentSTTSession.processingAudio) {
                     currentSTTSession.processingAudio.pause();
                     currentSTTSession.processingAudio.currentTime = 0;
+                  }
+                  // Clean up MediaRecorder if it exists (for OpenAI STT non-streaming)
+                  if (currentSTTSession?.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
+                    try {
+                      currentSTTSession.mediaRecorder.stop();
+                    } catch (e) {
+                      console.warn('Error stopping MediaRecorder:', e);
+                    }
                   }
                   currentSTTSession = null;
                 }

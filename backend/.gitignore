@@ -22,3 +22,7 @@ ENV/
 .DS_Store
 Thumbs.db
 
+service-account-key.json
+*.json
+!package.json
+!tsconfig.json
