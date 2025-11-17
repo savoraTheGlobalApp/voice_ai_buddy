@@ -633,6 +633,22 @@ export async function setupSTTMode(
         currentSTTSession.recognition.stop();
         currentSTTSession.recognition.abort();
       }
+      // Clean up Deepgram WebSocket if used
+      if ((currentSTTSession as any).deepgramWs) {
+        try {
+          (currentSTTSession as any).deepgramWs.close();
+        } catch (e) {
+          console.warn('[STT] Error closing Deepgram WebSocket:', e);
+        }
+      }
+      // Clean up audio processor if used
+      if ((currentSTTSession as any).audioProcessor) {
+        try {
+          (currentSTTSession as any).audioProcessor.disconnect();
+        } catch (e) {
+          console.warn('[STT] Error disconnecting audio processor:', e);
+        }
+      }
       if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
         currentSTTSession.mediaRecorder.stop();
       }
@@ -711,28 +727,199 @@ export async function setupSTTMode(
       }
     }
 
-    // Initialize Web Speech API for STT
+    // Get STT provider from backend (single source of truth)
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    let sttProvider = 'webspeech'; // Default fallback
+    try {
+      const resp = await fetch(`${backendUrl}/api/stt-provider`);
+      if (resp.ok) {
+        const data = await resp.json();
+        sttProvider = data.stt_provider || 'webspeech';
+        console.log('[STT] Provider from backend:', sttProvider);
+      } else {
+        console.warn('[STT] Failed to get STT provider from backend, using default: webspeech');
+      }
+    } catch (e) {
+      console.warn('[STT] Error fetching STT provider from backend, using default: webspeech', e);
+    }
+    
+    let recognition: any = null;
+    let deepgramWs: WebSocket | null = null;
+    let audioProcessor: AudioWorkletNode | ScriptProcessorNode | null = null;
+    let audioContext: AudioContext | null = null;
+
+    // Initialize STT based on provider
+    if (sttProvider === 'deepgramnova3') {
+      // Use Deepgram Nova-3 streaming STT
+      console.log('[STT] Using Deepgram Nova-3 for STT');
+      
+      // Create audio context for processing
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 48000, // Deepgram expects 48kHz
+      });
+      
+      // Resume AudioContext if suspended
+      if (audioContext.state === 'suspended') {
+        try {
+          await audioContext.resume();
+          console.log('[STT] AudioContext resumed');
+        } catch (e) {
+          console.warn('[STT] Could not resume AudioContext on init:', e);
+        }
+      }
+
+      // Set up audio processing FIRST, before WebSocket connection
+      // This ensures audio is ready to flow as soon as WebSocket opens
+      // Buffer size must be a power of 2 between 256 and 16384
+      const bufferSize = 2048; // ~43ms at 48kHz (power of 2, good for real-time)
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      
+      // Buffer to store audio chunks until WebSocket is ready (declare outside processor)
+      const audioBuffer: ArrayBuffer[] = [];
+      const MAX_BUFFER_SIZE = 10; // Keep only last 10 chunks
+      
+      let audioChunkCount = 0;
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Convert Float32Array to Int16Array (linear16 PCM)
+        const int16Data = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          // Clamp and convert to 16-bit integer
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        // If WebSocket is open, send immediately
+        if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+          try {
+            deepgramWs.send(int16Data.buffer);
+            audioChunkCount++;
+            // Log every 100 chunks (~3 seconds) to confirm audio is flowing
+            if (audioChunkCount % 100 === 0) {
+              console.log(`[STT] Sent ${audioChunkCount} audio chunks to Deepgram`);
+            }
+          } catch (err) {
+            console.error('[STT] Error sending audio to Deepgram:', err);
+          }
+        } else {
+          // Buffer audio chunks until WebSocket is ready (but limit buffer size)
+          if (audioBuffer.length < MAX_BUFFER_SIZE) {
+            audioBuffer.push(int16Data.buffer.slice(0)); // Clone the buffer
+          }
+        }
+      };
+      
+      source.connect(processor);
+      // Connect processor to a dummy destination to ensure it processes audio
+      // Using a GainNode with gain 0 to avoid feedback but keep processor active
+      const dummyGain = audioContext.createGain();
+      dummyGain.gain.value = 0; // Silent output
+      processor.connect(dummyGain);
+      dummyGain.connect(audioContext.destination);
+      audioProcessor = processor;
+      
+      console.log('[STT] Audio processor set up, buffer size:', bufferSize, 'samples');
+      
+      // Connect to Deepgram WebSocket via backend
+      const wsUrl = backendUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/api/stt/deepgram';
+      deepgramWs = new WebSocket(wsUrl);
+      
+      // Handle Deepgram transcripts
+      deepgramWs.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript' && data.text) {
+            const transcript = data.text.trim();
+            if (!transcript) return;
+            
+            console.log('[STT] User said:', transcript);
+            
+            // Start playing processing audio
+            if (currentSTTSession?.processingAudio) {
+              try {
+                if (!isProcessingAudioPlaying) {
+                  currentSTTSession.processingAudio.play().catch((e: any) => {
+                    console.warn('[STT] Could not play processing audio:', e);
+                  });
+                  isProcessingAudioPlaying = true;
+                }
+              } catch (e) {
+                console.warn('[STT] Error playing processing audio:', e);
+              }
+            }
+            
+            // Get AI response
+            const assistantMessage = await getChatResponse(transcript);
+            
+            // Convert to speech
+            await textToSpeech(assistantMessage);
+          }
+        } catch (e) {
+          console.error('[STT] Error processing Deepgram transcript:', e);
+        }
+      };
+      
+      deepgramWs.onerror = (error) => {
+        console.error('[STT] Deepgram WebSocket error:', error);
+      };
+      
+      deepgramWs.onclose = () => {
+        console.log('[STT] Deepgram WebSocket closed');
+      };
+      
+      // Wait for WebSocket to open and flush buffered audio
+      await new Promise<void>((resolve, reject) => {
+        if (deepgramWs) {
+          deepgramWs.onopen = () => {
+            console.log('[STT] Deepgram WebSocket connected');
+            // Flush any buffered audio chunks
+            if (audioBuffer.length > 0) {
+              console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
+              audioBuffer.forEach(chunk => {
+                try {
+                  deepgramWs!.send(chunk);
+                } catch (err) {
+                  console.warn('[STT] Error flushing buffered audio:', err);
+                }
+              });
+              audioBuffer.length = 0; // Clear buffer
+            }
+            resolve();
+          };
+          deepgramWs.onerror = (error) => {
+            console.error('[STT] Deepgram WebSocket connection error:', error);
+            reject(new Error('Failed to connect to Deepgram STT'));
+          };
+        } else {
+          reject(new Error('WebSocket not initialized'));
+        }
+      });
+      
+    } else {
+      // Use Web Speech API (default)
+      console.log('[STT] Using Web Speech API for STT');
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
     }
 
-    const recognition = new SpeechRecognition();
+      recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.lang = 'en-US';
 
-    // Create audio context for playback
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      // Create audio context for playback (Web Speech API mode)
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     
     // Resume AudioContext if suspended (required for Android Chrome)
-    // Android Chrome often starts with AudioContext in suspended state
     if (audioContext.state === 'suspended') {
       try {
         await audioContext.resume();
         console.log('[STT] AudioContext resumed');
       } catch (e) {
         console.warn('[STT] Could not resume AudioContext on init:', e);
+        }
       }
     }
 
@@ -795,12 +982,13 @@ export async function setupSTTMode(
       processingOscillator: null,
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
-    };
-
-    // Get backend URL
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      ...(deepgramWs && { deepgramWs }),
+      ...(audioProcessor && { audioProcessor }),
+      ...(sttProvider && { sttProvider }),
+    } as any;
 
     // Function to send text to chat API and get response with retry logic
+    // Note: backendUrl is already declared above for STT provider fetching
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
@@ -1151,17 +1339,20 @@ export async function setupSTTMode(
               audioEl.removeEventListener('play', handlePlay);
               audioEl.removeEventListener('ended', handleEnded);
             }
-            // CRITICAL: Only revoke URL after a small delay to ensure audio is fully done
-            // This prevents ERR_FILE_NOT_FOUND if browser is still processing
+            // CRITICAL: Only revoke URL after a longer delay to ensure audio is fully done
+            // Increased delay to prevent ERR_FILE_NOT_FOUND if browser is still processing
+            // Also check that the audio element is still using this URL before revoking
             setTimeout(() => {
               try {
-                if (audioUrl && audioUrl.startsWith('blob:')) {
+                // Only revoke if this audio element is still using this blob URL
+                // This prevents revoking a blob that's still in use by a new audio request
+                if (audioEl && audioEl.src === audioUrl && audioUrl && audioUrl.startsWith('blob:')) {
                   URL.revokeObjectURL(audioUrl);
                 }
               } catch (e) {
                 console.warn('[TTS] Error revoking blob URL:', e);
               }
-            }, 100); // Small delay to ensure browser is done with the blob
+            }, 500); // Increased delay to ensure browser is completely done with the blob
           };
           
           // Add event listeners for audio playback
@@ -1169,16 +1360,32 @@ export async function setupSTTMode(
           audioEl.addEventListener('play', handlePlay);
           audioEl.addEventListener('ended', handleEnded);
           audioEl.addEventListener('error', (e) => {
+            const errorCode = audioEl.error?.code;
+            const errorMessage = audioEl.error?.message;
+            
+            // Error code 2 (MEDIA_ERR_NETWORK) can be non-critical if audio still plays
+            // It often happens due to blob URL timing issues but doesn't prevent playback
+            if (errorCode === 2) {
+              console.warn('[TTS] Audio network error (usually non-critical):', {
+                code: errorCode,
+                message: errorMessage,
+                src: audioEl.src,
+                note: 'This may occur due to blob URL timing but audio usually still plays'
+              });
+              // Don't revoke blob URL for network errors - might still be needed
+              return;
+            }
+            
+            // Log other errors as critical
             console.error('[TTS] Audio error:', {
-              code: audioEl.error?.code,
-              message: audioEl.error?.message,
+              code: errorCode,
+              message: errorMessage,
               src: audioEl.src
             });
             
             // CRITICAL: Clean up on error to prevent memory leaks
             // Only revoke if it's a permanent error
             if (audioEl.error) {
-              const errorCode = audioEl.error.code;
               // MEDIA_ERR_SRC_NOT_SUPPORTED (4) or MEDIA_ERR_DECODE (3) are permanent
               if (errorCode === 4 || errorCode === 3) {
                 setTimeout(() => {
@@ -1283,6 +1490,8 @@ export async function setupSTTMode(
       } catch (e) {}
     };
 
+    // Only set up Web Speech API handlers if using Web Speech API
+    if (recognition) {
     recognition.onresult = async (event: any) => {
       const transcript = event.results[event.results.length - 1][0].transcript.trim();
       if (!transcript) {
@@ -1555,8 +1764,9 @@ export async function setupSTTMode(
       }
     };
 
-    // Start recognition
+      // Start recognition only for Web Speech API
     recognition.start();
+    }
     
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
