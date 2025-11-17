@@ -3,12 +3,14 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
 import re
 import httpx
+import json
+import asyncio
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -106,6 +108,16 @@ class MemoryExtractResponse(BaseModel):
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "voice-ai-buddy-backend"}
+
+
+@app.get("/api/stt-provider")
+async def get_stt_provider():
+    """
+    Get the configured STT provider.
+    This allows frontend to use the same STT provider as configured in backend.
+    """
+    stt_provider = os.getenv("STT_PROVIDER", "webspeech").lower()
+    return {"stt_provider": stt_provider}
 
 
 @app.get("/api/realtime-token", response_model=TokenResponse)
@@ -550,6 +562,85 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"TTS generation error: {str(e)}"
         )
+
+
+@app.websocket("/api/stt/deepgram")
+async def deepgram_stt_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for Deepgram Nova-3 streaming STT.
+    Proxies audio from frontend to Deepgram and returns transcripts.
+    """
+    await websocket.accept()
+    
+    dg_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not dg_api_key:
+        await websocket.close(code=1008, reason="DEEPGRAM_API_KEY not configured")
+        return
+    
+    try:
+        import websockets as ws_lib
+        
+        # Deepgram WebSocket URL
+        dg_url = (
+            f"wss://api.deepgram.com/v1/listen?"
+            f"model=nova-3&encoding=linear16&sample_rate=48000"
+            f"&punctuate=true&interim_results=false"
+        )
+        
+        # Connect to Deepgram
+        async with ws_lib.connect(
+            dg_url,
+            extra_headers={"Authorization": f"Token {dg_api_key}"}
+        ) as dg_ws:
+            print("[Deepgram STT] WebSocket connected to Deepgram")
+            
+            # Task to forward audio from client to Deepgram
+            async def forward_audio():
+                try:
+                    while True:
+                        audio_data = await websocket.receive_bytes()
+                        await dg_ws.send(audio_data)
+                except WebSocketDisconnect:
+                    print("[Deepgram STT] Client disconnected")
+                except Exception as e:
+                    print(f"[Deepgram STT] Error forwarding audio: {e}")
+            
+            # Task to forward transcripts from Deepgram to client
+            async def forward_transcripts():
+                try:
+                    async for message in dg_ws:
+                        if isinstance(message, str):
+                            data = json.loads(message)
+                            # Extract final transcript
+                            if data.get("is_final"):
+                                channel = data.get("channel", {})
+                                alternatives = channel.get("alternatives", [])
+                                if alternatives:
+                                    transcript = alternatives[0].get("transcript", "").strip()
+                                    if transcript:
+                                        await websocket.send_text(json.dumps({
+                                            "type": "transcript",
+                                            "text": transcript
+                                        }))
+                except Exception as e:
+                    print(f"[Deepgram STT] Error forwarding transcripts: {e}")
+            
+            # Run both tasks concurrently
+            try:
+                await asyncio.gather(forward_audio(), forward_transcripts())
+            except WebSocketDisconnect:
+                print("[Deepgram STT] Client disconnected")
+            except Exception as e:
+                print(f"[Deepgram STT] Error: {e}")
+                
+    except ImportError:
+        await websocket.close(
+            code=1011,
+            reason="websockets library not installed. Run: pip install websockets"
+        )
+    except Exception as e:
+        print(f"[Deepgram STT] Connection error: {e}")
+        await websocket.close(code=1011, reason=f"Server error: {str(e)}")
 
 
 if __name__ == "__main__":
