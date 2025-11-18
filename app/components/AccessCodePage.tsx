@@ -159,6 +159,8 @@ export default function AccessCodePage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
               onFocus={(e) => {
                 e.target.style.borderColor = '#3b82f6';
