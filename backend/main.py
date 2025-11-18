@@ -56,14 +56,19 @@ if frontend_url:
         if url:
             cors_origins.append(url)
 
-# CORS regex pattern for Vercel preview deployments
-# Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
+# CORS regex patterns for preview deployments
+# Vercel: Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
 vercel_pattern = r"https://.*\.vercel\.app"
+# Railway: Matches patterns like: https://*-*-*-*.up.railway.app
+railway_pattern = r"https://.*\.railway\.app"
+
+# Combine both patterns for preview deployments
+preview_pattern = f"({vercel_pattern}|{railway_pattern})"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=vercel_pattern,  # Allow all Vercel preview and production URLs
+    allow_origin_regex=preview_pattern,  # Allow all Vercel and Railway preview/production URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
