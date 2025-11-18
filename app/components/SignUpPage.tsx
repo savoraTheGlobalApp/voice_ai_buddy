@@ -180,6 +180,8 @@ export default function SignUpPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
             />
           </div>
@@ -219,6 +221,8 @@ export default function SignUpPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
             />
           </div>
@@ -256,6 +260,8 @@ export default function SignUpPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
             />
           </div>
@@ -293,6 +299,8 @@ export default function SignUpPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
             />
           </div>
@@ -330,6 +338,8 @@ export default function SignUpPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
             />
           </div>
