@@ -113,6 +113,8 @@ export default function SignInPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
               autoComplete="email"
             />
@@ -151,6 +153,8 @@ export default function SignInPage() {
                 outline: 'none',
                 transition: 'border-color 0.2s',
                 boxSizing: 'border-box',
+                color: '#111827',
+                backgroundColor: 'white',
               }}
               autoComplete="current-password"
             />

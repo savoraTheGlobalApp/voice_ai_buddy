@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
+import { verifyAdminCode } from '@/lib/admin';
 
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
@@ -1857,6 +1858,14 @@ export default function Page() {
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
   
+  // Admin verification state
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [adminCode, setAdminCode] = useState('');
+  const [adminError, setAdminError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  
   // Read toggle state from environment variable
   // "ON" = STT/TTT/TTS mode (cost-effective), "OFF" = Realtime mode (default)
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
@@ -1894,12 +1903,62 @@ export default function Page() {
 
   const handleLogout = async () => {
     try {
+      setShowMenu(false);
       await logout();
       router.push('/');
     } catch (error) {
       console.error('Error logging out:', error);
     }
   };
+
+  const handleSettingsClick = () => {
+    setShowMenu(false);
+    setShowSettingsModal(true);
+    setAdminCode('');
+    setAdminError('');
+  };
+
+  const handleAdminCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminError('');
+    setIsVerifying(true);
+
+    try {
+      const isValid = await verifyAdminCode(adminCode);
+      if (isValid) {
+        setIsAdminVerified(true);
+        setShowSettingsModal(false);
+        setAdminCode('');
+        // Store admin verification in sessionStorage (persists for session)
+        sessionStorage.setItem('adminVerified', 'true');
+      } else {
+        setAdminError('Invalid admin code. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error verifying admin code:', error);
+      setAdminError('Failed to verify admin code. Please try again.');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // Check if admin was verified in this session
+  useEffect(() => {
+    const verified = sessionStorage.getItem('adminVerified') === 'true';
+    setIsAdminVerified(verified);
+  }, []);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showMenu && !target.closest('[data-menu-container]')) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMenu]);
 
   useEffect(() => {
     // enumerate devices when permissions are available
@@ -1976,35 +2035,113 @@ export default function Page() {
             </div>
           </div>
         {userData && (
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                <div>{userData.name}</div>
-          </div>
-        <button
-          type="button"
-          onClick={handleLogout}
-          style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-            fontWeight: 500,
-                  color: 'white',
-                  backgroundColor: 'rgba(255,255,255,0.2)',
-                  border: '1px solid rgba(255,255,255,0.3)',
-                  borderRadius: '6px',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-          }}
-          onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.3)';
-          }}
-          onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)';
-          }}
-        >
-          Logout
-        </button>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
+            <div style={{ textAlign: 'right', fontSize: '12px' }}>
+              <div>{userData.name}</div>
             </div>
-          )}
+            {/* Three-dot menu button */}
+            <button
+              type="button"
+              onClick={() => setShowMenu(!showMenu)}
+              style={{
+                padding: '8px',
+                fontSize: '18px',
+                fontWeight: 500,
+                color: 'white',
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '36px',
+                height: '36px',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+              aria-label="Menu"
+              title="Menu"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="1"></circle>
+                <circle cx="12" cy="5" r="1"></circle>
+                <circle cx="12" cy="19" r="1"></circle>
+              </svg>
+            </button>
+            
+            {/* Dropdown menu */}
+            {showMenu && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '8px',
+                backgroundColor: 'white',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                minWidth: '160px',
+                zIndex: 1000,
+                overflow: 'hidden',
+              }}>
+                <button
+                  type="button"
+                  onClick={handleSettingsClick}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#374151',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f3f4f6';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  Settings
+                </button>
+                <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#ef4444',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#fef2f2';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  Logout
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
         {/* Chat Messages Container */}
@@ -2100,8 +2237,10 @@ export default function Page() {
 
       {/* Controls Section */}
       <div style={{
-        flex: isMobile ? 'none' : '0 0 400px',
-        width: isMobile ? '100%' : 'auto',
+        flex: isMobile ? 'none' : '0 0 380px',
+        width: isMobile ? '100%' : '380px',
+        minWidth: 0,
+        maxWidth: isMobile ? '100%' : '380px',
         display: 'flex',
         flexDirection: 'column',
         padding: '20px',
@@ -2110,10 +2249,13 @@ export default function Page() {
         height: isMobile ? 'auto' : '100vh',
         maxHeight: isMobile ? '50vh' : 'none',
         overflowY: 'auto',
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
       }}>
-      {/* Toggle for mode selection */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px' }}>
-        <label style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>
+      {/* Toggle for mode selection - Only visible to admins */}
+      {isAdminVerified && (
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px', flexWrap: 'wrap', minWidth: 0 }}>
+        <label style={{ fontSize: 14, fontWeight: 500, color: '#374151', flexShrink: 0 }}>
           {useSTTMode ? '💰 Cost-Effective Mode' : '🎙️ Realtime Mode'}
         </label>
         <button
@@ -2198,37 +2340,66 @@ export default function Page() {
             }}
           />
         </button>
-        <div style={{ fontSize: 11, color: '#6b7280', maxWidth: '200px' }}>
+        <div style={{ fontSize: 11, color: '#6b7280', maxWidth: '100%', flex: '1 1 100%', minWidth: 0 }}>
           {useSTTMode 
             ? 'Using STT → GPT-4o-mini → TTS (cheaper)' 
             : 'Using Realtime API (better UX, more expensive)'}
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <label style={{ fontSize: 12 }}>Mic:</label>
-        <select
-          value={selectedInput ?? ''}
-          onChange={(e) => setSelectedInput(e.target.value)}
-          style={{ fontSize: 12 }}
-          title="Select microphone input device"
-          aria-label="Microphone input device"
-        >
-          {inputs.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>{d.label || 'Microphone'}</option>
-          ))}
-        </select>
-        <label style={{ fontSize: 12, marginLeft: 12 }}>Speaker:</label>
-        <select
-          value={selectedOutput ?? ''}
-          onChange={(e) => setSelectedOutput(e.target.value)}
-          style={{ fontSize: 12 }}
-          title="Select speaker output device"
-          aria-label="Speaker output device"
-        >
-          {outputs.map((d) => (
-            <option key={d.deviceId} value={d.deviceId}>{d.label || 'Speaker'}</option>
-          ))}
-        </select>
+      )}
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
+          <select
+            value={selectedInput ?? ''}
+            onChange={(e) => setSelectedInput(e.target.value)}
+            style={{ 
+              fontSize: 12, 
+              padding: '6px 8px',
+              borderRadius: '6px',
+              border: '1px solid #d1d5db',
+              backgroundColor: 'white',
+              color: '#111827',
+              flex: 1,
+              minWidth: 0,
+              maxWidth: '100%',
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+            title="Select microphone input device"
+            aria-label="Microphone input device"
+          >
+            {inputs.map((d) => (
+              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Microphone'}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, marginLeft: isMobile ? 0 : 12, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Speaker:</label>
+          <select
+            value={selectedOutput ?? ''}
+            onChange={(e) => setSelectedOutput(e.target.value)}
+            style={{ 
+              fontSize: 12, 
+              padding: '6px 8px',
+              borderRadius: '6px',
+              border: '1px solid #d1d5db',
+              backgroundColor: 'white',
+              color: '#111827',
+              flex: 1,
+              minWidth: 0,
+              maxWidth: '100%',
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+            title="Select speaker output device"
+            aria-label="Speaker output device"
+          >
+            {outputs.map((d) => (
+              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Speaker'}</option>
+            ))}
+          </select>
+        </div>
       </div>
       <button
         ref={buttonRef}
@@ -2300,7 +2471,7 @@ export default function Page() {
             : status === 'error - see console' 
               ? '⚠ Try Again' 
               : useSTTMode 
-                ? 'Connect (STT/TTT/TTS)' 
+                ? 'Connect' 
                 : 'Connect Realtime'}
       </button>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
@@ -2309,6 +2480,181 @@ export default function Page() {
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
         </div>
       </div>
+
+      {/* Settings Modal for Admin Code */}
+      {showSettingsModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 2000,
+          padding: '20px',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowSettingsModal(false);
+            setAdminCode('');
+            setAdminError('');
+          }
+        }}
+        >
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '32px',
+            maxWidth: '400px',
+            width: '100%',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{
+              fontSize: '24px',
+              fontWeight: 700,
+              marginBottom: '8px',
+              color: '#111827',
+              textAlign: 'center',
+            }}>
+              Admin Settings
+            </h2>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              marginBottom: '24px',
+              textAlign: 'center',
+            }}>
+              Only for admins
+            </p>
+            <p style={{
+              fontSize: '13px',
+              color: '#374151',
+              marginBottom: '20px',
+              textAlign: 'center',
+              lineHeight: '1.5',
+            }}>
+              Enter your admin code to access advanced settings and configuration options.
+            </p>
+            <form onSubmit={handleAdminCodeSubmit}>
+              <div style={{ marginBottom: '20px' }}>
+                <label
+                  htmlFor="adminCode"
+                  style={{
+                    display: 'block',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    color: '#374151',
+                    marginBottom: '8px',
+                  }}
+                >
+                  Admin Code
+                </label>
+                <input
+                  id="adminCode"
+                  type="password"
+                  value={adminCode}
+                  onChange={(e) => {
+                    setAdminCode(e.target.value);
+                    setAdminError('');
+                  }}
+                  placeholder="Enter admin code"
+                  disabled={isVerifying}
+                  required
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    fontSize: '16px',
+                    border: adminError ? '2px solid #ef4444' : '2px solid #e5e7eb',
+                    borderRadius: '8px',
+                    outline: 'none',
+                    transition: 'border-color 0.2s',
+                    boxSizing: 'border-box',
+                    color: '#111827',
+                    backgroundColor: 'white',
+                  }}
+                />
+                {adminError && (
+                  <p style={{
+                    color: '#ef4444',
+                    fontSize: '12px',
+                    marginTop: '8px',
+                  }}>
+                    {adminError}
+                  </p>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  type="submit"
+                  disabled={isVerifying}
+                  style={{
+                    flex: 1,
+                    padding: '12px 24px',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: 'white',
+                    backgroundColor: isVerifying ? '#9ca3af' : '#3b82f6',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: isVerifying ? 'not-allowed' : 'pointer',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isVerifying) {
+                      e.currentTarget.style.backgroundColor = '#2563eb';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isVerifying) {
+                      e.currentTarget.style.backgroundColor = '#3b82f6';
+                    }
+                  }}
+                >
+                  {isVerifying ? 'Verifying...' : 'Verify'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSettingsModal(false);
+                    setAdminCode('');
+                    setAdminError('');
+                  }}
+                  disabled={isVerifying}
+                  style={{
+                    padding: '12px 24px',
+                    fontSize: '16px',
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: 'transparent',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    cursor: isVerifying ? 'not-allowed' : 'pointer',
+                    transition: 'background-color 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isVerifying) {
+                      e.currentTarget.style.backgroundColor = '#f9fafb';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isVerifying) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
