@@ -1901,7 +1901,7 @@ export default function Page() {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  ⚙️ Settings
+                  Settings
                 </button>
                 <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
                 <button
@@ -1926,7 +1926,7 @@ export default function Page() {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  🚪 Logout
+                  Logout
                 </button>
               </div>
             )}
