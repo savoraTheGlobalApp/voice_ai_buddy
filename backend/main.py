@@ -5,7 +5,7 @@ Future: Hardware control, ML models, parental insights
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import os
 import re
 import httpx
@@ -555,6 +555,62 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"TTS generation error: {str(e)}"
         )
+
+
+async def _stream_openai_tts(text: str, voice: str = "nova"):
+    """
+    Generator that yields chunks of audio data from OpenAI TTS API.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    async with httpx.AsyncClient() as client:
+        async with client.stream(
+            "POST",
+            "https://api.openai.com/v1/audio/speech",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "tts-1",
+                "input": text,
+                "voice": voice,
+            },
+            timeout=30.0,
+        ) as response:
+            if not response.is_success:
+                error_text = await response.aread()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate speech: {error_text.decode('utf-8')}"
+                )
+
+            async for chunk in response.aiter_bytes():
+                yield chunk
+
+
+@app.get("/api/tts/stream")
+async def text_to_speech_stream(text: str, voice: str = "nova"):
+    """
+    Streaming Text-to-Speech endpoint using OpenAI TTS.
+    This endpoint returns a chunked transfer encoding response, allowing
+    the client to play audio immediately as it is generated.
+    """
+    if not text or not text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Text cannot be empty"
+        )
+    
+    return StreamingResponse(
+        _stream_openai_tts(text, voice),
+        media_type="audio/mpeg"
+    )
 
 
 if __name__ == "__main__":

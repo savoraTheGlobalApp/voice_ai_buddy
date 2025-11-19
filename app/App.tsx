@@ -11,7 +11,7 @@ import { verifyAdminCode } from '@/lib/admin';
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
   let userInfoSection = '';
   let memoriesSection = '';
-  
+
   if (userName && userAge) {
     userInfoSection = `# USER INFORMATION
 - The child's name is ${userName} and they are ${userAge} years old.
@@ -157,13 +157,13 @@ function crispifyMemoryText(text: string, userName?: string): string {
   }
   // Simplify common connectors to key: value style
   t = t.replace(/\s+is\s+/gi, ': ')
-       .replace(/\s+has\s+/gi, ': ')
-       .replace(/\s+are\s+/gi, ': ')
-       .replace(/\s+likes\s+/gi, ': ')
-       .replace(/\s+loves\s+/gi, ': ')
-       .replace(/\s+enjoys\s+/gi, ': ')
-       .replace(/^my\s+/i, '')
-       .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
+    .replace(/\s+has\s+/gi, ': ')
+    .replace(/\s+are\s+/gi, ': ')
+    .replace(/\s+likes\s+/gi, ': ')
+    .replace(/\s+loves\s+/gi, ': ')
+    .replace(/\s+enjoys\s+/gi, ': ')
+    .replace(/^my\s+/i, '')
+    .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
   return t.trim();
 }
 
@@ -183,7 +183,7 @@ export async function setupRealtimeMode(
     if (uid) {
       memories = await fetchTopMemories(uid);
     }
-  } catch {}
+  } catch { }
   const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
   const agent = new RealtimeAgent({
@@ -208,17 +208,17 @@ export async function setupRealtimeMode(
       content: instructions,
     },
   ];
-    // Conversation session tracking
-    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let lastSavedMessageIndex = 0;
-    if (uid) {
-      try {
-        await startConversationSession(uid, conversationSessionId, 'realtime');
-        console.log('[conv] Realtime session started:', conversationSessionId);
-      } catch (e) {
-        console.error('[conv] Failed to start realtime conversation session', e);
-      }
+  // Conversation session tracking
+  let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let lastSavedMessageIndex = 0;
+  if (uid) {
+    try {
+      await startConversationSession(uid, conversationSessionId, 'realtime');
+      console.log('[conv] Realtime session started:', conversationSessionId);
+    } catch (e) {
+      console.error('[conv] Failed to start realtime conversation session', e);
     }
+  }
 
   // Automatically connects your microphone and audio output in the browser via WebRTC.
   try {
@@ -241,13 +241,13 @@ export async function setupRealtimeMode(
     // Initialize Web Speech API for STT to transcribe user speech (free, parallel to Realtime API)
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     let recognition: any = null;
-    
+
     if (SpeechRecognition) {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = false;
       recognition.lang = 'en-US';
-      
+
       // Handle user speech transcription
       let userMsgCounter = 0;
       const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
@@ -270,7 +270,7 @@ export async function setupRealtimeMode(
           const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
           try {
             await addMemoriesWithLimit(uid, memories);
-          } catch (saveErr) {}
+          } catch (saveErr) { }
 
           // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
           try {
@@ -289,35 +289,35 @@ export async function setupRealtimeMode(
           } catch (e) {
             console.error('[conv] Realtime append failed', e);
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
       recognition.onresult = (event: any) => {
         const transcript = event.results[event.results.length - 1][0].transcript.trim();
         if (!transcript) return;
-        
+
         console.log('[STT] User said:', transcript);
-        
+
         // Add to conversation history
         conversationHistory.push({ role: 'user', content: transcript });
         userMsgCounter += 1;
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
           maybeExtractMemories();
         }
-        
+
         // Update UI
         if (onConversationUpdate) {
           onConversationUpdate([...conversationHistory]);
         }
       };
-      
+
       recognition.onerror = (event: any) => {
-        if (event.error !== 'no-speech' && event.error !== 'aborted' && 
-            event.error !== 'audio-capture' && event.error !== 'not-allowed') {
+        if (event.error !== 'no-speech' && event.error !== 'aborted' &&
+          event.error !== 'audio-capture' && event.error !== 'not-allowed') {
           console.error('[STT] Recognition error:', event.error);
         }
       };
-      
+
       recognition.onend = () => {
         // Restart recognition if session is still active
         if (currentSession && currentSession.session === session) {
@@ -334,7 +334,7 @@ export async function setupRealtimeMode(
     session.transport.on('connected', () => {
       console.log('[realtime] connected');
       if (session.transport.muted) session.transport.mute(false);
-      
+
       // Start Web Speech API recognition for user transcription
       if (recognition) {
         try {
@@ -344,7 +344,7 @@ export async function setupRealtimeMode(
           console.warn('[STT] Could not start recognition:', e);
         }
       }
-      
+
       // Trigger the agent to start speaking automatically
       // The agent will respond with a greeting based on the instructions
       // Wait a moment for the session to be fully ready, then trigger
@@ -363,11 +363,11 @@ export async function setupRealtimeMode(
     });
     session.transport.on('disconnected', () => console.log('[realtime] disconnected'));
     session.transport.on('error', (e: any) => {
-      
+
       if (!e) {
         return;
       }
-      
+
       // Check if it's an empty object by stringifying
       try {
         const errorStr = JSON.stringify(e);
@@ -377,13 +377,13 @@ export async function setupRealtimeMode(
       } catch {
         // If stringify fails, continue to check properties
       }
-      
-      const hasMessage = (e?.error?.message && typeof e.error.message === 'string' && e.error.message.trim().length > 0) || 
-                         (e?.message && typeof e.message === 'string' && e.message.trim().length > 0);
-      const hasCode = (e?.code !== undefined && e?.code !== null && e?.code !== '') || 
-                      (e?.error?.code !== undefined && e?.error?.code !== null && e?.error?.code !== '');
+
+      const hasMessage = (e?.error?.message && typeof e.error.message === 'string' && e.error.message.trim().length > 0) ||
+        (e?.message && typeof e.message === 'string' && e.message.trim().length > 0);
+      const hasCode = (e?.code !== undefined && e?.code !== null && e?.code !== '') ||
+        (e?.error?.code !== undefined && e?.error?.code !== null && e?.error?.code !== '');
       const isStringError = typeof e === 'string' && e.trim().length > 0;
-      
+
       // Only log if we have a clear, meaningful error
       if (hasMessage || hasCode || isStringError) {
         console.error('[realtime] error', e);
@@ -394,22 +394,22 @@ export async function setupRealtimeMode(
     });
     // Track which messages we've already logged to avoid duplicates
     let lastLoggedHistoryLength = 0;
-    
+
     session.transport.on('turn_done', () => {
       console.log('[realtime] turn_done');
-      
+
       // Access conversation history directly from session.history
       try {
         const history = (session as any).history;
-        
+
         if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
           // Get new messages since last check
           const newMessages = history.slice(lastLoggedHistoryLength);
-          
+
           newMessages.forEach((message: any) => {
             // Extract assistant transcript from the message
             let assistantText: string | null = null;
-            
+
             // Check different possible structures
             if (message.role === 'assistant') {
               // Extract transcript from message.content array
@@ -423,34 +423,34 @@ export async function setupRealtimeMode(
                   }
                 }
               }
-              
+
               // Fallback: Check for transcript property directly on message
               if (!assistantText && message.transcript && typeof message.transcript === 'string') {
                 assistantText = message.transcript.trim();
               }
-              
+
               // Fallback: Try to get text from content if it's a string
               if (!assistantText && message.content && typeof message.content === 'string') {
                 assistantText = message.content.trim();
               }
-              
+
               // Fallback: Check for text property directly
               if (!assistantText && message.text && typeof message.text === 'string') {
                 assistantText = message.text.trim();
               }
-              
+
               // Add to conversation history and update UI if we found assistant text
               if (assistantText && assistantText.length > 2) {
                 console.log('[realtime] ASSISTANT SAID:', assistantText);
-                
+
                 // Check if we already have this message to avoid duplicates
                 const existingMessage = conversationHistory.find(
                   msg => msg.role === 'assistant' && msg.content === assistantText
                 );
-                
+
                 if (!existingMessage) {
                   conversationHistory.push({ role: 'assistant', content: assistantText });
-                  
+
                   // Update chat UI
                   if (onConversationUpdate) {
                     onConversationUpdate([...conversationHistory]);
@@ -459,7 +459,7 @@ export async function setupRealtimeMode(
               }
             }
           });
-          
+
           // Update last logged length
           lastLoggedHistoryLength = history.length;
         }
@@ -469,22 +469,22 @@ export async function setupRealtimeMode(
     });
     session.transport.on('audio_done', () => {
       console.log('[realtime] audio_done');
-      
+
       // When audio is done (assistant finished speaking), check history immediately
       // This might capture the transcript faster than waiting for turn_done
       try {
         const history = (session as any).history;
-        
+
         if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
           // Get the most recent assistant message
           const recentMessages = history.slice(lastLoggedHistoryLength);
-          
+
           let foundNewAssistantMessage = false;
-          
+
           recentMessages.forEach((message: any) => {
             if (message.role === 'assistant') {
               let assistantText: string | null = null;
-              
+
               // Extract transcript from message.content array
               // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
               if (message.content && Array.isArray(message.content)) {
@@ -496,34 +496,34 @@ export async function setupRealtimeMode(
                   }
                 }
               }
-              
+
               // Fallback: Check for transcript property directly on message
               if (!assistantText && message.transcript && typeof message.transcript === 'string') {
                 assistantText = message.transcript.trim();
               }
-              
+
               // Fallback: Try to get text from content if it's a string
               if (!assistantText && typeof message.content === 'string') {
                 assistantText = message.content.trim();
               }
-              
+
               // Fallback: Check for text property directly
               if (!assistantText && message.text && typeof message.text === 'string') {
                 assistantText = message.text.trim();
               }
-              
+
               if (assistantText && assistantText.length > 2) {
                 console.log('[realtime] ASSISTANT SAID:', assistantText);
-                
+
                 // Add to conversation history and update UI
                 const existingMessage = conversationHistory.find(
                   msg => msg.role === 'assistant' && msg.content === assistantText
                 );
-                
+
                 if (!existingMessage) {
                   conversationHistory.push({ role: 'assistant', content: assistantText });
                   foundNewAssistantMessage = true;
-                  
+
                   // Update chat UI
                   if (onConversationUpdate) {
                     onConversationUpdate([...conversationHistory]);
@@ -532,7 +532,7 @@ export async function setupRealtimeMode(
               }
             }
           });
-          
+
           // Update counter after processing all messages to prevent duplicates
           if (foundNewAssistantMessage) {
             lastLoggedHistoryLength = history.length;
@@ -545,18 +545,18 @@ export async function setupRealtimeMode(
 
 
     // Close any previous session to avoid multiple active connections
-    try { currentSession?.session.close(); } catch {}
+    try { currentSession?.session.close(); } catch { }
 
     // Connect first, then apply session config via the transport
     await session.connect({ apiKey: token });
-    
+
     // Update session config - explicitly enable transcription for output audio
     session.transport.updateSessionConfig({
       audio: {
-        input: { 
+        input: {
           turnDetection: { type: 'semantic_vad', createResponse: true },
         },
-        output: { 
+        output: {
           voice: 'nova',
           // Explicitly enable transcription for assistant audio output
           transcription: {
@@ -569,10 +569,10 @@ export async function setupRealtimeMode(
     // Also send session.update event to ensure transcription is enabled
     // This is sometimes needed in addition to updateSessionConfig
     try {
-    session.transport.sendEvent({
-      type: 'session.update',
-      session: {
-        type: 'realtime',
+      session.transport.sendEvent({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
           audio: {
             output: {
               transcription: {
@@ -580,8 +580,8 @@ export async function setupRealtimeMode(
               },
             },
           },
-      },
-    } as any);
+        },
+      } as any);
       console.log('[realtime] Transcription enabled via session.update event');
     } catch (e) {
       console.warn('[realtime] Could not send session.update event:', e);
@@ -592,7 +592,7 @@ export async function setupRealtimeMode(
       session,
       conversationHistory,
     };
-    
+
     // Store recognition reference for cleanup
     if (recognition) {
       (currentSession as any).recognition = recognition;
@@ -617,16 +617,16 @@ export async function setupSTTMode(
   // Close any existing sessions
   try {
     if (currentSession) {
-        // Stop recognition if it exists
-        if (currentSession.recognition) {
-          try {
-            currentSession.recognition.stop();
-            currentSession.recognition.abort();
-          } catch (e) {
-            // Ignore errors
-          }
+      // Stop recognition if it exists
+      if (currentSession.recognition) {
+        try {
+          currentSession.recognition.stop();
+          currentSession.recognition.abort();
+        } catch (e) {
+          // Ignore errors
         }
-        currentSession.session.close();
+      }
+      currentSession.session.close();
       currentSession = null;
     }
     if (currentSTTSession) {
@@ -645,12 +645,12 @@ export async function setupSTTMode(
         try {
           currentSTTSession.processingOscillator.stop();
           currentSTTSession.processingOscillator.disconnect();
-        } catch (e) {}
+        } catch (e) { }
       }
       if (currentSTTSession.processingGain) {
         try {
           currentSTTSession.processingGain.disconnect();
-        } catch (e) {}
+        } catch (e) { }
       }
       if (currentSTTSession.processingAudio) {
         currentSTTSession.processingAudio.pause();
@@ -674,7 +674,7 @@ export async function setupSTTMode(
       if (uid) {
         memories = await fetchTopMemories(uid);
       }
-    } catch {}
+    } catch { }
     const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
     // Conversation session tracking
@@ -688,7 +688,7 @@ export async function setupSTTMode(
         console.error('[conv] Failed to start STT conversation session', e);
       }
     }
-    
+
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
       {
@@ -725,7 +725,7 @@ export async function setupSTTMode(
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    
+
     // Resume AudioContext if suspended (required for Android Chrome)
     // Android Chrome often starts with AudioContext in suspended state
     if (audioContext.state === 'suspended') {
@@ -744,32 +744,32 @@ export async function setupSTTMode(
     processingAudio.loop = true;
     processingAudio.volume = 0.4; // Set volume for better feedback
     processingAudio.preload = 'auto'; // Preload the audio for faster playback
-    
+
     // Track if processing audio is currently playing
     let isProcessingAudioPlaying = false;
-    
+
     // Set up error handling for processing audio
     processingAudio.onerror = (e) => {
       console.error('[STT] Processing audio error:', e);
       isProcessingAudioPlaying = false;
     };
-    
+
     processingAudio.oncanplaythrough = () => {
       console.log('[STT] Processing audio ready to play');
     };
-    
+
     processingAudio.onplay = () => {
       isProcessingAudioPlaying = true;
     };
-    
+
     processingAudio.onpause = () => {
       isProcessingAudioPlaying = false;
     };
-    
+
     processingAudio.onended = () => {
       isProcessingAudioPlaying = false;
     };
-    
+
     // Preload the audio by loading it immediately
     try {
       processingAudio.load();
@@ -777,7 +777,7 @@ export async function setupSTTMode(
     } catch (e) {
       console.warn('[STT] Could not preload processing audio:', e);
     }
-    
+
     // Set output device if available
     if (typeof (processingAudio as any).setSinkId === 'function' && outputDeviceId) {
       try {
@@ -821,7 +821,7 @@ export async function setupSTTMode(
           // Create timeout controller for compatibility
           const controller = new AbortController();
           timeoutId = setTimeout(() => controller.abort(), 35000);
-          
+
           const response = await fetch(`${backendUrl}/api/chat`, {
             method: 'POST',
             headers: {
@@ -833,7 +833,7 @@ export async function setupSTTMode(
             }),
             signal: controller.signal,
           });
-          
+
           if (timeoutId) clearTimeout(timeoutId);
 
           if (!response.ok) {
@@ -860,14 +860,14 @@ export async function setupSTTMode(
           lastError = error;
           // Retry on network errors, timeout, or abort (which indicates timeout)
           const isRetryable = (
-            error.name === 'TypeError' || 
-            error.name === 'TimeoutError' || 
+            error.name === 'TypeError' ||
+            error.name === 'TimeoutError' ||
             error.name === 'AbortError' ||
             error.message?.includes('Network') ||
             error.message?.includes('fetch') ||
             (error.message && error.message.includes('Network error'))
           );
-          
+
           if (isRetryable && attempt < 2) {
             await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
             continue;
@@ -902,7 +902,7 @@ export async function setupSTTMode(
             console.warn('[TTS] Error stopping processing gain:', e);
           }
         }
-        
+
         // Stop HTMLAudioElement processing audio
         // Don't clear src - just pause and reset (prevents state issues and cache problems)
         if (currentSTTSession.processingAudio) {
@@ -916,11 +916,11 @@ export async function setupSTTMode(
             console.warn('[TTS] Error stopping processing audio:', e);
           }
         }
-        
+
         // Wait for Android to release audio focus (prevents conflicts)
         await new Promise(resolve => setTimeout(resolve, 200));
       }
-      
+
       // Resume AudioContext if suspended (required for Android Chrome)
       if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
         try {
@@ -929,44 +929,15 @@ export async function setupSTTMode(
           console.warn('[TTS] Could not resume AudioContext:', e);
         }
       }
-      
+
       try {
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-        const response = await fetch(`${backendUrl}/api/tts`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text,
-            voice: 'nova', // Using 'nova' voice to match realtime mode
-          }),
-        });
 
-        if (!response.ok) {
-          throw new Error('TTS API error');
-        }
+        // Use the streaming endpoint for lower latency
+        // We use a GET request with query parameters so we can set audioEl.src directly
+        // This allows the browser to handle streaming playback natively
+        const streamUrl = `${backendUrl}/api/tts/stream?text=${encodeURIComponent(text)}&voice=nova`;
 
-        const audioBlob = await response.blob();
-        
-        // CRITICAL: Validate blob before creating URL to prevent ERR_FILE_NOT_FOUND
-        if (!audioBlob || audioBlob.size === 0) {
-          console.error('[TTS] Invalid audio blob received:', {
-            blob: audioBlob,
-            size: audioBlob?.size,
-            type: audioBlob?.type
-          });
-          throw new Error('Invalid or empty audio blob received from server');
-        }
-        
-        // Validate blob type
-        if (!audioBlob.type || !audioBlob.type.startsWith('audio/')) {
-          console.warn('[TTS] Unexpected blob type:', audioBlob.type, '- expected audio/*');
-          // Still proceed, but log warning
-        }
-        
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
         if (audioEl) {
           // Stop any currently playing audio first (critical for Android)
           try {
@@ -977,261 +948,59 @@ export async function setupSTTMode(
             audioEl.onpause = null;
             audioEl.onended = null;
             audioEl.onerror = null;
-            // CRITICAL: Don't set src to empty string - this causes "Empty src attribute" error
-            // Instead, just pause and reset, then set new src
           } catch (e) {
             console.warn('[TTS] Error clearing previous audio:', e);
           }
-          
+
           // Small delay to ensure previous audio is fully stopped (Android requirement)
           await new Promise(resolve => setTimeout(resolve, 50));
-          
-          // CRITICAL: Validate audioUrl before setting src
-          if (!audioUrl || audioUrl === '' || audioUrl === 'undefined') {
-            console.error('[TTS] Invalid audioUrl, cannot play:', audioUrl);
-            throw new Error('Invalid audio URL');
-          }
-          
-          // Set up new audio source
-          audioEl.src = audioUrl;
+
+          // Set up new audio source directly to the stream URL
+          audioEl.src = streamUrl;
           audioEl.preload = 'auto';
-          
-          // CRITICAL: Verify src was set correctly
-          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href) {
-            console.error('[TTS] Audio src not set correctly:', audioEl.src);
-            throw new Error('Audio source not set correctly');
-          }
-          
-          // Wait for audio to be ready before playing (critical for Android Chrome)
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(new Error('Audio loading timeout'));
-            }, 10000); // 10 second timeout
-            
-            const onCanPlayThrough = () => {
-              clearTimeout(timeout);
-              audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
-              audioEl?.removeEventListener('error', onError);
-              // Small delay for Android Chrome to process audio setup
-              setTimeout(() => resolve(), 50);
-            };
-            
-            const onError = (e: Event) => {
-              clearTimeout(timeout);
-              audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
-              audioEl?.removeEventListener('error', onError);
-              
-              // Log detailed error information
-              if (audioEl) {
-                const errorInfo = {
-                  error: audioEl.error ? {
-                    code: audioEl.error.code,
-                    message: audioEl.error.message
-                  } : null,
-                  src: audioEl.src,
-                  networkState: audioEl.networkState,
-                  readyState: audioEl.readyState,
-                  blobUrl: audioUrl
-                };
-                console.error('[TTS] Audio loading error in promise:', errorInfo);
-              }
-              
-              reject(new Error('Audio loading error'));
-            };
-            
-            if (audioEl.readyState >= 3) {
-              // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
-              clearTimeout(timeout);
-              // Small delay for Android Chrome to process audio setup
-              setTimeout(() => resolve(), 50);
-            } else {
-              audioEl.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
-              audioEl.addEventListener('error', onError, { once: true });
-              audioEl.load(); // Explicitly load the audio
-            }
-          });
-          
-          // Ensure AudioContext is resumed before playing (Android Chrome requirement)
-          if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-            try {
-              await currentSTTSession.audioContext.resume();
-            } catch (e) {
-              console.warn('[TTS] Could not resume AudioContext before play:', e);
-            }
-          }
-          
-          // Set up event handlers to prevent interruptions (Android audio focus handling)
-          let isPlaying = false;
-          let pauseResumeAttempts = 0;
-          const maxResumeAttempts = 3; // Reduced attempts to prevent beep sounds
-          let pauseResumeTimeout: ReturnType<typeof setTimeout> | null = null;
-          let lastPauseTime = 0;
-          const PAUSE_DEBOUNCE_MS = 500; // Debounce pause/resume to prevent beep sounds
-          
-          const handlePause = async () => {
-            const now = Date.now();
-            
-            // CRITICAL: Don't handle pause if audio has ended - this prevents beeps after playback
-            if (!audioEl || audioEl.ended) {
-              return;
-            }
-            
-            // Debounce: ignore pauses that happen too quickly after the last one
-            if (now - lastPauseTime < PAUSE_DEBOUNCE_MS) {
-              return;
-            }
-            lastPauseTime = now;
-            
-            // Clear any pending resume attempts
-            if (pauseResumeTimeout) {
-              clearTimeout(pauseResumeTimeout);
-              pauseResumeTimeout = null;
-            }
-            
-            // Only resume if we were actually playing and it wasn't intentional
-            if (audioEl && !audioEl.ended && isPlaying && pauseResumeAttempts < maxResumeAttempts) {
-              pauseResumeAttempts++;
-              
-              // Debounced resume - wait a bit before attempting to resume
-              pauseResumeTimeout = setTimeout(async () => {
-                try {
-                  // Double-check state before resuming - audio might have ended while waiting
-                  if (!audioEl || audioEl.ended) {
-                    pauseResumeTimeout = null;
-                    return;
-                  }
-                  
-                  if (audioEl && !audioEl.ended && audioEl.paused && isPlaying) {
-                    // Ensure AudioContext is resumed
-                    if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-                      try {
-                        await currentSTTSession.audioContext.resume();
-                      } catch (e) {
-                        console.warn('[TTS] Could not resume AudioContext:', e);
-                      }
-                    }
-                    
-                    // Small delay before resuming to let Android settle
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                    
-                    if (audioEl && !audioEl.ended && audioEl.paused) {
-                      await audioEl.play();
-                      isPlaying = true;
-                      console.log('[TTS] Successfully resumed after pause');
-                    }
-                  }
-                } catch (e) {
-                  console.warn('[TTS] Could not resume after pause:', e);
-                }
-                pauseResumeTimeout = null;
-              }, PAUSE_DEBOUNCE_MS);
-            }
-          };
-          
-          const handlePlay = () => {
-            isPlaying = true;
-            pauseResumeAttempts = 0; // Reset attempts on successful play
-            lastPauseTime = 0; // Reset pause time
-            // Clear any pending resume attempts since we're playing
-            if (pauseResumeTimeout) {
-              clearTimeout(pauseResumeTimeout);
-              pauseResumeTimeout = null;
-            }
-          };
-          
-          const handleEnded = () => {
-            isPlaying = false;
-            // Clear any pending resume attempts
-            if (pauseResumeTimeout) {
-              clearTimeout(pauseResumeTimeout);
-              pauseResumeTimeout = null;
-            }
-            // Remove event listeners to prevent beeps after audio ends
-            if (audioEl) {
-              audioEl.removeEventListener('pause', handlePause);
-              audioEl.removeEventListener('play', handlePlay);
-              audioEl.removeEventListener('ended', handleEnded);
-            }
-            // CRITICAL: Only revoke URL after a small delay to ensure audio is fully done
-            // This prevents ERR_FILE_NOT_FOUND if browser is still processing
-            setTimeout(() => {
-              try {
-                if (audioUrl && audioUrl.startsWith('blob:')) {
-                  URL.revokeObjectURL(audioUrl);
-                }
-              } catch (e) {
-                console.warn('[TTS] Error revoking blob URL:', e);
-              }
-            }, 100); // Small delay to ensure browser is done with the blob
-          };
-          
-          // Add event listeners for audio playback
-          audioEl.addEventListener('pause', handlePause);
-          audioEl.addEventListener('play', handlePlay);
-          audioEl.addEventListener('ended', handleEnded);
-          audioEl.addEventListener('error', (e) => {
-            console.error('[TTS] Audio error:', {
-              code: audioEl.error?.code,
-              message: audioEl.error?.message,
-              src: audioEl.src
-            });
-            
-            // CRITICAL: Clean up on error to prevent memory leaks
-            // Only revoke if it's a permanent error
-            if (audioEl.error) {
-              const errorCode = audioEl.error.code;
-              // MEDIA_ERR_SRC_NOT_SUPPORTED (4) or MEDIA_ERR_DECODE (3) are permanent
-              if (errorCode === 4 || errorCode === 3) {
-                setTimeout(() => {
-                  if (audioEl && audioEl.src === audioUrl) {
-                    try {
-                      URL.revokeObjectURL(audioUrl);
-                    } catch (e) {
-                      console.warn('[TTS] Error revoking blob URL:', e);
-                    }
-                  }
-                }, 1000);
-              }
-            }
-          });
-          
-          // CRITICAL: Final validation before playing - ensure src is valid
-          if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || !audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('http')) {
-            console.error('[TTS] Cannot play - invalid src:', audioEl.src);
-            throw new Error('Invalid audio source - cannot play');
-          }
-          
-          // Play the audio
+
+          // Play immediately
           try {
-            isPlaying = true;
-            await audioEl.play();
-            console.log('[TTS] Audio playback started');
-          } catch (playError: any) {
-            // If play fails, try resuming AudioContext and retry
-            if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-              await currentSTTSession.audioContext.resume();
-              // Re-validate src before retry
-              if (audioEl.src && audioEl.src !== '' && audioEl.src !== window.location.href) {
-                await audioEl.play();
-                isPlaying = true;
-                console.log('[TTS] Audio playback started after AudioContext resume');
-              } else {
-                console.error('[TTS] Cannot retry play - invalid src after resume:', audioEl.src);
-                throw new Error('Invalid audio source after resume');
-              }
-            } else {
-              console.error('[TTS] Failed to play audio:', playError, {
-                src: audioEl.src,
-                readyState: audioEl.readyState,
-                networkState: audioEl.networkState,
-                error: audioEl.error
+            const playPromise = audioEl.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(e => {
+                console.warn('[TTS] Auto-play prevented:', e);
               });
-              throw playError;
             }
+          } catch (e) {
+            console.warn('[TTS] Play error:', e);
           }
-          
-          // Note: Cleanup is now handled by handleEnded event listener above
         }
+
+        // We don't need to wait for the blob anymore since we're streaming directly
+        return;
+
+        /* Legacy blob-based implementation (kept for reference but unreachable)
+        const response = await fetch(`${backendUrl}/api/tts`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            text,
+            voice: 'nova',
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('TTS API error');
+        }
+
+        const audioBlob = await response.blob();
+        
+        if (!audioBlob || audioBlob.size === 0) {
+           throw new Error('Invalid or empty audio blob received from server');
+        }
+        
+        const audioUrl = URL.createObjectURL(audioBlob);
+        */
+
+
       } catch (e) {
         console.error('TTS error:', e);
         // Fallback: Use Web Speech Synthesis API
@@ -1262,7 +1031,7 @@ export async function setupSTTMode(
         const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
         try {
           await addMemoriesWithLimit(uid, memories);
-        } catch (saveErr) {}
+        } catch (saveErr) { }
 
         // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
         try {
@@ -1281,7 +1050,7 @@ export async function setupSTTMode(
         } catch (e) {
           console.error('[conv] STT append failed', e);
         }
-      } catch (e) {}
+      } catch (e) { }
     };
 
     recognition.onresult = async (event: any) => {
@@ -1304,34 +1073,34 @@ export async function setupSTTMode(
             audio.volume = 0.4;
             return; // Don't try to play again if already playing
           }
-          
+
           // Ensure AudioContext is resumed (helps with Android)
           if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
             await currentSTTSession.audioContext.resume();
           }
-          
+
           // Stop any existing Web Audio API oscillator (if any)
           if (currentSTTSession.processingOscillator) {
             try {
               currentSTTSession.processingOscillator.stop();
               currentSTTSession.processingOscillator.disconnect();
               currentSTTSession.processingOscillator = null;
-            } catch (e) {}
+            } catch (e) { }
           }
           if (currentSTTSession.processingGain) {
             try {
               currentSTTSession.processingGain.disconnect();
               currentSTTSession.processingGain = null;
-            } catch (e) {}
+            } catch (e) { }
           }
-          
+
           // Ensure processing audio is ready and play it
           const audio = currentSTTSession.processingAudio;
-          
+
           // Reset and ensure audio is ready
           audio.loop = true;
           audio.volume = 0.4;
-          
+
           // If src was cleared or empty, restore it with cache-busting
           if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
             const cacheBuster = Date.now();
@@ -1342,21 +1111,21 @@ export async function setupSTTMode(
               const timeout = setTimeout(() => {
                 reject(new Error('Processing audio loading timeout'));
               }, 3000);
-              
+
               const onCanPlay = () => {
                 clearTimeout(timeout);
                 audio.removeEventListener('canplaythrough', onCanPlay);
                 audio.removeEventListener('error', onError);
                 resolve();
               };
-              
+
               const onError = (e: Event) => {
                 clearTimeout(timeout);
                 audio.removeEventListener('canplaythrough', onCanPlay);
                 audio.removeEventListener('error', onError);
                 reject(new Error('Processing audio loading error'));
               };
-              
+
               if (audio.readyState >= 3) {
                 // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
                 clearTimeout(timeout);
@@ -1367,25 +1136,25 @@ export async function setupSTTMode(
               }
             });
           }
-          
+
           // CRITICAL: Validate src before playing
           if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
             console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
             throw new Error('Invalid processing audio source');
           }
-          
+
           // Reset to start and play
           audio.currentTime = 0;
-          
+
           // Small delay to ensure audio context is ready (helps with Android)
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           // Final validation before play
           if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
             console.error('[STT] Processing audio src invalid before play:', audio.src);
             throw new Error('Processing audio source became invalid');
           }
-          
+
           await audio.play();
           console.log('[STT] Started processing audio (processing.mp3)');
         } catch (e) {
@@ -1396,7 +1165,7 @@ export async function setupSTTMode(
       try {
         // Increment counter BEFORE getting response (user message is added inside getChatResponse)
         userMsgCounter += 1;
-        
+
         // Get chat response
         const response = await getChatResponse(transcript);
         console.log('[TTT] Assistant response:', response);
@@ -1418,13 +1187,13 @@ export async function setupSTTMode(
               currentSTTSession.processingOscillator.stop();
               currentSTTSession.processingOscillator.disconnect();
               currentSTTSession.processingOscillator = null;
-            } catch (e) {}
+            } catch (e) { }
           }
           if (currentSTTSession.processingGain) {
             try {
               currentSTTSession.processingGain.disconnect();
               currentSTTSession.processingGain = null;
-            } catch (e) {}
+            } catch (e) { }
           }
           // Stop HTMLAudioElement
           if (currentSTTSession.processingAudio) {
@@ -1437,10 +1206,10 @@ export async function setupSTTMode(
 
     recognition.onerror = (event: any) => {
       // Only log meaningful errors - ignore common non-critical errors
-      if (event.error !== 'no-speech' && 
-          event.error !== 'aborted' && 
-          event.error !== 'audio-capture' &&
-          event.error !== 'not-allowed') {
+      if (event.error !== 'no-speech' &&
+        event.error !== 'aborted' &&
+        event.error !== 'audio-capture' &&
+        event.error !== 'not-allowed') {
         console.error('[STT] Recognition error:', event.error);
       }
       // Silently handle common expected errors
@@ -1467,7 +1236,7 @@ export async function setupSTTMode(
     let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
     let lastRecognitionEndTime = 0;
     let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
-    
+
     recognition.onend = () => {
       // CRITICAL: Ensure processing audio is stopped when recognition ends
       // This prevents it from playing during the restart cycle
@@ -1482,44 +1251,44 @@ export async function setupSTTMode(
           console.warn('[STT] Error stopping processing audio on recognition end:', e);
         }
       }
-      
+
       // CRITICAL: Check if recognition is actually stopped before restarting
       // Sometimes onend fires but recognition is still active (especially on Android)
       // This prevents unnecessary restarts that cause beeps
       if (isRecognitionRestarting) {
         return;
       }
-      
+
       // Clear any pending restart
       if (recognitionRestartTimeout) {
         clearTimeout(recognitionRestartTimeout);
         recognitionRestartTimeout = null;
       }
-      
+
       // Restart recognition if session is still active
       if (currentSTTSession && currentSTTSession.recognition === recognition) {
         const now = Date.now();
         const timeSinceLastEnd = now - lastRecognitionEndTime;
         lastRecognitionEndTime = now;
-        
+
         // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
         // Even with continuous=true, calling start() again reactivates the mic and causes beep
         // Add delay on Android to reduce beep frequency
         const restartDelay = isAndroid ? 100 : 0;
-        
+
         // If recognition ended very quickly, add a small delay to prevent rapid cycling
         const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
-        
+
         isRecognitionRestarting = true;
         recognitionRestartTimeout = setTimeout(() => {
           recognitionRestartTimeout = null;
           isRecognitionRestarting = false;
-          
+
           // Clear timeout reference from session
           if (currentSTTSession) {
             (currentSTTSession as any).recognitionRestartTimeout = null;
           }
-          
+
           // Double-check session is still active before restarting
           if (currentSTTSession && currentSTTSession.recognition === recognition) {
             try {
@@ -1532,7 +1301,7 @@ export async function setupSTTMode(
             }
           }
         }, actualDelay);
-        
+
         // Store timeout reference in session for cleanup
         if (currentSTTSession) {
           (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
@@ -1558,7 +1327,7 @@ export async function setupSTTMode(
 
     // Start recognition
     recognition.start();
-    
+
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
     try {
@@ -1566,7 +1335,7 @@ export async function setupSTTMode(
       // The AI will use the instructions to greet with the child's name in the first message
       const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
       conversationHistory.push({ role: 'user', content: greetingPrompt });
-      
+
       // Get the greeting from AI
       const response = await fetch(`${backendUrl}/api/chat`, {
         method: 'POST',
@@ -1585,12 +1354,12 @@ export async function setupSTTMode(
 
       const data = await response.json();
       const greeting = data.response || data.message || '';
-      
+
       // Remove the greeting prompt from history (it was just to trigger the greeting)
       // Keep only the system message and the assistant's greeting
       conversationHistory.pop(); // Remove the user greeting prompt
       conversationHistory.push({ role: 'assistant', content: greeting });
-      
+
       await textToSpeech(greeting);
       // Update UI
       if (onConversationUpdate) {
@@ -1599,7 +1368,7 @@ export async function setupSTTMode(
     } catch (e) {
       console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
       // Fallback greeting if AI fails
-      const fallbackGreeting = userName 
+      const fallbackGreeting = userName
         ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
         : "Hi! I'm your learning buddy! What would you like to explore today?";
       conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
@@ -1647,7 +1416,7 @@ export default function Page() {
   const [isMobile, setIsMobile] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
-  
+
   // Admin verification state
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -1655,7 +1424,7 @@ export default function Page() {
   const [adminCode, setAdminCode] = useState('');
   const [adminError, setAdminError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-  
+
   // Read toggle state from environment variable
   // "ON" = STT/TTT/TTS mode (cost-effective), "OFF" = Realtime mode (default)
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
@@ -1678,7 +1447,7 @@ export default function Page() {
       const displayMessages = conversationHistory.filter(msg => msg.role !== 'system');
       setMessages(displayMessages);
     };
-    
+
     return () => {
       onConversationUpdate = null;
     };
@@ -1755,7 +1524,7 @@ export default function Page() {
     const refresh = async () => {
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {}
+      } catch { }
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const ins = devices.filter((d) => d.kind === 'audioinput');
@@ -1774,9 +1543,9 @@ export default function Page() {
   }, []);
 
   return (
-    <main style={{ 
-      display: 'flex', 
-      minHeight: '100vh', 
+    <main style={{
+      display: 'flex',
+      minHeight: '100vh',
       padding: 0,
       flexDirection: isMobile ? 'column' : 'row',
       gap: 0,
@@ -1824,118 +1593,118 @@ export default function Page() {
               </div>
             </div>
           </div>
-        {userData && (
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
-            <div style={{ textAlign: 'right', fontSize: '12px' }}>
-              <div>{userData.name}</div>
-            </div>
-            {/* Three-dot menu button */}
-            <button
-              type="button"
-              onClick={() => setShowMenu(!showMenu)}
-              style={{
-                padding: '8px',
-                fontSize: '18px',
-                fontWeight: 500,
-                color: 'white',
-                backgroundColor: 'transparent',
-                border: 'none',
-                borderRadius: '50%',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '36px',
-                height: '36px',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              aria-label="Menu"
-              title="Menu"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="1"></circle>
-                <circle cx="12" cy="5" r="1"></circle>
-                <circle cx="12" cy="19" r="1"></circle>
-              </svg>
-            </button>
-            
-            {/* Dropdown menu */}
-            {showMenu && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '8px',
-                backgroundColor: 'white',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                minWidth: '160px',
-                zIndex: 1000,
-                overflow: 'hidden',
-              }}>
-                <button
-                  type="button"
-                  onClick={handleSettingsClick}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#374151',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f3f4f6';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  Settings
-                </button>
-                <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#ef4444',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#fef2f2';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  Logout
-                </button>
+          {userData && (
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
+              <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                <div>{userData.name}</div>
               </div>
-            )}
-          </div>
-        )}
-      </div>
+              {/* Three-dot menu button */}
+              <button
+                type="button"
+                onClick={() => setShowMenu(!showMenu)}
+                style={{
+                  padding: '8px',
+                  fontSize: '18px',
+                  fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: '50%',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '36px',
+                  height: '36px',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+                aria-label="Menu"
+                title="Menu"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="1"></circle>
+                  <circle cx="12" cy="5" r="1"></circle>
+                  <circle cx="12" cy="19" r="1"></circle>
+                </svg>
+              </button>
+
+              {/* Dropdown menu */}
+              {showMenu && (
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '8px',
+                  backgroundColor: 'white',
+                  borderRadius: '8px',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  minWidth: '160px',
+                  zIndex: 1000,
+                  overflow: 'hidden',
+                }}>
+                  <button
+                    type="button"
+                    onClick={handleSettingsClick}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#374151',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    Settings
+                  </button>
+                  <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      color: '#ef4444',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#fef2f2';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Chat Messages Container */}
-        <div 
+        <div
           ref={chatContainerRef}
           style={{
             flex: 1,
@@ -1956,8 +1725,8 @@ export default function Page() {
               fontSize: '14px',
               textAlign: 'center',
             }}>
-              {status === 'connected' 
-                ? 'Start chatting with your learning buddy!' 
+              {status === 'connected'
+                ? 'Start chatting with your learning buddy!'
                 : 'Connect to start the conversation'}
             </div>
           ) : (
@@ -2042,229 +1811,229 @@ export default function Page() {
         overflowX: 'hidden',
         boxSizing: 'border-box',
       }}>
-      {/* Toggle for mode selection - Only visible to admins */}
-      {isAdminVerified && (
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px', flexWrap: 'wrap', minWidth: 0 }}>
-        <label style={{ fontSize: 14, fontWeight: 500, color: '#374151', flexShrink: 0 }}>
-          {useSTTMode ? '💰 Cost-Effective Mode' : '🎙️ Realtime Mode'}
-        </label>
-        <button
-          type="button"
-          aria-label={useSTTMode ? "Switch to Realtime Mode" : "Switch to Cost-Effective Mode"}
-          title={useSTTMode ? "Switch to Realtime Mode" : "Switch to Cost-Effective Mode"}
-          onClick={() => {
-            if (status === 'connected') {
-              // Disconnect first if connected
-              try {
-                if (currentSession) {
-                  // Stop recognition if it exists
-                  if (currentSession.recognition) {
-                    try {
-                      currentSession.recognition.stop();
-                      currentSession.recognition.abort();
-                    } catch (e) {
-                      // Ignore errors
+        {/* Toggle for mode selection - Only visible to admins */}
+        {isAdminVerified && (
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, padding: '12px', backgroundColor: '#f3f4f6', borderRadius: '8px', flexWrap: 'wrap', minWidth: 0 }}>
+            <label style={{ fontSize: 14, fontWeight: 500, color: '#374151', flexShrink: 0 }}>
+              {useSTTMode ? '💰 Cost-Effective Mode' : '🎙️ Realtime Mode'}
+            </label>
+            <button
+              type="button"
+              aria-label={useSTTMode ? "Switch to Realtime Mode" : "Switch to Cost-Effective Mode"}
+              title={useSTTMode ? "Switch to Realtime Mode" : "Switch to Cost-Effective Mode"}
+              onClick={() => {
+                if (status === 'connected') {
+                  // Disconnect first if connected
+                  try {
+                    if (currentSession) {
+                      // Stop recognition if it exists
+                      if (currentSession.recognition) {
+                        try {
+                          currentSession.recognition.stop();
+                          currentSession.recognition.abort();
+                        } catch (e) {
+                          // Ignore errors
+                        }
+                      }
+                      currentSession.session.close();
+                      currentSession = null;
                     }
+                    if (currentSTTSession) {
+                      if (currentSTTSession.recognition) {
+                        currentSTTSession.recognition.stop();
+                        currentSTTSession.recognition.abort();
+                      }
+                      if (currentSTTSession.audioContext) {
+                        currentSTTSession.audioContext.close();
+                      }
+                      // Stop and clean up processing audio
+                      if (currentSTTSession.processingOscillator) {
+                        try {
+                          currentSTTSession.processingOscillator.stop();
+                          currentSTTSession.processingOscillator.disconnect();
+                        } catch (e) { }
+                      }
+                      if (currentSTTSession.processingGain) {
+                        try {
+                          currentSTTSession.processingGain.disconnect();
+                        } catch (e) { }
+                      }
+                      if (currentSTTSession.processingAudio) {
+                        currentSTTSession.processingAudio.pause();
+                        currentSTTSession.processingAudio.currentTime = 0;
+                      }
+                      currentSTTSession = null;
+                    }
+                  } catch (e) {
+                    console.warn('Error disconnecting:', e);
                   }
-                  currentSession.session.close();
-                  currentSession = null;
+                  setStatus('idle');
+                  setMessages([]); // Clear messages when disconnecting
                 }
-                if (currentSTTSession) {
-                  if (currentSTTSession.recognition) {
-                    currentSTTSession.recognition.stop();
-                    currentSTTSession.recognition.abort();
-                  }
-                  if (currentSTTSession.audioContext) {
-                    currentSTTSession.audioContext.close();
-                  }
-                  // Stop and clean up processing audio
-                  if (currentSTTSession.processingOscillator) {
-                    try {
-                      currentSTTSession.processingOscillator.stop();
-                      currentSTTSession.processingOscillator.disconnect();
-                    } catch (e) {}
-                  }
-                  if (currentSTTSession.processingGain) {
-                    try {
-                      currentSTTSession.processingGain.disconnect();
-                    } catch (e) {}
-                  }
-                  if (currentSTTSession.processingAudio) {
-                    currentSTTSession.processingAudio.pause();
-                    currentSTTSession.processingAudio.currentTime = 0;
-                  }
-                  currentSTTSession = null;
-                }
-              } catch (e) {
-                console.warn('Error disconnecting:', e);
-              }
-              setStatus('idle');
-              setMessages([]); // Clear messages when disconnecting
-            }
-            setUseSTTMode(!useSTTMode);
+                setUseSTTMode(!useSTTMode);
+              }}
+              disabled={status === 'connecting...'}
+              style={{
+                position: 'relative',
+                width: '52px',
+                height: '28px',
+                borderRadius: '14px',
+                backgroundColor: useSTTMode ? '#10b981' : '#6b7280',
+                border: 'none',
+                cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
+                transition: 'background-color 0.3s',
+                outline: 'none',
+              }}
+            >
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '2px',
+                  left: useSTTMode ? '26px' : '2px',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '50%',
+                  backgroundColor: '#ffffff',
+                  transition: 'left 0.3s',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                }}
+              />
+            </button>
+            <div style={{ fontSize: 11, color: '#6b7280', maxWidth: '100%', flex: '1 1 100%', minWidth: 0 }}>
+              {useSTTMode
+                ? 'Using STT → GPT-4o-mini → TTS (cheaper)'
+                : 'Using Realtime API (better UX, more expensive)'}
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+            <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
+            <select
+              value={selectedInput ?? ''}
+              onChange={(e) => setSelectedInput(e.target.value)}
+              style={{
+                fontSize: 12,
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid #d1d5db',
+                backgroundColor: 'white',
+                color: '#111827',
+                flex: 1,
+                minWidth: 0,
+                maxWidth: '100%',
+                width: '100%',
+                boxSizing: 'border-box',
+              }}
+              title="Select microphone input device"
+              aria-label="Microphone input device"
+            >
+              {inputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Microphone'}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, marginLeft: isMobile ? 0 : 12, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+            <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Speaker:</label>
+            <select
+              value={selectedOutput ?? ''}
+              onChange={(e) => setSelectedOutput(e.target.value)}
+              style={{
+                fontSize: 12,
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid #d1d5db',
+                backgroundColor: 'white',
+                color: '#111827',
+                flex: 1,
+                minWidth: 0,
+                maxWidth: '100%',
+                width: '100%',
+                boxSizing: 'border-box',
+              }}
+              title="Select speaker output device"
+              aria-label="Speaker output device"
+            >
+              {outputs.map((d) => (
+                <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Speaker'}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <button
+          ref={buttonRef}
+          onClick={() => {
+            if (status === 'connecting...') return;
+            setStatus('connecting...');
+            setupCounter(
+              buttonRef.current as HTMLButtonElement,
+              audioRef.current,
+              selectedInput,
+              selectedOutput,
+              useSTTMode,
+              userData?.name,
+              userData?.age,
+              currentUser?.uid || userData?.uid,
+            )
+              .then(() => setStatus('connected'))
+              .catch((e) => {
+                console.error(e);
+                setStatus('error - see console');
+              });
           }}
           disabled={status === 'connecting...'}
+          type="button"
           style={{
-            position: 'relative',
-            width: '52px',
-            height: '28px',
-            borderRadius: '14px',
-            backgroundColor: useSTTMode ? '#10b981' : '#6b7280',
+            padding: '14px 32px',
+            fontSize: 16,
+            fontWeight: 600,
+            color: '#ffffff',
+            backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
             border: 'none',
+            borderRadius: '8px',
             cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
-            transition: 'background-color 0.3s',
-            outline: 'none',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+            transition: 'all 0.2s ease-in-out',
+            minWidth: '180px',
+          }}
+          onMouseEnter={(e) => {
+            if (status !== 'connecting...') {
+              e.currentTarget.style.backgroundColor = status === 'connected' ? '#059669' : status === 'error - see console' ? '#dc2626' : '#2563eb';
+              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (status !== 'connecting...') {
+              e.currentTarget.style.backgroundColor = status === 'connected' ? '#10b981' : status === 'error - see console' ? '#ef4444' : '#3b82f6';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }
+          }}
+          onMouseDown={(e) => {
+            if (status !== 'connecting...') {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
+            }
+          }}
+          onMouseUp={(e) => {
+            if (status !== 'connecting...') {
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+            }
           }}
         >
-          <div
-            style={{
-              position: 'absolute',
-              top: '2px',
-              left: useSTTMode ? '26px' : '2px',
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              backgroundColor: '#ffffff',
-              transition: 'left 0.3s',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-            }}
-          />
+          {status === 'connecting...'
+            ? 'Connecting...'
+            : status === 'connected'
+              ? '✓ Connected'
+              : status === 'error - see console'
+                ? '⚠ Try Again'
+                : useSTTMode
+                  ? 'Connect'
+                  : 'Connect Realtime'}
         </button>
-        <div style={{ fontSize: 11, color: '#6b7280', maxWidth: '100%', flex: '1 1 100%', minWidth: 0 }}>
-          {useSTTMode 
-            ? 'Using STT → GPT-4o-mini → TTS (cheaper)' 
-            : 'Using Realtime API (better UX, more expensive)'}
-        </div>
-      </div>
-      )}
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
-          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
-          <select
-            value={selectedInput ?? ''}
-            onChange={(e) => setSelectedInput(e.target.value)}
-            style={{ 
-              fontSize: 12, 
-              padding: '6px 8px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: 'white',
-              color: '#111827',
-              flex: 1,
-              minWidth: 0,
-              maxWidth: '100%',
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-            title="Select microphone input device"
-            aria-label="Microphone input device"
-          >
-            {inputs.map((d) => (
-              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Microphone'}</option>
-            ))}
-          </select>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, marginLeft: isMobile ? 0 : 12, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
-          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Speaker:</label>
-          <select
-            value={selectedOutput ?? ''}
-            onChange={(e) => setSelectedOutput(e.target.value)}
-            style={{ 
-              fontSize: 12, 
-              padding: '6px 8px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: 'white',
-              color: '#111827',
-              flex: 1,
-              minWidth: 0,
-              maxWidth: '100%',
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-            title="Select speaker output device"
-            aria-label="Speaker output device"
-          >
-            {outputs.map((d) => (
-              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Speaker'}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <button
-        ref={buttonRef}
-        onClick={() => {
-          if (status === 'connecting...') return;
-          setStatus('connecting...');
-          setupCounter(
-            buttonRef.current as HTMLButtonElement,
-            audioRef.current,
-            selectedInput,
-            selectedOutput,
-            useSTTMode,
-            userData?.name,
-            userData?.age,
-            currentUser?.uid || userData?.uid,
-          )
-            .then(() => setStatus('connected'))
-            .catch((e) => {
-              console.error(e);
-              setStatus('error - see console');
-            });
-        }}
-        disabled={status === 'connecting...'}
-        type="button"
-        style={{
-          padding: '14px 32px',
-          fontSize: 16,
-          fontWeight: 600,
-          color: '#ffffff',
-          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-          transition: 'all 0.2s ease-in-out',
-          minWidth: '180px',
-        }}
-        onMouseEnter={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.backgroundColor = status === 'connected' ? '#059669' : status === 'error - see console' ? '#dc2626' : '#2563eb';
-            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-            e.currentTarget.style.transform = 'translateY(-1px)';
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.backgroundColor = status === 'connected' ? '#10b981' : status === 'error - see console' ? '#ef4444' : '#3b82f6';
-            e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
-            e.currentTarget.style.transform = 'translateY(0)';
-          }
-        }}
-        onMouseDown={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
-          }
-        }}
-        onMouseUp={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.transform = 'translateY(-1px)';
-            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-          }
-        }}
-      >
-        {status === 'connecting...' 
-          ? 'Connecting...' 
-          : status === 'connected' 
-            ? '✓ Connected' 
-            : status === 'error - see console' 
-              ? '⚠ Try Again' 
-              : useSTTMode 
-                ? 'Connect' 
-                : 'Connect Realtime'}
-      </button>
-      <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
@@ -2286,13 +2055,13 @@ export default function Page() {
           zIndex: 2000,
           padding: '20px',
         }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) {
-            setShowSettingsModal(false);
-            setAdminCode('');
-            setAdminError('');
-          }
-        }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowSettingsModal(false);
+              setAdminCode('');
+              setAdminError('');
+            }
+          }}
         >
           <div style={{
             backgroundColor: 'white',
@@ -2302,7 +2071,7 @@ export default function Page() {
             width: '100%',
             boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
           }}
-          onClick={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{
               fontSize: '24px',
