@@ -1432,6 +1432,12 @@ export async function setupSTTMode(
             const errorCode = audioEl.error?.code;
             const errorMessage = audioEl.error?.message;
             
+            // Ignore errors when src is empty or matches page URL (intentional disconnect/cleanup)
+            if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || audioEl.src === window.location.origin + '/') {
+              // This is likely an intentional disconnect, don't log as error
+              return;
+            }
+            
             // Error code 2 (MEDIA_ERR_NETWORK) can be non-critical if audio still plays
             // It often happens due to blob URL timing issues but doesn't prevent playback
             if (errorCode === 2) {
@@ -1445,7 +1451,23 @@ export async function setupSTTMode(
               return;
             }
             
-            // Log other errors as critical
+            // Error code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED/Format error) on blob URLs
+            // Often happens during disconnect/cleanup when blob URL is revoked or cleared
+            // This is usually non-critical and shouldn't be shown to users
+            if (errorCode === 4 && audioEl.src.startsWith('blob:')) {
+              // Check if this is likely a cleanup-related error
+              // Format errors on blob URLs during cleanup are expected and harmless
+              console.debug('[TTS] Audio format error on blob URL (likely cleanup-related, non-critical):', {
+                code: errorCode,
+                message: errorMessage,
+                src: audioEl.src.substring(0, 50) + '...', // Truncate for privacy
+                note: 'This often occurs during disconnect when blob URLs are cleaned up - safe to ignore'
+              });
+              // Don't log as error - this is expected during cleanup
+              return;
+            }
+            
+            // Log other errors as critical (only real errors that need attention)
             console.error('[TTS] Audio error:', {
               code: errorCode,
               message: errorMessage,
@@ -1906,6 +1928,15 @@ export async function setupCounter(
   userAge?: number,
   uid?: string,
 ) {
+  // Reset audio volume to 1 when connecting (in case it was muted during disconnect)
+  if (audioEl) {
+    try {
+      audioEl.volume = 1;
+    } catch (e) {
+      console.warn('[Setup] Error resetting audio volume:', e);
+    }
+  }
+  
   if (useSTTMode) {
     return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   } else {
@@ -2484,64 +2515,242 @@ export default function Page() {
           </select>
         </div>
       </div>
-      <button
-        ref={buttonRef}
-        onClick={() => {
-          if (status === 'connecting...') return;
-          setStatus('connecting...');
-          setupCounter(
-            buttonRef.current as HTMLButtonElement,
-            audioRef.current,
-            selectedInput,
-            selectedOutput,
-            useSTTMode,
-            userData?.name,
-            userData?.age,
-            currentUser?.uid || userData?.uid,
-          )
-            .then(() => setStatus('connected'))
-            .catch((e) => {
-              console.error(e);
-              setStatus('error - see console');
-            });
-        }}
-        disabled={status === 'connecting...'}
-        type="button"
-        style={{
-          padding: '14px 32px',
-          fontSize: 16,
-          fontWeight: 600,
-          color: '#ffffff',
-          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
-          border: 'none',
-          borderRadius: '8px',
-          cursor: status === 'connecting...' ? 'not-allowed' : 'pointer',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-          transition: 'all 0.2s ease-in-out',
-          minWidth: '180px',
-        }}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={async () => {
+            if (status !== 'connected') return;
+            
+            try {
+              // Stop any playing TTS audio immediately
+              if (audioRef.current) {
+                try {
+                  const audioEl = audioRef.current;
+                  // Instantly mute and stop the audio
+                  audioEl.volume = 0; // Mute instantly
+                  audioEl.pause(); // Pause playback
+                  audioEl.currentTime = 0; // Reset position
+                  audioEl.load(); // Clear the buffer - this stops buffered audio from playing
+                  // Remove error listener before clearing src to prevent error logs
+                  // Clone the element to remove all event listeners cleanly
+                  const newAudio = audioEl.cloneNode(false) as HTMLAudioElement;
+                  if (audioEl.parentNode) {
+                    audioEl.parentNode.replaceChild(newAudio, audioEl);
+                  }
+                  // Ensure the new element is also stopped
+                  newAudio.volume = 0; // Mute for disconnect
+                  newAudio.pause();
+                  newAudio.currentTime = 0;
+                  newAudio.src = '';
+                  newAudio.load(); // Clear any remaining buffer
+                  // Reset volume to 1 for next connection (but keep it muted until connected)
+                  // Volume will be set to 1 when connecting
+                  // Update the ref to point to the new element
+                  (audioRef as any).current = newAudio;
+                } catch (e) {
+                  console.warn('[Disconnect] Error stopping audio:', e);
+                  // Fallback: aggressively stop audio
+                  try {
+                    if (audioRef.current) {
+                      audioRef.current.volume = 0; // Mute for disconnect
+                      audioRef.current.pause();
+                      audioRef.current.currentTime = 0;
+                      audioRef.current.load();
+                      audioRef.current.src = '';
+                      // Volume will be reset to 1 when connecting via setupCounter
+                    }
+                  } catch (fallbackError) {
+                    // Ignore fallback errors
+                  }
+                }
+              }
+              
+              // Clean up realtime session
+              if (currentSession) {
+                // Stop recognition if it exists
+                if (currentSession.recognition) {
+                  try {
+                    currentSession.recognition.stop();
+                    currentSession.recognition.abort();
+                  } catch (e) {
+                    // Ignore errors
+                  }
+                }
+                currentSession.session.close();
+                currentSession = null;
+              }
+              
+              // Clean up STT session
+              if (currentSTTSession) {
+                if (currentSTTSession.recognition) {
+                  try {
+                    currentSTTSession.recognition.stop();
+                    currentSTTSession.recognition.abort();
+                  } catch (e) {
+                    // Ignore errors
+                  }
+                }
+                // Clean up Deepgram WebSocket if used
+                if ((currentSTTSession as any).deepgramWs) {
+                  try {
+                    (currentSTTSession as any).deepgramWs.close();
+                  } catch (e) {
+                    console.warn('[STT] Error closing Deepgram WebSocket:', e);
+                  }
+                }
+                // Clean up audio processor if used
+                if ((currentSTTSession as any).audioProcessor) {
+                  try {
+                    (currentSTTSession as any).audioProcessor.disconnect();
+                  } catch (e) {
+                    console.warn('[STT] Error disconnecting audio processor:', e);
+                  }
+                }
+                if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
+                  currentSTTSession.mediaRecorder.stop();
+                }
+                if (currentSTTSession.audioContext) {
+                  await currentSTTSession.audioContext.close();
+                }
+                // Stop and clean up processing audio
+                if (currentSTTSession.processingOscillator) {
+                  try {
+                    currentSTTSession.processingOscillator.stop();
+                    currentSTTSession.processingOscillator.disconnect();
+                  } catch (e) {}
+                }
+                if (currentSTTSession.processingGain) {
+                  try {
+                    currentSTTSession.processingGain.disconnect();
+                  } catch (e) {}
+                }
+                if (currentSTTSession.processingAudio) {
+                  // Aggressively stop processing audio
+                  try {
+                    currentSTTSession.processingAudio.volume = 0;
+                    currentSTTSession.processingAudio.pause();
+                    currentSTTSession.processingAudio.currentTime = 0;
+                    currentSTTSession.processingAudio.load(); // Clear buffer
+                  } catch (e) {
+                    console.warn('[Disconnect] Error stopping processing audio:', e);
+                  }
+                }
+                currentSTTSession = null;
+              }
+              
+              // Reset state
+              setStatus('idle');
+              setMessages([]);
+            } catch (error) {
+              console.error('Error disconnecting:', error);
+              // Still reset state even if cleanup had errors
+              setStatus('idle');
+              setMessages([]);
+            }
+          }}
+          disabled={status !== 'connected'}
+          type="button"
+          style={{
+            padding: '14px 32px',
+            fontSize: 16,
+            fontWeight: 600,
+            color: '#ffffff',
+            backgroundColor: status === 'connected' ? '#ef4444' : '#9ca3af',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: status === 'connected' ? 'pointer' : 'not-allowed',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+            transition: 'all 0.2s ease-in-out',
+            minWidth: '180px',
+            flex: 1,
+          }}
+          onMouseEnter={(e) => {
+            if (status === 'connected') {
+              e.currentTarget.style.backgroundColor = '#dc2626';
+              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (status === 'connected') {
+              e.currentTarget.style.backgroundColor = '#ef4444';
+              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }
+          }}
+          onMouseDown={(e) => {
+            if (status === 'connected') {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
+            }
+          }}
+          onMouseUp={(e) => {
+            if (status === 'connected') {
+              e.currentTarget.style.transform = 'translateY(-1px)';
+              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+            }
+          }}
+        >
+          Disconnect
+        </button>
+        <button
+          ref={buttonRef}
+          onClick={() => {
+            if (status === 'connecting...') return;
+            setStatus('connecting...');
+            setupCounter(
+              buttonRef.current as HTMLButtonElement,
+              audioRef.current,
+              selectedInput,
+              selectedOutput,
+              useSTTMode,
+              userData?.name,
+              userData?.age,
+              currentUser?.uid || userData?.uid,
+            )
+              .then(() => setStatus('connected'))
+              .catch((e) => {
+                console.error(e);
+                setStatus('error - see console');
+              });
+          }}
+          disabled={status === 'connecting...' || status === 'connected'}
+          type="button"
+          style={{
+            padding: '14px 32px',
+            fontSize: 16,
+            fontWeight: 600,
+            color: '#ffffff',
+            backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: status === 'connecting...' || status === 'connected' ? 'not-allowed' : 'pointer',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+            transition: 'all 0.2s ease-in-out',
+            minWidth: '180px',
+            flex: 1,
+          }}
         onMouseEnter={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.backgroundColor = status === 'connected' ? '#059669' : status === 'error - see console' ? '#dc2626' : '#2563eb';
+          if (status !== 'connecting...' && status !== 'connected') {
+            e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#dc2626' : '#2563eb';
             e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
             e.currentTarget.style.transform = 'translateY(-1px)';
           }
         }}
         onMouseLeave={(e) => {
-          if (status !== 'connecting...') {
-            e.currentTarget.style.backgroundColor = status === 'connected' ? '#10b981' : status === 'error - see console' ? '#ef4444' : '#3b82f6';
+          if (status !== 'connecting...' && status !== 'connected') {
+            e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#ef4444' : '#3b82f6';
             e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
             e.currentTarget.style.transform = 'translateY(0)';
           }
         }}
         onMouseDown={(e) => {
-          if (status !== 'connecting...') {
+          if (status !== 'connecting...' && status !== 'connected') {
             e.currentTarget.style.transform = 'translateY(0)';
             e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
           }
         }}
         onMouseUp={(e) => {
-          if (status !== 'connecting...') {
+          if (status !== 'connecting...' && status !== 'connected') {
             e.currentTarget.style.transform = 'translateY(-1px)';
             e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
           }
@@ -2557,6 +2766,7 @@ export default function Page() {
                 ? 'Connect' 
                 : 'Connect Realtime'}
       </button>
+      </div>
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
