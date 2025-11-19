@@ -483,11 +483,21 @@ async def text_to_speech(request: TTSRequest):
     - "gtts" (default): Free gTTS (Google Text-to-Speech) - most reliable free option
     - "edge": Edge TTS (Microsoft, can be blocked/rate-limited)
     - "openai": OpenAI TTS API (requires OPENAI_API_KEY, paid)
+    - "webspeech": Web Speech API (browser-native, handled client-side only)
     
+    Note: "webspeech" is handled entirely in the browser and will not reach this endpoint.
     Automatic fallback: If gTTS fails, tries OpenAI if API key is available.
     """
     # Get TTS provider from request (admin settings) or environment variable, default to "gtts"
     tts_provider = request.provider.lower() if request.provider else os.getenv("TTS_PROVIDER", "gtts").lower()
+    
+    # If webspeech is requested, this shouldn't reach the backend (handled client-side)
+    # But we'll handle it gracefully just in case
+    if tts_provider == "webspeech":
+        raise HTTPException(
+            status_code=400,
+            detail="Web Speech API is browser-native and must be handled client-side. This request should not reach the backend."
+        )
     
     # Validate text is not empty
     if not request.text or not request.text.strip():
