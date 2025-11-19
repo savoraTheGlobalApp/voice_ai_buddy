@@ -137,6 +137,7 @@ let currentSTTSession: {
   processingOscillator?: OscillatorNode | null;
   processingGain?: GainNode | null;
   isProcessingAudioPlaying?: () => boolean;
+  greetingSpoken?: boolean; // Flag to prevent duplicate greeting speech
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -1006,6 +1007,7 @@ export async function setupSTTMode(
       audioContext,
       conversationHistory,
       processingAudio,
+      greetingSpoken: false, // Flag to prevent duplicate greeting speech
       processingOscillator: null,
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
@@ -1186,6 +1188,126 @@ export async function setupSTTMode(
           ttsProvider = 'gtts';
         }
         
+        // Handle Web Speech API (browser-native, no backend call needed)
+        if (ttsProvider === 'webspeech') {
+          if (!('speechSynthesis' in window)) {
+            throw new Error('Web Speech API is not supported in this browser');
+          }
+          
+          // Cancel any current speech and wait a moment to ensure it's fully cancelled
+          // This prevents duplicate speech when called multiple times quickly
+          window.speechSynthesis.cancel();
+          // Small delay to ensure cancellation is processed before speaking
+          await new Promise(resolve => setTimeout(resolve, 50));
+          
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+          
+          // Helper function to get voices (handles async loading)
+          const getVoices = (): SpeechSynthesisVoice[] => {
+            return window.speechSynthesis.getVoices();
+          };
+          
+          // Try to find a good voice (prefer Google or Microsoft voices)
+          let voices = getVoices();
+          
+          // If no voices available, wait for voiceschanged event (browsers load voices asynchronously)
+          if (voices.length === 0) {
+            return new Promise<void>((resolve, reject) => {
+              const onVoicesChanged = () => {
+                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+                voices = getVoices();
+                const preferredVoice = voices.find(v => 
+                  v.name.includes('Google') || 
+                  v.name.includes('Microsoft') ||
+                  v.name.includes('Samantha')
+                ) || voices[0];
+                
+                if (preferredVoice) {
+                  utterance.voice = preferredVoice;
+                }
+                
+                // Set up speech completion handlers
+                utterance.onend = () => {
+                  resolve();
+                };
+                utterance.onerror = (e) => {
+                  // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
+                  if (e.error === 'interrupted') {
+                    resolve(); // Resolve instead of reject - cancellation is expected
+                  } else {
+                    reject(new Error(`Web Speech API error: ${e.error}`));
+                  }
+                };
+                
+                window.speechSynthesis.speak(utterance);
+              };
+              
+              window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
+              
+              // Fallback timeout in case voiceschanged never fires
+              setTimeout(() => {
+                window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
+                voices = getVoices();
+                const preferredVoice = voices.find(v => 
+                  v.name.includes('Google') || 
+                  v.name.includes('Microsoft') ||
+                  v.name.includes('Samantha')
+                ) || voices[0];
+                
+                if (preferredVoice) {
+                  utterance.voice = preferredVoice;
+                }
+                
+                utterance.onend = () => {
+                  resolve();
+                };
+                utterance.onerror = (e) => {
+                  // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
+                  if (e.error === 'interrupted') {
+                    resolve(); // Resolve instead of reject - cancellation is expected
+                  } else {
+                    reject(new Error(`Web Speech API error: ${e.error}`));
+                  }
+                };
+                
+                window.speechSynthesis.speak(utterance);
+              }, 1000);
+            });
+          }
+          
+          // Voices are available, use them directly
+          const preferredVoice = voices.find(v => 
+            v.name.includes('Google') || 
+            v.name.includes('Microsoft') ||
+            v.name.includes('Samantha')
+          ) || voices[0];
+          
+          if (preferredVoice) {
+            utterance.voice = preferredVoice;
+          }
+          
+          // Return a promise that resolves when speech completes
+          return new Promise<void>((resolve, reject) => {
+            utterance.onend = () => {
+              resolve();
+            };
+            utterance.onerror = (e) => {
+              // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
+              if (e.error === 'interrupted') {
+                resolve(); // Resolve instead of reject - cancellation is expected
+              } else {
+                reject(new Error(`Web Speech API error: ${e.error}`));
+              }
+            };
+            
+            window.speechSynthesis.speak(utterance);
+          });
+        }
+        
+        // For other providers (gtts, openai), use backend API
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
         const response = await fetch(`${backendUrl}/api/tts`, {
           method: 'POST',
@@ -1892,10 +2014,15 @@ export async function setupSTTMode(
       conversationHistory.pop(); // Remove the user greeting prompt
       conversationHistory.push({ role: 'assistant', content: greeting });
       
-      await textToSpeech(greeting);
       // Update UI
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
+      }
+      
+      // Only speak greeting once (prevent duplicate with Web Speech API)
+      if (currentSTTSession && !currentSTTSession.greetingSpoken) {
+        currentSTTSession.greetingSpoken = true;
+        await textToSpeech(greeting);
       }
     } catch (e) {
       console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
@@ -1904,9 +2031,16 @@ export async function setupSTTMode(
         ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
         : "Hi! I'm your learning buddy! What would you like to explore today?";
       conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
-      await textToSpeech(fallbackGreeting);
+      
+      // Update UI
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
+      }
+      
+      // Only speak greeting once (prevent duplicate with Web Speech API)
+      if (currentSTTSession && !currentSTTSession.greetingSpoken) {
+        currentSTTSession.greetingSpoken = true;
+        await textToSpeech(fallbackGreeting);
       }
     }
 
@@ -3020,6 +3154,7 @@ export default function Page() {
                   >
                     <option value="gtts">gTTS</option>
                     <option value="openai">OpenAI TTS</option>
+                    <option value="webspeech">Web Speech API</option>
                   </select>
                 </div>
               </div>
