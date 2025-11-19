@@ -94,6 +94,7 @@ class ChatResponse(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice: str = "nova"
+    provider: Optional[str] = None  # Optional provider override from admin settings
 
 class MemoryCandidate(BaseModel):
     text: str
@@ -115,14 +116,41 @@ async def health_check():
     return {"status": "healthy", "service": "voice-ai-buddy-backend"}
 
 
+def _get_stt_provider() -> str:
+    """
+    Helper function to get STT provider from environment variable.
+    Used by both get_stt_provider and get_config endpoints to avoid duplication.
+    """
+    return os.getenv("STT_PROVIDER", "webspeech").lower()
+
+
 @app.get("/api/stt-provider")
 async def get_stt_provider():
     """
     Get the configured STT provider.
     This allows frontend to use the same STT provider as configured in backend.
+    For comprehensive config including STT, TTS, and Chat model, use /api/config instead.
     """
-    stt_provider = os.getenv("STT_PROVIDER", "webspeech").lower()
+    stt_provider = _get_stt_provider()
     return {"stt_provider": stt_provider}
+
+
+@app.get("/api/config")
+async def get_config():
+    """
+    Get all backend configuration for admin settings.
+    Returns STT provider, TTS provider, and Chat model.
+    Note: Mode selection (realtime vs STT-TTT-TTS) is handled by frontend via NEXT_PUBLIC_USE_STT_MODE.
+    """
+    stt_provider = _get_stt_provider()
+    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+    
+    return {
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+        "chat_model": chat_model,
+    }
 
 
 @app.get("/api/realtime-token", response_model=TokenResponse)
@@ -458,8 +486,8 @@ async def text_to_speech(request: TTSRequest):
     
     Automatic fallback: If gTTS fails, tries OpenAI if API key is available.
     """
-    # Get TTS provider from environment variable, default to "gtts"
-    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    # Get TTS provider from request (admin settings) or environment variable, default to "gtts"
+    tts_provider = request.provider.lower() if request.provider else os.getenv("TTS_PROVIDER", "gtts").lower()
     
     # Validate text is not empty
     if not request.text or not request.text.strip():
