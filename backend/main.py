@@ -3,12 +3,14 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
 import re
 import httpx
+import json
+import asyncio
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -92,6 +94,7 @@ class ChatResponse(BaseModel):
 class TTSRequest(BaseModel):
     text: str
     voice: str = "nova"
+    provider: Optional[str] = None  # Optional provider override from admin settings
 
 class MemoryCandidate(BaseModel):
     text: str
@@ -111,6 +114,43 @@ class MemoryExtractResponse(BaseModel):
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "voice-ai-buddy-backend"}
+
+
+def _get_stt_provider() -> str:
+    """
+    Helper function to get STT provider from environment variable.
+    Used by both get_stt_provider and get_config endpoints to avoid duplication.
+    """
+    return os.getenv("STT_PROVIDER", "webspeech").lower()
+
+
+@app.get("/api/stt-provider")
+async def get_stt_provider():
+    """
+    Get the configured STT provider.
+    This allows frontend to use the same STT provider as configured in backend.
+    For comprehensive config including STT, TTS, and Chat model, use /api/config instead.
+    """
+    stt_provider = _get_stt_provider()
+    return {"stt_provider": stt_provider}
+
+
+@app.get("/api/config")
+async def get_config():
+    """
+    Get all backend configuration for admin settings.
+    Returns STT provider, TTS provider, and Chat model.
+    Note: Mode selection (realtime vs STT-TTT-TTS) is handled by frontend via NEXT_PUBLIC_USE_STT_MODE.
+    """
+    stt_provider = _get_stt_provider()
+    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+    
+    return {
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+        "chat_model": chat_model,
+    }
 
 
 @app.get("/api/realtime-token", response_model=TokenResponse)
@@ -443,11 +483,21 @@ async def text_to_speech(request: TTSRequest):
     - "gtts" (default): Free gTTS (Google Text-to-Speech) - most reliable free option
     - "edge": Edge TTS (Microsoft, can be blocked/rate-limited)
     - "openai": OpenAI TTS API (requires OPENAI_API_KEY, paid)
+    - "webspeech": Web Speech API (browser-native, handled client-side only)
     
+    Note: "webspeech" is handled entirely in the browser and will not reach this endpoint.
     Automatic fallback: If gTTS fails, tries OpenAI if API key is available.
     """
-    # Get TTS provider from environment variable, default to "gtts"
-    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    # Get TTS provider from request (admin settings) or environment variable, default to "gtts"
+    tts_provider = request.provider.lower() if request.provider else os.getenv("TTS_PROVIDER", "gtts").lower()
+    
+    # If webspeech is requested, this shouldn't reach the backend (handled client-side)
+    # But we'll handle it gracefully just in case
+    if tts_provider == "webspeech":
+        raise HTTPException(
+            status_code=400,
+            detail="Web Speech API is browser-native and must be handled client-side. This request should not reach the backend."
+        )
     
     # Validate text is not empty
     if not request.text or not request.text.strip():
@@ -555,6 +605,85 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"TTS generation error: {str(e)}"
         )
+
+
+@app.websocket("/api/stt/deepgram")
+async def deepgram_stt_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for Deepgram Nova-3 streaming STT.
+    Proxies audio from frontend to Deepgram and returns transcripts.
+    """
+    await websocket.accept()
+    
+    dg_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not dg_api_key:
+        await websocket.close(code=1008, reason="DEEPGRAM_API_KEY not configured")
+        return
+    
+    try:
+        import websockets as ws_lib
+        
+        # Deepgram WebSocket URL
+        dg_url = (
+            f"wss://api.deepgram.com/v1/listen?"
+            f"model=nova-3&encoding=linear16&sample_rate=48000"
+            f"&punctuate=true&interim_results=false"
+        )
+        
+        # Connect to Deepgram
+        async with ws_lib.connect(
+            dg_url,
+            extra_headers={"Authorization": f"Token {dg_api_key}"}
+        ) as dg_ws:
+            print("[Deepgram STT] WebSocket connected to Deepgram")
+            
+            # Task to forward audio from client to Deepgram
+            async def forward_audio():
+                try:
+                    while True:
+                        audio_data = await websocket.receive_bytes()
+                        await dg_ws.send(audio_data)
+                except WebSocketDisconnect:
+                    print("[Deepgram STT] Client disconnected")
+                except Exception as e:
+                    print(f"[Deepgram STT] Error forwarding audio: {e}")
+            
+            # Task to forward transcripts from Deepgram to client
+            async def forward_transcripts():
+                try:
+                    async for message in dg_ws:
+                        if isinstance(message, str):
+                            data = json.loads(message)
+                            # Extract final transcript
+                            if data.get("is_final"):
+                                channel = data.get("channel", {})
+                                alternatives = channel.get("alternatives", [])
+                                if alternatives:
+                                    transcript = alternatives[0].get("transcript", "").strip()
+                                    if transcript:
+                                        await websocket.send_text(json.dumps({
+                                            "type": "transcript",
+                                            "text": transcript
+                                        }))
+                except Exception as e:
+                    print(f"[Deepgram STT] Error forwarding transcripts: {e}")
+            
+            # Run both tasks concurrently
+            try:
+                await asyncio.gather(forward_audio(), forward_transcripts())
+            except WebSocketDisconnect:
+                print("[Deepgram STT] Client disconnected")
+            except Exception as e:
+                print(f"[Deepgram STT] Error: {e}")
+                
+    except ImportError:
+        await websocket.close(
+            code=1011,
+            reason="websockets library not installed. Run: pip install websockets"
+        )
+    except Exception as e:
+        print(f"[Deepgram STT] Connection error: {e}")
+        await websocket.close(code=1011, reason=f"Server error: {str(e)}")
 
 
 if __name__ == "__main__":
