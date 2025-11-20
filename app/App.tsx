@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
+import { useSTT, STTStatus } from '@/lib/hooks/useSTT';
 
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
@@ -1661,6 +1662,113 @@ export default function Page() {
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'OFF';
   const [useSTTMode, setUseSTTMode] = useState(envMode === 'ON');
 
+  // WebSocket STT integration
+  const useWebSocketSTT = process.env.NEXT_PUBLIC_USE_STT_WEBSOCKET === 'true';
+  const {
+    status: sttStatus,
+    isConnected: sttConnected,
+    isRecording: sttRecording,
+    lastTranscription,
+    error: sttError,
+    connect: sttConnect,
+    disconnect: sttDisconnect,
+    startRecording: sttStartRecording,
+    stopRecording: sttStopRecording,
+    clearError: sttClearError
+  } = useSTT({
+    config: {
+      language: process.env.NEXT_PUBLIC_STT_LANGUAGE || 'en',
+      silenceThreshold: Number(process.env.NEXT_PUBLIC_STT_SILENCE_THRESHOLD) || 30,
+      maxRecordingTime: Number(process.env.NEXT_PUBLIC_STT_MAX_RECORDING_TIME) || 30000,
+    },
+    autoConnect: useWebSocketSTT && (process.env.NEXT_PUBLIC_STT_AUTO_CONNECT === 'true'),
+    onTranscription: (text: string, timestamp?: number, latencyMs?: number) => {
+      console.log(`%c[App STT] 📝 Transcription received: "${text}"`, 'color: #3b82f6; font-weight: bold;');
+      if (latencyMs !== undefined) {
+        console.log(`%c[App STT] ⚡ Total end-to-end latency: ${latencyMs}ms`, 'color: #dc2626; font-weight: bold; font-size: 14px;');
+      }
+      if (useWebSocketSTT && useSTTMode && currentSTTSession) {
+        // Send transcribed text to AI for processing using the existing getChatResponse function
+        handleUserMessageFromSTT(text);
+      }
+    },
+    onError: (error: string) => {
+      console.error('[WebSocket STT] Error:', error);
+    }
+  });
+
+  // Handler for WebSocket STT transcriptions
+  const handleUserMessageFromSTT = async (text: string) => {
+    if (!text.trim()) return;
+    
+    console.log('[WebSocket STT] Processing message:', text);
+    
+    try {
+      // Add user message to UI immediately
+      const userMessage = { role: 'user', content: text.trim() };
+      setMessages(prev => [...prev, userMessage]);
+      
+      // Get backend URL
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      
+      // Build conversation history for API call
+      const conversationHistory = [
+        {
+          role: 'system',
+          content: buildSocraticTutorInstructions(userData?.name, userData?.age)
+        },
+        ...messages.map(msg => ({ role: msg.role, content: msg.content })),
+        { role: 'user', content: text.trim() }
+      ];
+      
+      // Send to chat API with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
+      const response = await fetch(`${backendUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: conversationHistory
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      const assistantResponse = data.response || data.message || '';
+      
+      if (assistantResponse) {
+        // Add AI response to UI
+        const aiMessage = { role: 'assistant', content: assistantResponse };
+        setMessages(prev => [...prev, aiMessage]);
+        
+        // Use TTS to speak the response if in STT mode
+        if (useSTTMode && currentSTTSession) {
+          const textToSpeech = (currentSTTSession as any).textToSpeech;
+          if (textToSpeech) {
+            await textToSpeech(assistantResponse);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('[WebSocket STT] Error processing message:', error);
+      
+      // Add error message to UI
+      const errorMessage = { 
+        role: 'assistant', 
+        content: 'Sorry, I had trouble understanding that. Could you try again?' 
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    }
+  };
+
   // Handle responsive layout
   useEffect(() => {
     const checkMobile = () => {
@@ -2264,6 +2372,148 @@ export default function Page() {
                 ? 'Connect' 
                 : 'Connect Realtime'}
       </button>
+
+      {/* WebSocket STT Controls */}
+      {useWebSocketSTT && useSTTMode && (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          alignItems: 'center',
+          margin: '16px 0',
+          padding: '12px',
+          backgroundColor: '#f3f4f6',
+          borderRadius: '8px',
+          border: '1px solid #d1d5db',
+        }}>
+          <div style={{ fontSize: '12px', color: '#374151', fontWeight: '500' }}>
+            WebSocket STT Mode
+          </div>
+          
+          {/* STT Status Indicator */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '11px',
+            color: sttStatus === STTStatus.CONNECTED || sttStatus === STTStatus.LISTENING ? '#059669' : 
+                  sttStatus === STTStatus.ERROR ? '#dc2626' : '#6b7280'
+          }}>
+            <div style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: sttStatus === STTStatus.CONNECTED || sttStatus === STTStatus.LISTENING ? '#10b981' : 
+                              sttStatus === STTStatus.ERROR ? '#ef4444' : '#9ca3af'
+            }} />
+            STT: {sttStatus === STTStatus.CONNECTED ? 'Ready' : 
+                  sttStatus === STTStatus.LISTENING ? 'Listening...' : 
+                  sttStatus === STTStatus.PROCESSING ? 'Processing...' : 
+                  sttStatus === STTStatus.CONNECTING ? 'Connecting...' : 
+                  sttStatus === STTStatus.ERROR ? 'Error' : 'Disconnected'}
+          </div>
+
+          {/* STT Controls */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {!sttConnected ? (
+              <button
+                onClick={() => sttConnect().catch(console.error)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  backgroundColor: '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Connect STT
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => sttRecording ? sttStopRecording() : sttStartRecording().catch(console.error)}
+                  disabled={!sttConnected}
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: '12px',
+                    backgroundColor: sttRecording ? '#ef4444' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: sttConnected ? 'pointer' : 'not-allowed',
+                    fontWeight: '500',
+                  }}
+                >
+                  {sttRecording ? '🛑 Stop' : '🎤 Record'}
+                </button>
+                <button
+                  onClick={() => sttDisconnect()}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    backgroundColor: '#6b7280',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Error Display */}
+          {sttError && (
+            <div style={{
+              fontSize: '11px',
+              color: '#dc2626',
+              backgroundColor: '#fef2f2',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              border: '1px solid #fecaca',
+              maxWidth: '100%',
+              textAlign: 'center',
+            }}>
+              {sttError}
+              <button
+                onClick={sttClearError}
+                style={{
+                  marginLeft: '8px',
+                  background: 'none',
+                  border: 'none',
+                  color: '#dc2626',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Last Transcription */}
+          {lastTranscription && (
+            <div style={{
+              fontSize: '11px',
+              color: '#374151',
+              backgroundColor: '#f0f9ff',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              border: '1px solid #bae6fd',
+              maxWidth: '100%',
+              textAlign: 'center',
+              wordBreak: 'break-word',
+            }}>
+              Last: "{lastTranscription.length > 50 ? lastTranscription.substring(0, 50) + '...' : lastTranscription}"
+            </div>
+          )}
+        </div>
+      )}
+
       <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
         <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>

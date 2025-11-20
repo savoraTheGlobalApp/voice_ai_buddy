@@ -3,15 +3,21 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
 import re
 import httpx
+import json
+import asyncio
+import base64
+import time
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
+import websockets
+from openai import AsyncOpenAI
 
 # Import TTS libraries (lazy imports)
 # This prevents import errors from crashing the server if packages aren't installed
@@ -41,6 +47,9 @@ except ImportError:
 load_dotenv()
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
+
+# Initialize OpenAI client
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # CORS configuration - allow Next.js frontend
 frontend_url = os.getenv("FRONTEND_URL", "")
@@ -105,6 +114,16 @@ class MemoryExtractRequest(BaseModel):
 
 class MemoryExtractResponse(BaseModel):
     memories: List[MemoryCandidate]
+
+
+class STTRequest(BaseModel):
+    audio_data: str  # Base64 encoded audio data
+    language: Optional[str] = "en"
+
+
+class STTResponse(BaseModel):
+    text: str
+    confidence: Optional[float] = None
 
 
 @app.get("/health")
@@ -555,6 +574,230 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"TTS generation error: {str(e)}"
         )
+
+
+@app.post("/api/stt", response_model=STTResponse)
+async def speech_to_text(request: STTRequest):
+    """
+    Speech-to-Text API endpoint using OpenAI Whisper API.
+    Accepts base64 encoded audio data and returns transcribed text.
+    """
+    if not openai_client.api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    try:
+        # Decode base64 audio data
+        audio_bytes = base64.b64decode(request.audio_data)
+        
+        if len(audio_bytes) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Empty audio data received"
+            )
+
+        # Create a temporary file-like object for the audio data
+        import io
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = "audio.webm"  # Set a name for the file
+
+        # Call OpenAI Whisper API
+        response = await openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+            language=request.language,
+            response_format="verbose_json"
+        )
+
+        # Extract text and confidence if available
+        text = response.text.strip()
+        confidence = getattr(response, 'confidence', None)
+
+        return STTResponse(text=text, confidence=confidence)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"STT error: {str(e)}"
+        )
+
+
+class STTConnectionManager:
+    """Manages WebSocket connections for real-time STT"""
+    
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.connection_buffers: Dict[WebSocket, bytearray] = {}
+        self.connection_start_times: Dict[WebSocket, float] = {}
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        self.connection_buffers[websocket] = bytearray()
+        print(f"STT WebSocket connected. Active connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if websocket in self.connection_buffers:
+            del self.connection_buffers[websocket]
+        if websocket in self.connection_start_times:
+            del self.connection_start_times[websocket]
+        print(f"STT WebSocket disconnected. Active connections: {len(self.active_connections)}")
+
+    async def send_personal_message(self, message: dict, websocket: WebSocket):
+        try:
+            await websocket.send_text(json.dumps(message))
+        except Exception as e:
+            print(f"Error sending message to WebSocket: {e}")
+            self.disconnect(websocket)
+
+    async def process_audio_chunk(self, websocket: WebSocket, audio_data: bytes):
+        """Process incoming audio chunk and accumulate in buffer"""
+        if websocket not in self.connection_buffers:
+            return
+
+        # Track when first audio chunk arrives (start of speech)
+        if websocket not in self.connection_start_times:
+            self.connection_start_times[websocket] = time.time()
+            print(f"[STT Backend] Started receiving audio at {time.strftime('%H:%M:%S.%f')[:-3]}")
+
+        # Add audio data to buffer
+        self.connection_buffers[websocket].extend(audio_data)
+        
+        # Check if we have enough data to process (e.g., 1 second of audio at 16kHz)
+        # This is configurable based on your needs
+        min_buffer_size = 32000  # ~1 second at 16kHz 16-bit
+        
+        if len(self.connection_buffers[websocket]) >= min_buffer_size:
+            await self.transcribe_buffer(websocket)
+
+    async def transcribe_buffer(self, websocket: WebSocket):
+        """Transcribe accumulated audio buffer"""
+        if websocket not in self.connection_buffers:
+            return
+
+        buffer_data = bytes(self.connection_buffers[websocket])
+        if len(buffer_data) == 0:
+            return
+
+        try:
+            # Create file-like object for OpenAI API
+            import io
+            audio_file = io.BytesIO(buffer_data)
+            audio_file.name = "audio.webm"
+
+            # Transcribe using OpenAI Whisper
+            response = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="en",
+                response_format="json"
+            )
+
+            text = response.text.strip()
+            
+            if text:  # Only send if we got meaningful text
+                # Calculate and log latency
+                current_time = time.time()
+                if websocket in self.connection_start_times:
+                    latency_ms = int((current_time - self.connection_start_times[websocket]) * 1000)
+                    print(f"[STT Backend] ==========================================")
+                    print(f"[STT Backend] Speech-to-Text completed in {latency_ms}ms")
+                    print(f"[STT Backend] Audio started: {time.strftime('%H:%M:%S.%f', time.localtime(self.connection_start_times[websocket]))[:-3]}")
+                    print(f"[STT Backend] Transcription done: {time.strftime('%H:%M:%S.%f', time.localtime(current_time))[:-3]}")
+                    print(f"[STT Backend] Transcribed text: \"{text}\"")
+                    print(f"[STT Backend] ==========================================")
+                    
+                    # Reset the start time for next recording
+                    del self.connection_start_times[websocket]
+                
+                await self.send_personal_message({
+                    "type": "transcription",
+                    "text": text,
+                    "timestamp": asyncio.get_event_loop().time()
+                }, websocket)
+
+            # Clear the buffer after successful transcription
+            self.connection_buffers[websocket].clear()
+
+        except Exception as e:
+            print(f"Error transcribing audio: {e}")
+            # Reset timing on error
+            if websocket in self.connection_start_times:
+                del self.connection_start_times[websocket]
+            await self.send_personal_message({
+                "type": "error",
+                "message": f"Transcription error: {str(e)}"
+            }, websocket)
+
+
+# Global STT connection manager
+stt_manager = STTConnectionManager()
+
+
+@app.websocket("/ws/stt")
+async def websocket_stt_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time Speech-to-Text using OpenAI Whisper.
+    
+    Expected message format:
+    - For audio data: {"type": "audio", "data": "<base64-encoded-audio>"}
+    - For end of speech: {"type": "end"}
+    - For configuration: {"type": "config", "language": "en"}
+    
+    Response format:
+    - Transcription: {"type": "transcription", "text": "...", "timestamp": 123456}
+    - Error: {"type": "error", "message": "..."}
+    """
+    await stt_manager.connect(websocket)
+    
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            message_type = message.get("type")
+            
+            if message_type == "audio":
+                # Process audio data
+                audio_b64 = message.get("data", "")
+                if audio_b64:
+                    try:
+                        audio_bytes = base64.b64decode(audio_b64)
+                        await stt_manager.process_audio_chunk(websocket, audio_bytes)
+                    except Exception as e:
+                        await stt_manager.send_personal_message({
+                            "type": "error",
+                            "message": f"Invalid audio data: {str(e)}"
+                        }, websocket)
+            
+            elif message_type == "end":
+                # End of speech - transcribe whatever is in buffer
+                await stt_manager.transcribe_buffer(websocket)
+            
+            elif message_type == "config":
+                # Configuration update (language, etc.)
+                await stt_manager.send_personal_message({
+                    "type": "config_updated",
+                    "message": "Configuration updated successfully"
+                }, websocket)
+            
+            elif message_type == "ping":
+                # Health check
+                await stt_manager.send_personal_message({
+                    "type": "pong",
+                    "timestamp": asyncio.get_event_loop().time()
+                }, websocket)
+                
+    except WebSocketDisconnect:
+        stt_manager.disconnect(websocket)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        stt_manager.disconnect(websocket)
 
 
 if __name__ == "__main__":
