@@ -3,15 +3,26 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 import os
 import re
 import httpx
+import asyncio
+import json
+# import audioop  <-- Removed
+import numpy as np
+import wave
+import time
+import tempfile
+from typing import List, Optional
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
+
+
+
 
 # Import TTS libraries (lazy imports)
 # This prevents import errors from crashing the server if packages aren't installed
@@ -611,6 +622,123 @@ async def text_to_speech_stream(text: str, voice: str = "nova"):
         _stream_openai_tts(text, voice),
         media_type="audio/mpeg"
     )
+
+
+@app.websocket("/api/stt/stream")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for Streaming STT.
+    Receives raw audio chunks (Int16), detects silence, and triggers Whisper transcription.
+    """
+    await websocket.accept()
+    print("WebSocket connected")
+    
+    # VAD Parameters
+    CHUNK_SIZE = 1024  # Bytes
+    SILENCE_THRESHOLD = 500  # RMS threshold (adjust based on mic sensitivity)
+    SILENCE_DURATION = 1.5  # Seconds of silence to trigger transcription
+    MIN_AUDIO_LENGTH = 0.5  # Minimum audio duration to transcribe
+    
+    # Audio Format (Must match frontend)
+    CHANNELS = 1
+    RATE = 16000
+    SAMPLE_WIDTH = 2  # 16-bit = 2 bytes
+    
+    buffer = bytearray()
+    silence_start_time = None
+    is_speaking = False
+    
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            buffer.extend(data)
+            
+            # Calculate RMS of the latest chunk to detect activity
+            # Convert bytes to numpy array of int16
+            audio_chunk = np.frombuffer(data, dtype=np.int16)
+            if len(audio_chunk) > 0:
+                # Calculate RMS using numpy
+                rms = np.sqrt(np.mean(audio_chunk.astype(np.float32)**2))
+            else:
+                rms = 0
+            
+            if rms > SILENCE_THRESHOLD:
+                if not is_speaking:
+                    print("Speaking detected...")
+                    is_speaking = True
+                silence_start_time = None
+            else:
+                if is_speaking and silence_start_time is None:
+                    silence_start_time = time.time()
+            
+            # Check if silence has persisted long enough
+            if is_speaking and silence_start_time and (time.time() - silence_start_time > SILENCE_DURATION):
+                print("Silence detected, processing audio...")
+                
+                # Check if we have enough audio
+                duration = len(buffer) / (RATE * CHANNELS * SAMPLE_WIDTH)
+                if duration >= MIN_AUDIO_LENGTH:
+                    # Save buffer to temp wav file
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+                        temp_filename = temp_wav.name
+                        with wave.open(temp_filename, "wb") as wf:
+                            wf.setnchannels(CHANNELS)
+                            wf.setsampwidth(SAMPLE_WIDTH)
+                            wf.setframerate(RATE)
+                            wf.writeframes(buffer)
+                    
+                    try:
+                        # Transcribe using OpenAI Whisper
+                        api_key = os.getenv("OPENAI_API_KEY")
+                        if not api_key:
+                            await websocket.send_json({"type": "error", "message": "OPENAI_API_KEY not set"})
+                        else:
+                            async with httpx.AsyncClient() as client:
+                                # We need to use the standard OpenAI client or construct the multipart request manually
+                                # Using standard httpx for multipart upload
+                                with open(temp_filename, "rb") as f:
+                                    files = {"file": (os.path.basename(temp_filename), f, "audio/wav")}
+                                    data = {"model": "whisper-1"}
+                                    headers = {"Authorization": f"Bearer {api_key}"}
+                                    
+                                    response = await client.post(
+                                        "https://api.openai.com/v1/audio/transcriptions",
+                                        headers=headers,
+                                        files=files,
+                                        data=data,
+                                        timeout=30.0
+                                    )
+                                    
+                                    if response.status_code == 200:
+                                        result = response.json()
+                                        text = result.get("text", "").strip()
+                                        if text:
+                                            print(f"Transcription: {text}")
+                                            await websocket.send_json({"type": "transcription", "text": text})
+                                    else:
+                                        print(f"Whisper API Error: {response.text}")
+                                        await websocket.send_json({"type": "error", "message": "Transcription failed"})
+                    except Exception as e:
+                        print(f"Transcription error: {e}")
+                        await websocket.send_json({"type": "error", "message": str(e)})
+                    finally:
+                        # Cleanup
+                        if os.path.exists(temp_filename):
+                            os.unlink(temp_filename)
+                            
+                # Reset state
+                buffer = bytearray()
+                is_speaking = False
+                silence_start_time = None
+                
+    except WebSocketDisconnect:
+        print("WebSocket disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 
 if __name__ == "__main__":

@@ -604,6 +604,91 @@ export async function setupRealtimeMode(
   }
 }
 
+// WebSocket STT Implementation
+async function setupWebSocketSTT(
+  inputDeviceId?: string | null,
+  onTranscription?: (text: string) => void,
+  onError?: (error: string) => void
+) {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  const wsUrl = backendUrl.replace(/^http/, 'ws') + '/api/stt/stream';
+
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('[STT] WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'transcription' && data.text) {
+        if (onTranscription) onTranscription(data.text);
+      } else if (data.type === 'error') {
+        console.error('[STT] Server error:', data.message);
+        if (onError) onError(data.message);
+      }
+    } catch (e) {
+      console.error('[STT] Failed to parse message:', e);
+    }
+  };
+
+  ws.onerror = (e) => {
+    console.error('[STT] WebSocket error:', e);
+    if (onError) onError('WebSocket connection error');
+  };
+
+  // Audio Capture
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+    sampleRate: 16000, // Request 16kHz if possible
+  });
+
+  const constraints: MediaStreamConstraints = {
+    audio: inputDeviceId ? {
+      deviceId: { exact: inputDeviceId },
+      channelCount: 1,
+      sampleRate: 16000
+    } : {
+      channelCount: 1,
+      sampleRate: 16000
+    },
+  };
+
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  const source = audioContext.createMediaStreamSource(stream);
+
+  // Use ScriptProcessor for raw PCM access (AudioWorklet is better but more complex to setup in single file)
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+
+  processor.onaudioprocess = (e) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      const inputData = e.inputBuffer.getChannelData(0);
+      // Convert Float32 to Int16
+      const pcmData = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        // Clamp and scale
+        const s = Math.max(-1, Math.min(1, inputData[i]));
+        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      ws.send(pcmData.buffer);
+    }
+  };
+
+  return {
+    close: () => {
+      ws.close();
+      stream.getTracks().forEach(track => track.stop());
+      processor.disconnect();
+      source.disconnect();
+      audioContext.close();
+    },
+    audioContext
+  };
+}
+
 // STT/TTT/TTS mode setup (ON toggle = cheaper mode)
 export async function setupSTTMode(
   element: HTMLButtonElement,
@@ -630,26 +715,26 @@ export async function setupSTTMode(
       currentSession = null;
     }
     if (currentSTTSession) {
-      if (currentSTTSession.recognition) {
-        currentSTTSession.recognition.stop();
-        currentSTTSession.recognition.abort();
+      // Close WebSocket STT session
+      if ((currentSTTSession as any).sttSocket) {
+        (currentSTTSession as any).sttSocket.close();
       }
+
       if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
         currentSTTSession.mediaRecorder.stop();
-      }
-      if (currentSTTSession.audioContext) {
-        await currentSTTSession.audioContext.close();
       }
       // Stop and clean up processing audio
       if (currentSTTSession.processingOscillator) {
         try {
           currentSTTSession.processingOscillator.stop();
           currentSTTSession.processingOscillator.disconnect();
+          currentSTTSession.processingOscillator = null;
         } catch (e) { }
       }
       if (currentSTTSession.processingGain) {
         try {
           currentSTTSession.processingGain.disconnect();
+          currentSTTSession.processingGain = null;
         } catch (e) { }
       }
       if (currentSTTSession.processingAudio) {
@@ -696,32 +781,6 @@ export async function setupSTTMode(
         content: instructions,
       },
     ];
-
-    // Get media stream for microphone
-    const constraints: MediaStreamConstraints = {
-      audio: inputDeviceId ? { deviceId: { exact: inputDeviceId } } : true,
-    };
-    const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-    // Set output device if available
-    if (audioEl && typeof (audioEl as any).setSinkId === 'function' && outputDeviceId) {
-      try {
-        await (audioEl as any).setSinkId(outputDeviceId);
-      } catch (e) {
-        console.warn('Failed to set sinkId', e);
-      }
-    }
-
-    // Initialize Web Speech API for STT
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
 
     // Create audio context for playback
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -786,17 +845,6 @@ export async function setupSTTMode(
         console.warn('Failed to set sinkId for processing audio', e);
       }
     }
-
-    currentSTTSession = {
-      recognition,
-      mediaRecorder: null,
-      audioContext,
-      conversationHistory,
-      processingAudio,
-      processingOscillator: null,
-      processingGain: null,
-      isProcessingAudioPlaying: () => isProcessingAudioPlaying,
-    };
 
     // Get backend URL
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -1053,280 +1101,7 @@ export async function setupSTTMode(
       } catch (e) { }
     };
 
-    recognition.onresult = async (event: any) => {
-      const transcript = event.results[event.results.length - 1][0].transcript.trim();
-      if (!transcript) {
-        return;
-      }
 
-      console.log('[STT] User said:', transcript);
-
-      // Start playing processing audio to give user feedback that voice was detected
-      if (currentSTTSession?.processingAudio) {
-        try {
-          // Check if processing audio is already playing to prevent conflicts
-          const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
-          if (isAlreadyPlaying) {
-            // Still ensure it's looping and at correct volume
-            const audio = currentSTTSession.processingAudio;
-            audio.loop = true;
-            audio.volume = 0.4;
-            return; // Don't try to play again if already playing
-          }
-
-          // Ensure AudioContext is resumed (helps with Android)
-          if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-            await currentSTTSession.audioContext.resume();
-          }
-
-          // Stop any existing Web Audio API oscillator (if any)
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) { }
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) { }
-          }
-
-          // Ensure processing audio is ready and play it
-          const audio = currentSTTSession.processingAudio;
-
-          // Reset and ensure audio is ready
-          audio.loop = true;
-          audio.volume = 0.4;
-
-          // If src was cleared or empty, restore it with cache-busting
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            const cacheBuster = Date.now();
-            audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
-            audio.load();
-            // Wait for audio to be ready
-            await new Promise<void>((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                reject(new Error('Processing audio loading timeout'));
-              }, 3000);
-
-              const onCanPlay = () => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                resolve();
-              };
-
-              const onError = (e: Event) => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                reject(new Error('Processing audio loading error'));
-              };
-
-              if (audio.readyState >= 3) {
-                // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
-                clearTimeout(timeout);
-                resolve();
-              } else {
-                audio.addEventListener('canplaythrough', onCanPlay, { once: true });
-                audio.addEventListener('error', onError, { once: true });
-              }
-            });
-          }
-
-          // CRITICAL: Validate src before playing
-          if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
-            throw new Error('Invalid processing audio source');
-          }
-
-          // Reset to start and play
-          audio.currentTime = 0;
-
-          // Small delay to ensure audio context is ready (helps with Android)
-          await new Promise(resolve => setTimeout(resolve, 50));
-
-          // Final validation before play
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Processing audio src invalid before play:', audio.src);
-            throw new Error('Processing audio source became invalid');
-          }
-
-          await audio.play();
-          console.log('[STT] Started processing audio (processing.mp3)');
-        } catch (e) {
-          console.error('[STT] Could not play processing audio:', e);
-        }
-      }
-
-      try {
-        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
-        userMsgCounter += 1;
-
-        // Get chat response
-        const response = await getChatResponse(transcript);
-        console.log('[TTT] Assistant response:', response);
-
-        // Check if we should extract memories after user message is processed
-        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          maybeExtractMemories();
-        }
-
-        // Convert to speech (this will stop the processing audio)
-        await textToSpeech(response);
-      } catch (e) {
-        console.error('[STT/TTT/TTS] Error:', e);
-        // Stop processing audio on error as well
-        if (currentSTTSession) {
-          // Stop Web Audio API oscillator if any
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) { }
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) { }
-          }
-          // Stop HTMLAudioElement
-          if (currentSTTSession.processingAudio) {
-            currentSTTSession.processingAudio.pause();
-            currentSTTSession.processingAudio.currentTime = 0;
-          }
-        }
-      }
-    };
-
-    recognition.onerror = (event: any) => {
-      // Only log meaningful errors - ignore common non-critical errors
-      if (event.error !== 'no-speech' &&
-        event.error !== 'aborted' &&
-        event.error !== 'audio-capture' &&
-        event.error !== 'not-allowed') {
-        console.error('[STT] Recognition error:', event.error);
-      }
-      // Silently handle common expected errors
-    };
-
-    recognition.onstart = () => {
-      // CRITICAL: Stop processing audio when recognition starts (idle listening)
-      // This prevents processing audio from playing during continuous recognition cycles
-      if (currentSTTSession?.processingAudio) {
-        try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
-          }
-        } catch (e) {
-          console.warn('[STT] Error stopping processing audio on recognition start:', e);
-        }
-      }
-    };
-
-    // Detect if we're on Android to handle beep issue
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
-    let lastRecognitionEndTime = 0;
-    let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
-
-    recognition.onend = () => {
-      // CRITICAL: Ensure processing audio is stopped when recognition ends
-      // This prevents it from playing during the restart cycle
-      if (currentSTTSession?.processingAudio) {
-        try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
-          }
-        } catch (e) {
-          console.warn('[STT] Error stopping processing audio on recognition end:', e);
-        }
-      }
-
-      // CRITICAL: Check if recognition is actually stopped before restarting
-      // Sometimes onend fires but recognition is still active (especially on Android)
-      // This prevents unnecessary restarts that cause beeps
-      if (isRecognitionRestarting) {
-        return;
-      }
-
-      // Clear any pending restart
-      if (recognitionRestartTimeout) {
-        clearTimeout(recognitionRestartTimeout);
-        recognitionRestartTimeout = null;
-      }
-
-      // Restart recognition if session is still active
-      if (currentSTTSession && currentSTTSession.recognition === recognition) {
-        const now = Date.now();
-        const timeSinceLastEnd = now - lastRecognitionEndTime;
-        lastRecognitionEndTime = now;
-
-        // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
-        // Even with continuous=true, calling start() again reactivates the mic and causes beep
-        // Add delay on Android to reduce beep frequency
-        const restartDelay = isAndroid ? 100 : 0;
-
-        // If recognition ended very quickly, add a small delay to prevent rapid cycling
-        const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
-
-        isRecognitionRestarting = true;
-        recognitionRestartTimeout = setTimeout(() => {
-          recognitionRestartTimeout = null;
-          isRecognitionRestarting = false;
-
-          // Clear timeout reference from session
-          if (currentSTTSession) {
-            (currentSTTSession as any).recognitionRestartTimeout = null;
-          }
-
-          // Double-check session is still active before restarting
-          if (currentSTTSession && currentSTTSession.recognition === recognition) {
-            try {
-              recognition.start();
-            } catch (e: any) {
-              // If error is "already started", that's actually good - means it's still running
-              if (e && !(e.message?.includes('already') || e.message?.includes('started'))) {
-                console.warn('[STT] Error restarting recognition:', e);
-              }
-            }
-          }
-        }, actualDelay);
-
-        // Store timeout reference in session for cleanup
-        if (currentSTTSession) {
-          (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
-        }
-      }
-    };
-
-    recognition.onnomatch = () => {
-      // CRITICAL: Stop processing audio when no match (no user speech detected)
-      // This prevents processing audio from playing during idle periods
-      if (currentSTTSession?.processingAudio) {
-        try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
-          }
-        } catch (e) {
-          console.warn('[STT] Error stopping processing audio on no match:', e);
-        }
-      }
-    };
-
-    // Start recognition
-    recognition.start();
 
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
