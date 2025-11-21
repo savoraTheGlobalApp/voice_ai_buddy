@@ -136,6 +136,8 @@ let currentSTTSession: {
   processingAudio?: HTMLAudioElement | null;
   processingOscillator?: OscillatorNode | null;
   processingGain?: GainNode | null;
+  processingAudioSourceNode?: MediaElementAudioSourceNode | null; // For Web Audio API fade-out
+  processingAudioGainNode?: GainNode | null; // For fade-out control
   isProcessingAudioPlaying?: () => boolean;
   greetingSpoken?: boolean; // Flag to prevent duplicate greeting speech
   deepgramTTSWs?: WebSocket | null; // Persistent Deepgram TTS WebSocket connection
@@ -679,9 +681,22 @@ export async function setupSTTMode(
           currentSTTSession.processingGain.disconnect();
         } catch (e) {}
       }
+      // Clean up Web Audio API nodes for processing audio
+      if (currentSTTSession.processingAudioSourceNode) {
+        try {
+          currentSTTSession.processingAudioSourceNode.disconnect();
+        } catch (e) {}
+      }
+      if (currentSTTSession.processingAudioGainNode) {
+        try {
+          currentSTTSession.processingAudioGainNode.disconnect();
+        } catch (e) {}
+      }
       if (currentSTTSession.processingAudio) {
-        currentSTTSession.processingAudio.pause();
-        currentSTTSession.processingAudio.currentTime = 0;
+        try {
+          currentSTTSession.processingAudio.pause();
+          currentSTTSession.processingAudio.currentTime = 0;
+        } catch (e) {}
       }
       // Clear any pending recognition restart timeout
       if ((currentSTTSession as any).recognitionRestartTimeout) {
@@ -1020,6 +1035,8 @@ export async function setupSTTMode(
       greetingSpoken: false, // Flag to prevent duplicate greeting speech
       processingOscillator: null,
       processingGain: null,
+      processingAudioSourceNode: null, // For Web Audio API fade-out
+      processingAudioGainNode: null, // For fade-out control
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
@@ -1107,10 +1124,66 @@ export async function setupSTTMode(
     };
 
     // Function to convert text to speech using OpenAI TTS
+    // Non-blocking fade-out function for processing audio
+    // Uses volume-based fade-out for simplicity and compatibility
+    const fadeOutProcessingAudio = async (duration: number = 100): Promise<void> => {
+      if (!currentSTTSession?.processingAudio) {
+        return;
+      }
+
+      const audio = currentSTTSession.processingAudio;
+
+      // Check if audio is actually playing
+      if (audio.paused || !currentSTTSession.isProcessingAudioPlaying?.()) {
+        return;
+      }
+
+      try {
+        // Use volume-based fade-out (simpler and doesn't interfere with audio element)
+        const startVolume = audio.volume || 0.4;
+        const steps = 8; // Smooth fade with 8 steps
+        const stepDuration = duration / steps;
+        const volumeStep = startVolume / steps;
+        
+        // Fade out volume smoothly
+        for (let i = 0; i <= steps; i++) {
+          setTimeout(() => {
+            if (currentSTTSession?.processingAudio && !currentSTTSession.processingAudio.paused) {
+              const newVolume = Math.max(0, startVolume - (volumeStep * i));
+              currentSTTSession.processingAudio.volume = newVolume;
+              
+              // Stop and reset on last step
+              if (i === steps) {
+                currentSTTSession.processingAudio.pause();
+                currentSTTSession.processingAudio.currentTime = 0;
+                currentSTTSession.processingAudio.volume = 0.4; // Reset for next use
+              }
+            }
+          }, i * stepDuration);
+        }
+        
+      } catch (e) {
+        // Fallback to immediate stop if fade-out fails
+        console.warn('[TTS] Fade-out failed, using immediate stop:', e);
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = 0.4; // Reset volume
+        } catch (err) {
+          console.warn('[TTS] Error stopping processing audio:', err);
+        }
+      }
+    };
+
     const textToSpeech = async (text: string): Promise<void> => {
-      // Stop processing audio completely before playing TTS (critical for Android)
+      // Fade out processing audio asynchronously (non-blocking)
+      // This allows TTS to start immediately without waiting
+      fadeOutProcessingAudio(100).catch(() => {
+        // Silently handle any errors - don't block TTS
+      });
+      
+      // Stop Web Audio API processing sound (if any) - non-blocking
       if (currentSTTSession) {
-        // Stop Web Audio API processing sound first (if any)
         if (currentSTTSession.processingOscillator) {
           try {
             currentSTTSession.processingOscillator.stop();
@@ -1128,24 +1201,9 @@ export async function setupSTTMode(
             console.warn('[TTS] Error stopping processing gain:', e);
           }
         }
-        
-        // Stop HTMLAudioElement processing audio
-        // Don't clear src - just pause and reset (prevents state issues and cache problems)
-        if (currentSTTSession.processingAudio) {
-          try {
-            // Stop playing immediately
-            currentSTTSession.processingAudio.pause();
-            currentSTTSession.processingAudio.currentTime = 0;
-            // Don't clear src or remove event listeners - just pause
-            // This prevents cache issues and state problems
-          } catch (e) {
-            console.warn('[TTS] Error stopping processing audio:', e);
-          }
-        }
-        
-        // Wait for Android to release audio focus (prevents conflicts)
-        await new Promise(resolve => setTimeout(resolve, 200));
       }
+      
+      // No blocking delay - TTS starts immediately
       
       // Resume AudioContext if suspended (required for Android Chrome)
       if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
@@ -2218,16 +2276,23 @@ export async function setupSTTMode(
           // Reset to start and play
           audio.currentTime = 0;
           
-          // Small delay to ensure audio context is ready (helps with Android)
-          await new Promise(resolve => setTimeout(resolve, 50));
-          
+          // No delay - play immediately for lower latency
           // Final validation before play
           if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
             console.error('[STT] Processing audio src invalid before play:', audio.src);
             throw new Error('Processing audio source became invalid');
           }
           
-          await audio.play();
+          // Play immediately without blocking delays
+          audio.play().catch((e) => {
+            console.warn('[STT] Could not play processing audio immediately:', e);
+            // Try once more after a brief moment if initial play fails
+            setTimeout(() => {
+              audio.play().catch(() => {
+                console.warn('[STT] Processing audio play retry also failed');
+              });
+            }, 50);
+          });
           console.log('[STT] Started processing audio (processing.mp3)');
         } catch (e) {
           console.error('[STT] Could not play processing audio:', e);
