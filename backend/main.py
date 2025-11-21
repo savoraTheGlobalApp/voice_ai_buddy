@@ -146,10 +146,14 @@ async def get_config():
     tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
     chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
     
+    # Check if Deepgram TTS is available (requires DEEPGRAM_API_KEY)
+    deepgram_tts_available = bool(os.getenv("DEEPGRAM_API_KEY"))
+    
     return {
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
         "chat_model": chat_model,
+        "deepgram_tts_available": deepgram_tts_available,
     }
 
 
@@ -483,9 +487,10 @@ async def text_to_speech(request: TTSRequest):
     - "gtts" (default): Free gTTS (Google Text-to-Speech) - most reliable free option
     - "edge": Edge TTS (Microsoft, can be blocked/rate-limited)
     - "openai": OpenAI TTS API (requires OPENAI_API_KEY, paid)
+    - "deepgram": Deepgram Aura-2 streaming TTS (requires DEEPGRAM_API_KEY, paid, low latency)
     - "webspeech": Web Speech API (browser-native, handled client-side only)
     
-    Note: "webspeech" is handled entirely in the browser and will not reach this endpoint.
+    Note: "webspeech" and "deepgram" are handled via WebSocket and should not reach this endpoint.
     Automatic fallback: If gTTS fails, tries OpenAI if API key is available.
     """
     # Get TTS provider from request (admin settings) or environment variable, default to "gtts"
@@ -497,6 +502,13 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(
             status_code=400,
             detail="Web Speech API is browser-native and must be handled client-side. This request should not reach the backend."
+        )
+    
+    # Deepgram TTS uses WebSocket, not HTTP POST
+    if tts_provider == "deepgram":
+        raise HTTPException(
+            status_code=400,
+            detail="Deepgram TTS uses WebSocket connection. Use /api/tts/deepgram WebSocket endpoint instead."
         )
     
     # Validate text is not empty
@@ -683,6 +695,120 @@ async def deepgram_stt_websocket(websocket: WebSocket):
         )
     except Exception as e:
         print(f"[Deepgram STT] Connection error: {e}")
+        await websocket.close(code=1011, reason=f"Server error: {str(e)}")
+
+
+@app.websocket("/api/tts/deepgram")
+async def deepgram_tts_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for Deepgram Aura-2 streaming TTS.
+    Receives text from frontend, sends to Deepgram, and streams PCM audio back.
+    Optimized for low latency real-time conversation.
+    """
+    await websocket.accept()
+    
+    dg_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not dg_api_key:
+        await websocket.close(code=1008, reason="DEEPGRAM_API_KEY not configured")
+        return
+    
+    try:
+        import websockets as ws_lib
+        
+        # Get Deepgram TTS model from env (default: aura-2-thalia-en)
+        tts_model = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en")
+        sample_rate = int(os.getenv("DEEPGRAM_TTS_SAMPLE_RATE", "48000"))
+        
+        # Deepgram TTS WebSocket URL
+        dg_url = (
+            f"wss://api.deepgram.com/v1/speak?"
+            f"model={tts_model}&encoding=linear16&sample_rate={sample_rate}"
+        )
+        
+        # Connect to Deepgram TTS
+        async with ws_lib.connect(
+            dg_url,
+            extra_headers={"Authorization": f"Token {dg_api_key}"}
+        ) as dg_ws:
+            print(f"[Deepgram TTS] WebSocket connected to Deepgram (model: {tts_model})")
+            
+            # Task to forward text messages from client to Deepgram
+            async def forward_text():
+                try:
+                    while True:
+                        # Receive text message from frontend
+                        message = await websocket.receive_text()
+                        try:
+                            data = json.loads(message)
+                            msg_type = data.get("type")
+                            
+                            if msg_type == "speak":
+                                # Send Speak message to Deepgram
+                                text = data.get("text", "")
+                                if text:
+                                    await dg_ws.send(json.dumps({
+                                        "type": "Speak",
+                                        "text": text
+                                    }))
+                            elif msg_type == "flush":
+                                # Send Flush message to Deepgram
+                                await dg_ws.send(json.dumps({"type": "Flush"}))
+                        except json.JSONDecodeError:
+                            # If not JSON, treat as plain text
+                            if message.strip():
+                                await dg_ws.send(json.dumps({
+                                    "type": "Speak",
+                                    "text": message
+                                }))
+                except WebSocketDisconnect:
+                    print("[Deepgram TTS] Client disconnected")
+                except Exception as e:
+                    print(f"[Deepgram TTS] Error forwarding text: {e}")
+            
+            # Task to forward audio from Deepgram to client
+            async def forward_audio():
+                try:
+                    async for message in dg_ws:
+                        if isinstance(message, bytes):
+                            # PCM audio data - forward to client
+                            await websocket.send_bytes(message)
+                        elif isinstance(message, str):
+                            # Control frame (JSON)
+                            try:
+                                data = json.loads(message)
+                                msg_type = data.get("type")
+                                
+                                if msg_type == "PlaybackFinished":
+                                    # Notify client that playback finished
+                                    await websocket.send_text(json.dumps({
+                                        "type": "playback_finished"
+                                    }))
+                                elif msg_type == "Error":
+                                    # Forward error to client
+                                    await websocket.send_text(json.dumps({
+                                        "type": "error",
+                                        "message": data.get("message", "Unknown error")
+                                    }))
+                            except json.JSONDecodeError:
+                                pass
+                except Exception as e:
+                    print(f"[Deepgram TTS] Error forwarding audio: {e}")
+            
+            # Run both tasks concurrently
+            try:
+                await asyncio.gather(forward_text(), forward_audio())
+            except WebSocketDisconnect:
+                print("[Deepgram TTS] Client disconnected")
+            except Exception as e:
+                print(f"[Deepgram TTS] Error: {e}")
+                
+    except ImportError:
+        await websocket.close(
+            code=1011,
+            reason="websockets library not installed. Run: pip install websockets"
+        )
+    except Exception as e:
+        print(f"[Deepgram TTS] Connection error: {e}")
         await websocket.close(code=1011, reason=f"Server error: {str(e)}")
 
 
