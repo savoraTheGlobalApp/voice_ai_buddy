@@ -8,4 +8,5 @@ gtts==2.5.2
 edge-tts==6.1.9
 pydub==0.25.1
 websockets==13.1
+numpy>=1.26.0
 
