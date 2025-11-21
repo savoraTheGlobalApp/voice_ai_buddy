@@ -1188,6 +1188,266 @@ export async function setupSTTMode(
           ttsProvider = 'gtts';
         }
         
+        // Handle Deepgram TTS (WebSocket streaming, low latency)
+        if (ttsProvider === 'deepgram') {
+          return new Promise<void>((resolve, reject) => {
+            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+            const wsUrl = backendUrl.replace(/^http/, 'ws') + '/api/tts/deepgram';
+            
+            let deepgramWs: WebSocket | null = null;
+            let audioContext: AudioContext | null = null;
+            let audioBufferSource: AudioBufferSourceNode | null = null;
+            let audioChunks: Float32Array[] = [];
+            let isPlaying = false;
+            let playbackFinished = false;
+            let scheduledTime = 0;
+            let nextPlayTime = 0;
+            
+            try {
+              // Create AudioContext for PCM playback (48kHz, mono, 16-bit linear PCM)
+              audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+                sampleRate: 48000
+              });
+              
+              // Resume AudioContext if suspended
+              if (audioContext.state === 'suspended') {
+                audioContext.resume().catch((e) => {
+                  console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
+                });
+              }
+              
+              // Connect to Deepgram TTS WebSocket
+              // Set binaryType to 'arraybuffer' to receive PCM audio as ArrayBuffer
+              deepgramWs = new WebSocket(wsUrl);
+              deepgramWs.binaryType = 'arraybuffer';
+              
+              deepgramWs.onopen = () => {
+                console.log('[Deepgram TTS] WebSocket connected');
+                
+                // Send text to Deepgram
+                // Split text into chunks for better streaming (similar to reference code)
+                const SEND_EVERY = 180; // characters per chunk
+                let buffer = '';
+                
+                const sendChunk = () => {
+                  if (buffer.length >= SEND_EVERY || buffer.length > 0) {
+                    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+                      deepgramWs.send(JSON.stringify({
+                        type: 'speak',
+                        text: buffer
+                      }));
+                    }
+                    buffer = '';
+                  }
+                };
+                
+                // Process text character by character
+                for (let i = 0; i < text.length; i++) {
+                  buffer += text[i];
+                  if (buffer.length >= SEND_EVERY) {
+                    sendChunk();
+                  }
+                }
+                
+                // Send remaining buffer and flush
+                sendChunk();
+                if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+                  deepgramWs.send(JSON.stringify({ type: 'flush' }));
+                }
+              };
+              
+              const processAudioChunk = (float32Array: Float32Array) => {
+                audioChunks.push(float32Array);
+                
+                // Start playing when we have enough audio (low latency) or continue streaming
+                if (!isPlaying) {
+                  if (audioChunks.length >= 2) {
+                    isPlaying = true;
+                    scheduleNextChunk();
+                  }
+                } else {
+                  // Continue scheduling chunks as they arrive
+                  scheduleNextChunk();
+                }
+              };
+              
+              deepgramWs.onmessage = async (event) => {
+                try {
+                  // Deepgram sends PCM audio as ArrayBuffer (binary data)
+                  if (event.data instanceof ArrayBuffer) {
+                    const int16Array = new Int16Array(event.data);
+                    
+                    // Convert Int16 to Float32 (-1.0 to 1.0 range)
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                      float32Array[i] = int16Array[i] / 32768.0;
+                    }
+                    
+                    processAudioChunk(float32Array);
+                  } else if (event.data instanceof Blob) {
+                    // Fallback: Convert Blob to ArrayBuffer if needed
+                    const arrayBuffer = await event.data.arrayBuffer();
+                    const int16Array = new Int16Array(arrayBuffer);
+                    
+                    // Convert Int16 to Float32 (-1.0 to 1.0 range)
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                      float32Array[i] = int16Array[i] / 32768.0;
+                    }
+                    
+                    processAudioChunk(float32Array);
+                  } else if (typeof event.data === 'string') {
+                    // Control message
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'playback_finished') {
+                      console.log('[Deepgram TTS] Playback finished signal received');
+                      playbackFinished = true;
+                      // Play any remaining chunks
+                      if (audioChunks.length > 0) {
+                        scheduleNextChunk();
+                      } else if (isPlaying && audioBufferSource) {
+                        // Wait for current playback to finish
+                        audioBufferSource.onended = () => {
+                          cleanup();
+                          resolve();
+                        };
+                      } else {
+                        // No more audio, cleanup
+                        setTimeout(() => {
+                          cleanup();
+                          resolve();
+                        }, 100);
+                      }
+                    } else if (data.type === 'error') {
+                      console.error('[Deepgram TTS] Error from server:', data.message);
+                      cleanup();
+                      reject(new Error(`Deepgram TTS error: ${data.message || 'Unknown error'}`));
+                    }
+                  }
+                } catch (e) {
+                  console.error('[Deepgram TTS] Error processing message:', e);
+                }
+              };
+              
+              deepgramWs.onerror = (error) => {
+                console.error('[Deepgram TTS] WebSocket error:', error);
+                cleanup();
+                reject(new Error('Deepgram TTS WebSocket error'));
+              };
+              
+              deepgramWs.onclose = (event) => {
+                console.log('[Deepgram TTS] WebSocket closed', event.code, event.reason);
+                if (!playbackFinished) {
+                  // If closed unexpectedly, try to play remaining audio
+                  if (audioChunks.length > 0) {
+                    scheduleNextChunk();
+                  }
+                  // Wait for playback to finish or timeout
+                  setTimeout(() => {
+                    if (!playbackFinished) {
+                      cleanup();
+                      resolve();
+                    }
+                  }, 2000);
+                }
+              };
+              
+              const scheduleNextChunk = async () => {
+                if (!audioContext || audioChunks.length === 0) return;
+                
+                try {
+                  // Ensure AudioContext is running
+                  if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                  }
+                  
+                  // Get the next chunk
+                  const chunk = audioChunks.shift();
+                  if (!chunk) return;
+                  
+                  // Create AudioBuffer for this chunk
+                  const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
+                  const channelData = audioBuffer.getChannelData(0);
+                  channelData.set(chunk);
+                  
+                  // Create source for this chunk
+                  const source = audioContext.createBufferSource();
+                  source.buffer = audioBuffer;
+                  source.connect(audioContext.destination);
+                  
+                  // Schedule playback
+                  const currentTime = audioContext.currentTime;
+                  const startTime = Math.max(currentTime, nextPlayTime);
+                  
+                  source.start(startTime);
+                  nextPlayTime = startTime + chunk.length / audioContext.sampleRate;
+                  
+                  // Handle end of this chunk
+                  source.onended = () => {
+                    // Schedule next chunk if available
+                    if (audioChunks.length > 0) {
+                      scheduleNextChunk();
+                    } else if (playbackFinished) {
+                      // All chunks played and playback finished signal received
+                      cleanup();
+                      resolve();
+                    } else {
+                      // No more chunks but waiting for more or finish signal
+                      isPlaying = false;
+                    }
+                  };
+                  
+                  // Store reference to current source
+                  audioBufferSource = source;
+                } catch (e) {
+                  console.error('[Deepgram TTS] Error scheduling audio chunk:', e);
+                  // Try to continue with next chunk
+                  if (audioChunks.length > 0) {
+                    setTimeout(() => scheduleNextChunk(), 10);
+                  } else {
+                    cleanup();
+                    reject(e);
+                  }
+                }
+              };
+              
+              const cleanup = () => {
+                if (audioBufferSource) {
+                  try {
+                    audioBufferSource.stop();
+                    audioBufferSource.disconnect();
+                  } catch (e) {}
+                  audioBufferSource = null;
+                }
+                if (deepgramWs) {
+                  try {
+                    if (deepgramWs.readyState === WebSocket.OPEN || deepgramWs.readyState === WebSocket.CONNECTING) {
+                      deepgramWs.close();
+                    }
+                  } catch (e) {}
+                  deepgramWs = null;
+                }
+                // Don't close AudioContext - it might be used elsewhere
+                isPlaying = false;
+                playbackFinished = true;
+              };
+              
+              // Timeout safety (30 seconds for longer responses)
+              setTimeout(() => {
+                if (!playbackFinished) {
+                  console.warn('[Deepgram TTS] Timeout reached, cleaning up');
+                  cleanup();
+                  resolve(); // Resolve instead of reject to prevent blocking
+                }
+              }, 30000);
+              
+            } catch (e) {
+              console.error('[Deepgram TTS] Setup error:', e);
+              reject(e);
+            }
+          });
+        }
+        
         // Handle Web Speech API (browser-native, no backend call needed)
         if (ttsProvider === 'webspeech') {
           if (!('speechSynthesis' in window)) {
@@ -3154,6 +3414,7 @@ export default function Page() {
                   >
                     <option value="gtts">gTTS</option>
                     <option value="openai">OpenAI TTS</option>
+                    <option value="deepgram">Deepgram Aura-2</option>
                     <option value="webspeech">Web Speech API</option>
                   </select>
                 </div>
