@@ -5,7 +5,7 @@ Future: Hardware control, ML models, parental insights
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import os
 import re
 import httpx
@@ -267,6 +267,96 @@ async def chat(request: ChatRequest):
             status_code=500,
             detail=f"Unexpected server error: {str(e)}"
         )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat API endpoint for low-latency TTS (e.g., Deepgram TTS).
+    Streams chat completions as Server-Sent Events (SSE).
+    Only use this when TTS provider supports streaming (e.g., Deepgram).
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    # Use model from request, or fall back to environment variable, or default
+    model = request.model or os.getenv("CHAT_MODEL", "gpt-4o-mini")
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    'POST',
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": request.messages,
+                        "temperature": 0.7,
+                        "max_tokens": 500,
+                        "stream": True,  # Enable streaming
+                    },
+                    timeout=30.0,
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        yield f"data: {json.dumps({'error': f'OpenAI API error: {error_text.decode()}'})}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        
+                        # OpenAI SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            
+                            # Check for [DONE] marker
+                            if data_str.strip() == "[DONE]":
+                                yield f"data: {json.dumps({'done': True})}\n\n"
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                choices = data.get("choices", [])
+                                if choices and len(choices) > 0:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    
+                                    if content:
+                                        # Send text chunk
+                                        yield f"data: {json.dumps({'delta': content, 'done': False})}\n\n"
+                                    
+                                    # Check if this is the final chunk
+                                    finish_reason = choices[0].get("finish_reason")
+                                    if finish_reason:
+                                        yield f"data: {json.dumps({'delta': '', 'done': True})}\n\n"
+                                        break
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON lines
+                                continue
+
+        except httpx.HTTPError as e:
+            yield f"data: {json.dumps({'error': f'Network error: {str(e)}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': f'Server error: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
 
 
 async def _generate_gtts(text: str, lang: str = "en") -> bytes:
