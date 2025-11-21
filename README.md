@@ -231,4 +231,4 @@ npm run dev
 
 ## License
 
-[Add your license here]
+iCurious AI
