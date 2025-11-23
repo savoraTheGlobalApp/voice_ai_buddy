@@ -141,6 +141,10 @@ let currentSTTSession: {
   deepgramTtsWs?: WebSocket | null; // Persistent Deepgram TTS WebSocket connection
   deepgramTtsAudioContext?: AudioContext | null; // Shared AudioContext for TTS playback
   deepgramTtsNextPlayTime?: number; // Next scheduled play time for seamless playback
+  deepgramTtsAudioQueue?: Float32Array[]; // Shared queue for sequential audio playback
+  deepgramTtsIsProcessingQueue?: boolean; // Flag to prevent concurrent queue processing
+  deepgramTtsActiveSources?: Set<AudioBufferSourceNode>; // Track active audio sources for interruption
+  currentTTSAudioElement?: HTMLAudioElement | null; // Track current TTS audio element for interruption (gTTS, OpenAI, Edge TTS)
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -889,6 +893,9 @@ export async function setupSTTMode(
             
             console.log('[STT] User said:', transcript);
             
+            // Stop current TTS playback if user interrupts (for all TTS providers)
+            stopCurrentTTS();
+            
             // Get TTS provider to determine feedback method (synchronous check first)
             let ttsProvider: string | null = null;
             try {
@@ -997,11 +1004,8 @@ export async function setupSTTMode(
                   }
                 };
 
-                // Start TTS playback setup (similar to textToSpeech function)
-                let audioChunks: Float32Array[] = [];
-                let isPlaying = false;
+                // Use shared queue for sequential audio playback (prevents overlap)
                 let playbackFinished = false;
-                let nextPlayTime = currentSTTSession?.deepgramTtsNextPlayTime || 0;
                 
                 if (!deepgramTtsAudioContext) {
                   throw new Error('Deepgram TTS AudioContext not available');
@@ -1009,10 +1013,106 @@ export async function setupSTTMode(
 
                 const audioContext = deepgramTtsAudioContext;
                 
+                // Ensure shared queue exists
+                if (!currentSTTSession) {
+                  throw new Error('STT session not available');
+                }
+                if (!currentSTTSession.deepgramTtsAudioQueue) {
+                  currentSTTSession.deepgramTtsAudioQueue = [];
+                }
+                if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
+                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                }
+                
                 // Resume AudioContext if suspended
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
                 }
+
+                // Shared queue processor function (processes all audio chunks sequentially)
+                const processAudioQueue = async () => {
+                  if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
+                    return;
+                  }
+                  
+                  // Prevent concurrent processing
+                  if (currentSTTSession.deepgramTtsIsProcessingQueue) {
+                    return;
+                  }
+                  
+                  const queue = currentSTTSession.deepgramTtsAudioQueue;
+                  if (queue.length === 0) {
+                    return;
+                  }
+                  
+                  currentSTTSession.deepgramTtsIsProcessingQueue = true;
+                  
+                  try {
+                    if (audioContext.state === 'suspended') {
+                      await audioContext.resume();
+                    }
+
+                    const chunk = queue.shift(); // Get first chunk from queue
+                    if (!chunk) {
+                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                      return;
+                    }
+
+                    const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
+                    audioBuffer.getChannelData(0).set(chunk);
+
+                    const source = audioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(audioContext.destination);
+
+                    // Track active source for interruption handling
+                    if (currentSTTSession) {
+                      if (!currentSTTSession.deepgramTtsActiveSources) {
+                        currentSTTSession.deepgramTtsActiveSources = new Set();
+                      }
+                      currentSTTSession.deepgramTtsActiveSources.add(source);
+                    }
+
+                    const currentTime = audioContext.currentTime;
+                    const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime || 0;
+                    const playTime = Math.max(currentTime, nextPlayTime);
+                    source.start(playTime);
+
+                    const duration = audioBuffer.duration;
+                    const newNextPlayTime = playTime + duration;
+                    
+                    // Update next play time in session
+                    if (currentSTTSession) {
+                      currentSTTSession.deepgramTtsNextPlayTime = newNextPlayTime;
+                    }
+
+                    source.onended = () => {
+                      // Remove from active sources
+                      if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
+                        currentSTTSession.deepgramTtsActiveSources.delete(source);
+                      }
+                      
+                      // Mark processing as done
+                      if (currentSTTSession) {
+                        currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                      }
+                      
+                      // Process next chunk if available
+                      if (queue.length > 0) {
+                        processAudioQueue();
+                      }
+                    };
+                  } catch (e) {
+                    console.error('[Deepgram TTS] Error processing audio queue:', e);
+                    if (currentSTTSession) {
+                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    }
+                    // Try to continue processing if queue has more chunks
+                    if (queue.length > 0) {
+                      processAudioQueue();
+                    }
+                  }
+                };
 
                 // Set up message handler for this streaming session
                 const originalOnMessage = deepgramTtsWs.onmessage;
@@ -1035,15 +1135,15 @@ export async function setupSTTMode(
                         float32Array[i] = int16Array[i] / 32768.0;
                       }
 
-                      audioChunks.push(float32Array);
-
-                      // Start playing immediately with first chunk
-                      if (!isPlaying && audioChunks.length >= 1) {
-                        isPlaying = true;
-                        scheduleNextChunk();
-                        console.log('[Deepgram TTS Stream] Started playback with first audio chunk');
-                      } else if (isPlaying) {
-                        scheduleNextChunk();
+                      // Add to shared queue instead of local array
+                      if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+                        currentSTTSession.deepgramTtsAudioQueue.push(float32Array);
+                        
+                        // Start processing queue if not already processing
+                        if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
+                          processAudioQueue();
+                          console.log('[Deepgram TTS Stream] Added chunk to queue, started processing');
+                        }
                       }
                     } else if (typeof event.data === 'string') {
                       try {
@@ -1062,47 +1162,6 @@ export async function setupSTTMode(
                     }
                   } catch (e) {
                     console.error('[Deepgram TTS Stream] Error processing message:', e);
-                  }
-                };
-
-                const scheduleNextChunk = async () => {
-                  if (!audioContext || audioChunks.length === 0) return;
-
-                  try {
-                    if (audioContext.state === 'suspended') {
-                      await audioContext.resume();
-                    }
-
-                    const chunk = audioChunks.shift();
-                    if (!chunk) return;
-
-                    const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
-                    audioBuffer.getChannelData(0).set(chunk);
-
-                    const source = audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(audioContext.destination);
-
-                    const currentTime = audioContext.currentTime;
-                    const playTime = Math.max(currentTime, nextPlayTime);
-                    source.start(playTime);
-
-                    const duration = audioBuffer.duration;
-                    nextPlayTime = playTime + duration;
-
-                    source.onended = () => {
-                      if (audioChunks.length > 0) {
-                        scheduleNextChunk();
-                      } else {
-                        // All chunks played, update session with next play time
-                        if (currentSTTSession) {
-                          currentSTTSession.deepgramTtsNextPlayTime = nextPlayTime;
-                        }
-                        // Don't cleanup here - wait for playback_finished signal
-                      }
-                    };
-                  } catch (e) {
-                    console.error('[Deepgram TTS Stream] Error scheduling chunk:', e);
                   }
                 };
 
@@ -1131,14 +1190,23 @@ export async function setupSTTMode(
                 // playbackFinished will be set to true when we receive 'playback_finished' from Deepgram
                 const waitForPlayback = () => {
                   return new Promise<void>((resolve) => {
+                    // Check if queue is empty and playback finished
+                    const checkComplete = () => {
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                      
+                      return playbackFinished && queueEmpty && notProcessing;
+                    };
+                    
                     // If already finished, resolve immediately
-                    if (playbackFinished && audioChunks.length === 0) {
+                    if (checkComplete()) {
                       resolve();
                       return;
                     }
 
                     const checkInterval = setInterval(() => {
-                      if (playbackFinished && audioChunks.length === 0) {
+                      if (checkComplete()) {
                         clearInterval(checkInterval);
                         resolve();
                       }
@@ -1536,6 +1604,65 @@ export async function setupSTTMode(
       throw lastError || new Error('Chat API error: All retry attempts failed');
     };
 
+    // Function to stop current TTS playback (for interruption handling)
+    const stopCurrentTTS = () => {
+      if (!currentSTTSession) return;
+      
+      console.log('[TTS] Stopping current TTS playback due to user interruption');
+      
+      // Stop Deepgram TTS playback
+      // Stop all active audio sources
+      if (currentSTTSession.deepgramTtsActiveSources) {
+        currentSTTSession.deepgramTtsActiveSources.forEach((source) => {
+          try {
+            source.stop();
+            source.disconnect();
+          } catch (e) {
+            // Source may already be stopped, ignore
+          }
+        });
+        currentSTTSession.deepgramTtsActiveSources.clear();
+      }
+      
+      // Clear audio queue
+      if (currentSTTSession.deepgramTtsAudioQueue) {
+        currentSTTSession.deepgramTtsAudioQueue.length = 0;
+      }
+      
+      // Reset processing flag
+      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+      
+      // Reset next play time to allow immediate playback of new response
+      currentSTTSession.deepgramTtsNextPlayTime = 0;
+      
+      // Send flush signal to Deepgram TTS to stop current generation
+      if (currentSTTSession.deepgramTtsWs && 
+          currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
+        try {
+          currentSTTSession.deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+          console.log('[TTS] Sent flush signal to stop current TTS generation');
+        } catch (e) {
+          console.warn('[TTS] Error sending flush signal:', e);
+        }
+      }
+      
+      // Stop other TTS providers (gTTS, OpenAI, Edge TTS) - stop HTMLAudioElement playback
+      if (currentSTTSession.currentTTSAudioElement) {
+        try {
+          const audioEl = currentSTTSession.currentTTSAudioElement;
+          audioEl.pause();
+          audioEl.currentTime = 0;
+          // Clear src to stop loading/playing
+          audioEl.src = '';
+          audioEl.load();
+          currentSTTSession.currentTTSAudioElement = null;
+          console.log('[TTS] Stopped current HTMLAudioElement playback');
+        } catch (e) {
+          console.warn('[TTS] Error stopping HTMLAudioElement:', e);
+        }
+      }
+    };
+
     // Function to convert text to speech using OpenAI TTS
     const textToSpeech = async (text: string): Promise<void> => {
       // Stop processing audio immediately (for all TTS providers, but especially important for Deepgram)
@@ -1669,6 +1796,9 @@ export async function setupSTTMode(
                 currentSTTSession.deepgramTtsWs = deepgramWs;
                 currentSTTSession.deepgramTtsAudioContext = audioContext;
                 currentSTTSession.deepgramTtsNextPlayTime = 0;
+                currentSTTSession.deepgramTtsAudioQueue = []; // Initialize shared audio queue
+                currentSTTSession.deepgramTtsIsProcessingQueue = false; // Initialize processing flag
+                currentSTTSession.deepgramTtsActiveSources = new Set(); // Initialize active sources tracking
               }
               
               deepgramWs.onopen = () => {
@@ -1777,104 +1907,137 @@ export async function setupSTTMode(
               return;
             }
             
-            // Per-request state
-            let audioBufferSource: AudioBufferSourceNode | null = null;
-            let audioChunks: Float32Array[] = [];
-            let isPlaying = false;
+            // Use shared queue for sequential audio playback (prevents overlap)
             let playbackFinished = false;
-            let nextPlayTime = currentSTTSession?.deepgramTtsNextPlayTime || 0;
             
-            const processAudioChunk = (float32Array: Float32Array) => {
-              audioChunks.push(float32Array);
-              
-              // Start playing immediately with first chunk for lowest latency
-              // Reduced from 2 chunks to 1 chunk to minimize delay
-              if (!isPlaying) {
-                if (audioChunks.length >= 1) {
-                  isPlaying = true;
-                  scheduleNextChunk();
-                  console.log('[Deepgram TTS] Started playback with first audio chunk');
-                }
-              } else {
-                // Continue scheduling chunks as they arrive
-                scheduleNextChunk();
+            // Ensure shared queue exists
+            if (!currentSTTSession) {
+              reject(new Error('STT session not available'));
+              return;
+            }
+            if (!currentSTTSession.deepgramTtsAudioQueue) {
+              currentSTTSession.deepgramTtsAudioQueue = [];
+            }
+            if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
+              currentSTTSession.deepgramTtsIsProcessingQueue = false;
+            }
+            
+            // Resume AudioContext if suspended
+            if (audioContext && audioContext.state === 'suspended') {
+              audioContext.resume().catch((e) => {
+                console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
+              });
+            }
+            
+            // Shared queue processor function (processes all audio chunks sequentially)
+            const processAudioQueue = async () => {
+              if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
+                return;
               }
-            };
-            
-            const scheduleNextChunk = async () => {
-              if (!audioContext || audioChunks.length === 0) return;
+              
+              // Prevent concurrent processing
+              if (currentSTTSession.deepgramTtsIsProcessingQueue) {
+                return;
+              }
+              
+              const queue = currentSTTSession.deepgramTtsAudioQueue;
+              if (queue.length === 0) {
+                return;
+              }
+              
+              currentSTTSession.deepgramTtsIsProcessingQueue = true;
               
               try {
-                // Ensure AudioContext is running
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
                 }
-                
-                // Get the next chunk
-                const chunk = audioChunks.shift();
-                if (!chunk) return;
-                
-                // Create AudioBuffer for this chunk
+
+                const chunk = queue.shift(); // Get first chunk from queue
+                if (!chunk) {
+                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                  return;
+                }
+
                 const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
-                const channelData = audioBuffer.getChannelData(0);
-                channelData.set(chunk);
-                
-                // Create source for this chunk
+                audioBuffer.getChannelData(0).set(chunk);
+
                 const source = audioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(audioContext.destination);
-                
-                // Schedule playback
+
+                // Track active source for interruption handling
+                if (currentSTTSession) {
+                  if (!currentSTTSession.deepgramTtsActiveSources) {
+                    currentSTTSession.deepgramTtsActiveSources = new Set();
+                  }
+                  currentSTTSession.deepgramTtsActiveSources.add(source);
+                }
+
                 const currentTime = audioContext.currentTime;
-                const startTime = Math.max(currentTime, nextPlayTime);
+                const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime || 0;
+                const playTime = Math.max(currentTime, nextPlayTime);
+                source.start(playTime);
+
+                const duration = audioBuffer.duration;
+                const newNextPlayTime = playTime + duration;
                 
-                source.start(startTime);
-                nextPlayTime = startTime + chunk.length / audioContext.sampleRate;
-                
-                // Handle end of this chunk
+                // Update next play time in session
+                if (currentSTTSession) {
+                  currentSTTSession.deepgramTtsNextPlayTime = newNextPlayTime;
+                }
+
                 source.onended = () => {
-                  // Schedule next chunk if available
-                  if (audioChunks.length > 0) {
-                    scheduleNextChunk();
+                  // Remove from active sources
+                  if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
+                    currentSTTSession.deepgramTtsActiveSources.delete(source);
+                  }
+                  
+                  // Mark processing as done
+                  if (currentSTTSession) {
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                  }
+                  
+                  // Process next chunk if available
+                  if (queue.length > 0) {
+                    processAudioQueue();
                   } else if (playbackFinished) {
                     // All chunks played and playback finished signal received
                     cleanup();
                     resolve();
-                  } else {
-                    // No more chunks but waiting for more or finish signal
-                    isPlaying = false;
                   }
                 };
-                
-                // Store reference to current source
-                audioBufferSource = source;
               } catch (e) {
-                console.error('[Deepgram TTS] Error scheduling audio chunk:', e);
-                // Try to continue with next chunk
-                if (audioChunks.length > 0) {
-                  setTimeout(() => scheduleNextChunk(), 10);
-                } else {
+                console.error('[Deepgram TTS] Error processing audio queue:', e);
+                if (currentSTTSession) {
+                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                }
+                // Try to continue processing if queue has more chunks
+                if (queue.length > 0) {
+                  processAudioQueue();
+                } else if (playbackFinished) {
                   cleanup();
-                  reject(e);
+                  resolve();
+                }
+              }
+            };
+            
+            const processAudioChunk = (float32Array: Float32Array) => {
+              // Add to shared queue instead of local array
+              if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+                currentSTTSession.deepgramTtsAudioQueue.push(float32Array);
+                
+                // Start processing queue if not already processing
+                if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
+                  processAudioQueue();
+                  console.log('[Deepgram TTS] Added chunk to queue, started processing');
                 }
               }
             };
             
             const cleanup = () => {
-              if (audioBufferSource) {
-                try {
-                  audioBufferSource.stop();
-                  audioBufferSource.disconnect();
-                } catch (e) {}
-                audioBufferSource = null;
-              }
               // Don't close WebSocket - keep it open for reuse
               // Don't close AudioContext - it's shared across requests
-              // Update next play time for seamless next playback
-              if (currentSTTSession && audioContext) {
-                currentSTTSession.deepgramTtsNextPlayTime = nextPlayTime;
-              }
-              isPlaying = false;
+              // Next play time is already updated in processAudioQueue
               playbackFinished = true;
             };
             
@@ -1911,21 +2074,38 @@ export async function setupSTTMode(
                     if (data.type === 'playback_finished') {
                       console.log('[Deepgram TTS] Playback finished signal received');
                       playbackFinished = true;
-                      // Play any remaining chunks
-                      if (audioChunks.length > 0) {
-                        scheduleNextChunk();
-                      } else if (isPlaying && audioBufferSource) {
-                        // Wait for current playback to finish
-                        audioBufferSource.onended = () => {
-                          cleanup();
-                          resolve();
-                        };
+                      // Check if queue is empty and not processing
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                      
+                      if (queueEmpty && notProcessing) {
+                        // All audio played, cleanup and resolve
+                        cleanup();
+                        resolve();
                       } else {
-                        // No more audio, cleanup
+                        // Still processing queue, wait for it to finish
+                        const checkComplete = () => {
+                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                          const notProc = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                          return qEmpty && notProc;
+                        };
+                        
+                        const waitInterval = setInterval(() => {
+                          if (checkComplete()) {
+                            clearInterval(waitInterval);
+                            cleanup();
+                            resolve();
+                          }
+                        }, 50);
+                        
+                        // Timeout after 5 seconds
                         setTimeout(() => {
+                          clearInterval(waitInterval);
                           cleanup();
                           resolve();
-                        }, 100);
+                        }, 5000);
                       }
                     } else if (data.type === 'error') {
                       console.error('[Deepgram TTS] Error from server:', data.message);
@@ -1953,20 +2133,41 @@ export async function setupSTTMode(
                     const data = JSON.parse(event.data);
                     if (data.type === 'playback_finished') {
                       playbackFinished = true;
-                      if (audioChunks.length > 0) {
-                        scheduleNextChunk();
-                      } else if (isPlaying && audioBufferSource) {
-                        audioBufferSource.onended = () => {
-                          cleanup();
-                          deepgramWs?.removeEventListener('message', tempHandler);
-                          resolve();
-                        };
+                      // Check if queue is empty and not processing
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                      
+                      if (queueEmpty && notProcessing) {
+                        // All audio played, cleanup and resolve
+                        cleanup();
+                        deepgramWs?.removeEventListener('message', tempHandler);
+                        resolve();
                       } else {
+                        // Still processing queue, wait for it to finish
+                        const checkComplete = () => {
+                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                          const notProc = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                          return qEmpty && notProc;
+                        };
+                        
+                        const waitInterval = setInterval(() => {
+                          if (checkComplete()) {
+                            clearInterval(waitInterval);
+                            cleanup();
+                            deepgramWs?.removeEventListener('message', tempHandler);
+                            resolve();
+                          }
+                        }, 50);
+                        
+                        // Timeout after 5 seconds
                         setTimeout(() => {
+                          clearInterval(waitInterval);
                           cleanup();
                           deepgramWs?.removeEventListener('message', tempHandler);
                           resolve();
-                        }, 100);
+                        }, 5000);
                       }
                     }
                   }
@@ -2332,6 +2533,10 @@ export async function setupSTTMode(
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
+            // Clear current audio element reference
+            if (currentSTTSession && currentSTTSession.currentTTSAudioElement === audioEl) {
+              currentSTTSession.currentTTSAudioElement = null;
+            }
             // Remove event listeners to prevent beeps after audio ends
             if (audioEl) {
               audioEl.removeEventListener('pause', handlePause);
@@ -2520,6 +2725,9 @@ export async function setupSTTMode(
       }
 
       console.log('[STT] User said:', transcript);
+      
+      // Stop current TTS playback if user interrupts (for all TTS providers)
+      stopCurrentTTS();
 
       // Get TTS provider to determine feedback method
       let ttsProvider: string | null = null;
