@@ -42,6 +42,12 @@ except ImportError:
 # Load environment variables from .env file
 load_dotenv()
 
+# Deepgram STT endpointing configuration (silence duration in milliseconds before finalizing transcript)
+# Lower values = faster response but may split sentences on natural pauses
+# Higher values = more natural but slightly higher latency
+# Recommended: 1200ms (1.2 seconds) for real-time conversation
+DEEPGRAM_STT_ENDPOINTING_MS = 1200
+
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
 
 # CORS configuration - allow Next.js frontend
@@ -725,11 +731,12 @@ async def deepgram_stt_websocket(websocket: WebSocket):
     try:
         import websockets as ws_lib
         
-        # Deepgram WebSocket URL
+        # Deepgram WebSocket URL with endpointing configuration
         dg_url = (
             f"wss://api.deepgram.com/v1/listen?"
             f"model=nova-3&encoding=linear16&sample_rate=48000"
             f"&punctuate=true&interim_results=false"
+            f"&endpointing={DEEPGRAM_STT_ENDPOINTING_MS}"
         )
         
         # Connect to Deepgram
