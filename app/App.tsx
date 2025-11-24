@@ -145,6 +145,7 @@ let currentSTTSession: {
   deepgramTtsIsProcessingQueue?: boolean; // Flag to prevent concurrent queue processing
   deepgramTtsActiveSources?: Set<AudioBufferSourceNode>; // Track active audio sources for interruption
   currentTTSAudioElement?: HTMLAudioElement | null; // Track current TTS audio element for interruption (gTTS, OpenAI, Edge TTS)
+  currentTTSResponseId?: number; // Response ID counter to track and discard stale audio chunks from interrupted responses
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -940,7 +941,7 @@ export async function setupSTTMode(
               // Default to gtts while fetching
               ttsProvider = 'gtts';
             }
-
+            
             // Start playing processing audio
             // Only for non-Deepgram TTS providers (to maintain backward compatibility)
             if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
@@ -967,7 +968,7 @@ export async function setupSTTMode(
                 if (!deepgramTtsWs || deepgramTtsWs.readyState !== WebSocket.OPEN) {
                   // If WebSocket not ready, fallback to non-streaming
                   console.warn('[STT] Deepgram TTS WebSocket not ready, falling back to non-streaming');
-                  const assistantMessage = await getChatResponse(transcript);
+            const assistantMessage = await getChatResponse(transcript);
                   if (onThinkingUpdate) {
                     onThinkingUpdate(false);
                   }
@@ -1024,6 +1025,11 @@ export async function setupSTTMode(
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 }
                 
+                // Capture current Response ID for this TTT/TTS cycle
+                // All audio chunks from this response must match this ID
+                const currentResponseId = currentSTTSession.currentTTSResponseId || 0;
+                console.log('[Deepgram TTS Stream] Captured Response ID:', currentResponseId);
+                
                 // Resume AudioContext if suspended
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
@@ -1040,6 +1046,20 @@ export async function setupSTTMode(
                     return;
                   }
                   
+                  // Check if Response ID still matches (response not interrupted)
+                  // This ensures we don't process chunks from stale/interrupted responses
+                  const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
+                  if (sessionResponseId !== currentResponseId) {
+                    console.log('[Deepgram TTS Stream] Stopping queue processing - Response ID mismatch:', 
+                      'queue ID:', currentResponseId, 'current ID:', sessionResponseId);
+                    // Clear queue of stale chunks
+                    if (currentSTTSession.deepgramTtsAudioQueue) {
+                      currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                    }
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    return;
+                  }
+                  
                   const queue = currentSTTSession.deepgramTtsAudioQueue;
                   if (queue.length === 0) {
                     return;
@@ -1050,6 +1070,18 @@ export async function setupSTTMode(
                   try {
                     if (audioContext.state === 'suspended') {
                       await audioContext.resume();
+                    }
+
+                    // Re-validate Response ID before processing chunk (double-check for race conditions)
+                    const currentSessionResponseId = currentSTTSession.currentTTSResponseId || 0;
+                    if (currentSessionResponseId !== currentResponseId) {
+                      console.log('[Deepgram TTS Stream] Response ID changed during processing, aborting chunk');
+                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                      // Clear remaining stale chunks
+                      if (currentSTTSession.deepgramTtsAudioQueue) {
+                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                      }
+                      return;
                     }
 
                     const chunk = queue.shift(); // Get first chunk from queue
@@ -1097,9 +1129,16 @@ export async function setupSTTMode(
                         currentSTTSession.deepgramTtsIsProcessingQueue = false;
                       }
                       
-                      // Process next chunk if available
-                      if (queue.length > 0) {
+                      // Process next chunk if available (only if Response ID still matches)
+                      const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
+                      if (queue.length > 0 && sessionResponseId === currentResponseId) {
                         processAudioQueue();
+                      } else if (sessionResponseId !== currentResponseId) {
+                        // Response was interrupted, clear remaining stale chunks
+                        console.log('[Deepgram TTS Stream] Clearing stale queue chunks - Response interrupted');
+                        if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+                          currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                        }
                       }
                     };
                   } catch (e) {
@@ -1107,9 +1146,16 @@ export async function setupSTTMode(
                     if (currentSTTSession) {
                       currentSTTSession.deepgramTtsIsProcessingQueue = false;
                     }
-                    // Try to continue processing if queue has more chunks
-                    if (queue.length > 0) {
+                    // Try to continue processing if queue has more chunks (only if Response ID matches)
+                    const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
+                    if (queue.length > 0 && sessionResponseId === currentResponseId) {
                       processAudioQueue();
+                    } else if (sessionResponseId !== currentResponseId) {
+                      // Response was interrupted, clear stale chunks
+                      console.log('[Deepgram TTS Stream] Clearing stale queue chunks after error - Response interrupted');
+                      if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                      }
                     }
                   }
                 };
@@ -1128,6 +1174,15 @@ export async function setupSTTMode(
                 deepgramTtsWs.onmessage = async (event) => {
                   try {
                     if (event.data instanceof ArrayBuffer) {
+                      // Check if this chunk belongs to the current response
+                      // If Response ID has changed (due to interruption), discard this chunk
+                      const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
+                      if (sessionResponseId !== currentResponseId) {
+                        console.log('[Deepgram TTS Stream] Discarding stale chunk - Response ID mismatch:', 
+                          'chunk ID:', currentResponseId, 'current ID:', sessionResponseId);
+                        return; // Discard chunk from old/interrupted response
+                      }
+                      
                       // Convert ArrayBuffer to Float32Array (PCM audio)
                       const int16Array = new Int16Array(event.data);
                       const float32Array = new Float32Array(int16Array.length);
@@ -1250,9 +1305,9 @@ export async function setupSTTMode(
               if (ttsProvider === 'deepgram' && onThinkingUpdate) {
                 onThinkingUpdate(false);
               }
-              
-              // Convert to speech
-              await textToSpeech(assistantMessage);
+            
+            // Convert to speech
+            await textToSpeech(assistantMessage);
             }
           }
         } catch (e) {
@@ -1383,6 +1438,7 @@ export async function setupSTTMode(
       processingOscillator: null,
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
+      currentTTSResponseId: 0, // Initialize response ID counter
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
       ...(sttProvider && { sttProvider }),
@@ -1635,6 +1691,14 @@ export async function setupSTTMode(
       // Reset next play time to allow immediate playback of new response
       currentSTTSession.deepgramTtsNextPlayTime = 0;
       
+      // Increment response ID to invalidate all in-flight TTT/TTS responses
+      // This ensures stale audio chunks from interrupted responses are discarded
+      if (currentSTTSession.currentTTSResponseId === undefined) {
+        currentSTTSession.currentTTSResponseId = 0;
+      }
+      currentSTTSession.currentTTSResponseId++;
+      console.log('[TTS] Response ID incremented to:', currentSTTSession.currentTTSResponseId);
+      
       // Send flush signal to Deepgram TTS to stop current generation
       if (currentSTTSession.deepgramTtsWs && 
           currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
@@ -1698,9 +1762,9 @@ export async function setupSTTMode(
           } catch (e) {
             console.warn('[TTS] Error stopping processing audio:', e);
           }
+          }
         }
-      }
-      
+        
       // Hide thinking indicator when TTS starts (for Deepgram TTS)
       if (onThinkingUpdate) {
         onThinkingUpdate(false);
@@ -1922,6 +1986,11 @@ export async function setupSTTMode(
               currentSTTSession.deepgramTtsIsProcessingQueue = false;
             }
             
+            // Capture current Response ID for this TTT/TTS cycle
+            // All audio chunks from this response must match this ID
+            const currentResponseId = currentSTTSession.currentTTSResponseId || 0;
+            console.log('[Deepgram TTS] Captured Response ID:', currentResponseId);
+            
             // Resume AudioContext if suspended
             if (audioContext && audioContext.state === 'suspended') {
               audioContext.resume().catch((e) => {
@@ -1937,6 +2006,19 @@ export async function setupSTTMode(
               
               // Prevent concurrent processing
               if (currentSTTSession.deepgramTtsIsProcessingQueue) {
+                return;
+              }
+              
+              // Check if Response ID still matches (response not interrupted)
+              const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
+              if (sessionResponseId !== currentResponseId) {
+                console.log('[Deepgram TTS] Stopping queue processing - Response ID mismatch:', 
+                  'queue ID:', currentResponseId, 'current ID:', sessionResponseId);
+                // Clear queue of stale chunks
+                if (currentSTTSession.deepgramTtsAudioQueue) {
+                  currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                }
+                currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 return;
               }
               
@@ -1997,9 +2079,19 @@ export async function setupSTTMode(
                     currentSTTSession.deepgramTtsIsProcessingQueue = false;
                   }
                   
-                  // Process next chunk if available
-                  if (queue.length > 0) {
+                  // Process next chunk if available (only if Response ID still matches)
+                  const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
+                  if (queue.length > 0 && sessionResponseId === currentResponseId) {
                     processAudioQueue();
+                  } else if (sessionResponseId !== currentResponseId) {
+                    // Response was interrupted, clear remaining stale chunks
+                    console.log('[Deepgram TTS] Clearing stale queue chunks - Response interrupted');
+                    if (currentSTTSession) {
+                      if (currentSTTSession.deepgramTtsAudioQueue) {
+                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                      }
+                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    }
                   } else if (playbackFinished) {
                     // All chunks played and playback finished signal received
                     cleanup();
@@ -2011,9 +2103,15 @@ export async function setupSTTMode(
                 if (currentSTTSession) {
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 }
-                // Try to continue processing if queue has more chunks
-                if (queue.length > 0) {
+                // Try to continue processing if queue has more chunks (only if Response ID matches)
+                const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
+                if (queue.length > 0 && sessionResponseId === currentResponseId) {
                   processAudioQueue();
+                } else if (sessionResponseId !== currentResponseId) {
+                  // Response was interrupted, clear stale chunks
+                  if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+                    currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                  }
                 } else if (playbackFinished) {
                   cleanup();
                   resolve();
@@ -2022,8 +2120,19 @@ export async function setupSTTMode(
             };
             
             const processAudioChunk = (float32Array: Float32Array) => {
+              // Check if this chunk belongs to the current response
+              // If Response ID has changed (due to interruption), discard this chunk
+              if (!currentSTTSession) return;
+              
+              const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
+              if (sessionResponseId !== currentResponseId) {
+                console.log('[Deepgram TTS] Discarding stale chunk - Response ID mismatch:', 
+                  'chunk ID:', currentResponseId, 'current ID:', sessionResponseId);
+                return; // Discard chunk from old/interrupted response
+              }
+              
               // Add to shared queue instead of local array
-              if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
+              if (currentSTTSession.deepgramTtsAudioQueue) {
                 currentSTTSession.deepgramTtsAudioQueue.push(float32Array);
                 
                 // Start processing queue if not already processing
