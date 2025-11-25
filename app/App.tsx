@@ -128,6 +128,17 @@ let currentSession: {
   conversationHistory: Array<{ role: string; content: string }>;
   recognition?: any;
 } | null = null;
+// Type definitions for new ID system
+type TranscriptObject = {
+  text: string;
+  id: number; // Global response ID when transcript was created
+};
+
+type AudioChunkObject = {
+  data: Float32Array;
+  id: number; // Same as transcript.id that generated this chunk
+};
+
 let currentSTTSession: {
   recognition: any;
   mediaRecorder: MediaRecorder | null;
@@ -141,11 +152,12 @@ let currentSTTSession: {
   deepgramTtsWs?: WebSocket | null; // Persistent Deepgram TTS WebSocket connection
   deepgramTtsAudioContext?: AudioContext | null; // Shared AudioContext for TTS playback
   deepgramTtsNextPlayTime?: number; // Next scheduled play time for seamless playback
-  deepgramTtsAudioQueue?: Float32Array[]; // Shared queue for sequential audio playback
+  deepgramTtsAudioQueue?: AudioChunkObject[]; // Shared queue for sequential audio playback (with IDs)
   deepgramTtsIsProcessingQueue?: boolean; // Flag to prevent concurrent queue processing
   deepgramTtsActiveSources?: Set<AudioBufferSourceNode>; // Track active audio sources for interruption
   currentTTSAudioElement?: HTMLAudioElement | null; // Track current TTS audio element for interruption (gTTS, OpenAI, Edge TTS)
-  currentTTSResponseId?: number; // Response ID counter to track and discard stale audio chunks from interrupted responses
+  globalResponseId?: number; // Global response ID counter (incremented for each new STT transcript)
+  currentTtsResponseId?: number; // Current TTS response ID being processed (stored in closure for audio chunks)
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -894,6 +906,24 @@ export async function setupSTTMode(
             
             console.log('[STT] User said:', transcript);
             
+            // Generate new global Response ID for this user message → TTT → TTS cycle
+            // Create transcript object with ID that will flow through the entire pipeline
+            if (!currentSTTSession) {
+              return;
+            }
+            if (currentSTTSession.globalResponseId === undefined) {
+              currentSTTSession.globalResponseId = 0;
+            }
+            const globalId = ++currentSTTSession.globalResponseId;
+            
+            // Create transcript object with ID
+            const transcriptObj: TranscriptObject = {
+              text: transcript,
+              id: globalId
+            };
+            
+            console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
+            
             // Stop current TTS playback if user interrupts (for all TTS providers)
             stopCurrentTTS();
             
@@ -968,7 +998,7 @@ export async function setupSTTMode(
                 if (!deepgramTtsWs || deepgramTtsWs.readyState !== WebSocket.OPEN) {
                   // If WebSocket not ready, fallback to non-streaming
                   console.warn('[STT] Deepgram TTS WebSocket not ready, falling back to non-streaming');
-            const assistantMessage = await getChatResponse(transcript);
+            const assistantMessage = await getChatResponse(transcriptObj.text);
                   if (onThinkingUpdate) {
                     onThinkingUpdate(false);
                   }
@@ -976,6 +1006,15 @@ export async function setupSTTMode(
                   return;
                 }
 
+                // Store transcript ID in closure for this TTS session
+                // This ID will be attached to all audio chunks from this response
+                const transcriptId = transcriptObj.id;
+                
+                // Store ID in session for TTS WebSocket handler to use
+                if (currentSTTSession) {
+                  currentSTTSession.currentTtsResponseId = transcriptId;
+                }
+                
                 // Buffer for accumulating text chunks before sending to TTS
                 let textBuffer = '';
                 const SEND_EVERY = 60; // Same as in textToSpeech function
@@ -993,7 +1032,7 @@ export async function setupSTTMode(
                       type: 'speak',
                       text: toSend
                     }));
-                    console.log(`[Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+                    console.log(`[Deepgram TTS Stream] Sent chunk (${toSend.length} chars) with ID: ${transcriptId}`);
                   } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
                     const toSend = textBuffer;
                     textBuffer = '';
@@ -1001,7 +1040,7 @@ export async function setupSTTMode(
                       type: 'speak',
                       text: toSend
                     }));
-                    console.log(`[Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+                    console.log(`[Deepgram TTS Stream] Sent chunk (${toSend.length} chars) with ID: ${transcriptId}`);
                   }
                 };
 
@@ -1025,203 +1064,16 @@ export async function setupSTTMode(
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 }
                 
-                // Capture current Response ID for this TTT/TTS cycle
-                // All audio chunks from this response must match this ID
-                const currentResponseId = currentSTTSession.currentTTSResponseId || 0;
-                console.log('[Deepgram TTS Stream] Captured Response ID:', currentResponseId);
-                
                 // Resume AudioContext if suspended
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
                 }
 
-                // Shared queue processor function (processes all audio chunks sequentially)
-                const processAudioQueue = async () => {
-                  if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
-                    return;
-                  }
-                  
-                  // Prevent concurrent processing
-                  if (currentSTTSession.deepgramTtsIsProcessingQueue) {
-                    return;
-                  }
-                  
-                  // Check if Response ID still matches (response not interrupted)
-                  // This ensures we don't process chunks from stale/interrupted responses
-                  const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
-                  if (sessionResponseId !== currentResponseId) {
-                    console.log('[Deepgram TTS Stream] Stopping queue processing - Response ID mismatch:', 
-                      'queue ID:', currentResponseId, 'current ID:', sessionResponseId);
-                    // Clear queue of stale chunks
-                    if (currentSTTSession.deepgramTtsAudioQueue) {
-                      currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                    }
-                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                    return;
-                  }
-                  
-                  const queue = currentSTTSession.deepgramTtsAudioQueue;
-                  if (queue.length === 0) {
-                    return;
-                  }
-                  
-                  currentSTTSession.deepgramTtsIsProcessingQueue = true;
-                  
-                  try {
-                    if (audioContext.state === 'suspended') {
-                      await audioContext.resume();
-                    }
-
-                    // Re-validate Response ID before processing chunk (double-check for race conditions)
-                    const currentSessionResponseId = currentSTTSession.currentTTSResponseId || 0;
-                    if (currentSessionResponseId !== currentResponseId) {
-                      console.log('[Deepgram TTS Stream] Response ID changed during processing, aborting chunk');
-                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                      // Clear remaining stale chunks
-                      if (currentSTTSession.deepgramTtsAudioQueue) {
-                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                      }
-                      return;
-                    }
-
-                    const chunk = queue.shift(); // Get first chunk from queue
-                    if (!chunk) {
-                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                      return;
-                    }
-
-                    const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
-                    audioBuffer.getChannelData(0).set(chunk);
-
-                    const source = audioContext.createBufferSource();
-                    source.buffer = audioBuffer;
-                    source.connect(audioContext.destination);
-
-                    // Track active source for interruption handling
-                    if (currentSTTSession) {
-                      if (!currentSTTSession.deepgramTtsActiveSources) {
-                        currentSTTSession.deepgramTtsActiveSources = new Set();
-                      }
-                      currentSTTSession.deepgramTtsActiveSources.add(source);
-                    }
-
-                    const currentTime = audioContext.currentTime;
-                    const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime || 0;
-                    const playTime = Math.max(currentTime, nextPlayTime);
-                    source.start(playTime);
-
-                    const duration = audioBuffer.duration;
-                    const newNextPlayTime = playTime + duration;
-                    
-                    // Update next play time in session
-                    if (currentSTTSession) {
-                      currentSTTSession.deepgramTtsNextPlayTime = newNextPlayTime;
-                    }
-
-                    source.onended = () => {
-                      // Remove from active sources
-                      if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
-                        currentSTTSession.deepgramTtsActiveSources.delete(source);
-                      }
-                      
-                      // Mark processing as done
-                      if (currentSTTSession) {
-                        currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                      }
-                      
-                      // Process next chunk if available (only if Response ID still matches)
-                      const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
-                      if (queue.length > 0 && sessionResponseId === currentResponseId) {
-                        processAudioQueue();
-                      } else if (sessionResponseId !== currentResponseId) {
-                        // Response was interrupted, clear remaining stale chunks
-                        console.log('[Deepgram TTS Stream] Clearing stale queue chunks - Response interrupted');
-                        if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
-                          currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                        }
-                      }
-                    };
-                  } catch (e) {
-                    console.error('[Deepgram TTS] Error processing audio queue:', e);
-                    if (currentSTTSession) {
-                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                    }
-                    // Try to continue processing if queue has more chunks (only if Response ID matches)
-                    const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
-                    if (queue.length > 0 && sessionResponseId === currentResponseId) {
-                      processAudioQueue();
-                    } else if (sessionResponseId !== currentResponseId) {
-                      // Response was interrupted, clear stale chunks
-                      console.log('[Deepgram TTS Stream] Clearing stale queue chunks after error - Response interrupted');
-                      if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
-                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                      }
-                    }
-                  }
-                };
-
-                // Set up message handler for this streaming session
-                const originalOnMessage = deepgramTtsWs.onmessage;
-                const cleanup = () => {
-                  // Restore original handler or remove if none
-                  if (originalOnMessage) {
-                    deepgramTtsWs.onmessage = originalOnMessage;
-                  } else {
-                    deepgramTtsWs.onmessage = null;
-                  }
-                };
-
-                deepgramTtsWs.onmessage = async (event) => {
-                  try {
-                    if (event.data instanceof ArrayBuffer) {
-                      // Check if this chunk belongs to the current response
-                      // If Response ID has changed (due to interruption), discard this chunk
-                      const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
-                      if (sessionResponseId !== currentResponseId) {
-                        console.log('[Deepgram TTS Stream] Discarding stale chunk - Response ID mismatch:', 
-                          'chunk ID:', currentResponseId, 'current ID:', sessionResponseId);
-                        return; // Discard chunk from old/interrupted response
-                      }
-                      
-                      // Convert ArrayBuffer to Float32Array (PCM audio)
-                      const int16Array = new Int16Array(event.data);
-                      const float32Array = new Float32Array(int16Array.length);
-                      for (let i = 0; i < int16Array.length; i++) {
-                        float32Array[i] = int16Array[i] / 32768.0;
-                      }
-
-                      // Add to shared queue instead of local array
-                      if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
-                        currentSTTSession.deepgramTtsAudioQueue.push(float32Array);
-                        
-                        // Start processing queue if not already processing
-                        if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
-                          processAudioQueue();
-                          console.log('[Deepgram TTS Stream] Added chunk to queue, started processing');
-                        }
-                      }
-                    } else if (typeof event.data === 'string') {
-                      try {
-                        const data = JSON.parse(event.data);
-                        if (data.type === 'playback_finished') {
-                          playbackFinished = true;
-                          console.log('[Deepgram TTS Stream] Playback finished signal received');
-                          // Don't cleanup here - let waitForPlayback handle it
-                        } else if (data.type === 'error') {
-                          console.error('[Deepgram TTS Stream] Error:', data.message);
-                          cleanup();
-                        }
-                      } catch (e) {
-                        // Not JSON, ignore
-                      }
-                    }
-                  } catch (e) {
-                    console.error('[Deepgram TTS Stream] Error processing message:', e);
-                  }
-                };
+                // Note: Message handler is set up once when WebSocket is created (shared handler)
+                // The shared handler validates IDs at queue insertion and playback time
 
                 // Get streaming chat response (this will call sendTextChunk as chunks arrive)
-                const assistantMessage = await getChatResponseStream(transcript, sendTextChunk);
+                const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
                 
                 // Send remaining buffer and flush signal after streaming completes
                 if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
@@ -1278,8 +1130,7 @@ export async function setupSTTMode(
 
                 await waitForPlayback();
                 
-                // Cleanup after playback completes
-                cleanup();
+                // Note: No cleanup needed - shared handler is persistent and doesn't need to be restored
 
               } catch (error: any) {
                 console.error('[STT] Error in streaming chat response:', error);
@@ -1438,11 +1289,81 @@ export async function setupSTTMode(
       processingOscillator: null,
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
-      currentTTSResponseId: 0, // Initialize response ID counter
+      globalResponseId: 0, // Initialize global response ID counter
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
       ...(sttProvider && { sttProvider }),
     } as any;
+
+    // Initialize AudioContext early for Deepgram TTS (before greeting) to prevent timing issues
+    // Check TTS provider from admin settings or backend
+    let ttsProvider: string | null = null;
+    try {
+      const stored = localStorage.getItem('adminSettings');
+      if (stored) {
+        const settings = JSON.parse(stored);
+        if (settings.ttsProvider) {
+          ttsProvider = settings.ttsProvider.toLowerCase();
+        }
+      }
+    } catch (e) {
+      // Will check backend below
+    }
+    
+    // If not in localStorage, fetch from backend (async, but don't wait - will initialize later if needed)
+    if (!ttsProvider) {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      fetch(`${backendUrl}/api/config`)
+        .then(resp => {
+          if (resp.ok) {
+            return resp.json();
+          }
+          return { tts_provider: 'gtts' };
+        })
+        .then(config => {
+          const provider = config.tts_provider || 'gtts';
+          // Initialize AudioContext if Deepgram TTS is being used
+          if (provider === 'deepgram' && currentSTTSession && !currentSTTSession.deepgramTtsAudioContext) {
+            const deepgramAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+              sampleRate: 48000
+            });
+            currentSTTSession.deepgramTtsAudioContext = deepgramAudioContext;
+            currentSTTSession.deepgramTtsNextPlayTime = 0;
+            currentSTTSession.deepgramTtsAudioQueue = [];
+            currentSTTSession.deepgramTtsIsProcessingQueue = false;
+            currentSTTSession.deepgramTtsActiveSources = new Set();
+            
+            // Resume AudioContext if suspended
+            if (deepgramAudioContext.state === 'suspended') {
+              deepgramAudioContext.resume().catch((e) => {
+                console.warn('[Deepgram TTS] Could not resume AudioContext during early init:', e);
+              });
+            }
+            console.log('[Deepgram TTS] AudioContext initialized early for greeting');
+          }
+        })
+        .catch(() => {
+          // Ignore errors, will initialize later if needed
+        });
+    } else if (ttsProvider === 'deepgram' && currentSTTSession && !currentSTTSession.deepgramTtsAudioContext) {
+      // Initialize AudioContext immediately if we know it's Deepgram TTS
+      const deepgramAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 48000
+      });
+      currentSTTSession.deepgramTtsAudioContext = deepgramAudioContext;
+      currentSTTSession.deepgramTtsNextPlayTime = 0;
+      currentSTTSession.deepgramTtsAudioQueue = [];
+      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+      currentSTTSession.deepgramTtsActiveSources = new Set();
+      
+      // Resume AudioContext if suspended
+      if (deepgramAudioContext.state === 'suspended') {
+        deepgramAudioContext.resume().catch((e) => {
+          console.warn('[Deepgram TTS] Could not resume AudioContext during early init:', e);
+        });
+      }
+      console.log('[Deepgram TTS] AudioContext initialized early for greeting');
+    }
 
     // Function to send text to chat API and get response with retry logic
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -1530,8 +1451,8 @@ export async function setupSTTMode(
                   if (data.done) {
                     // Stream complete
                     conversationHistory.push({ role: 'assistant', content: fullResponse });
-                    // Update UI with complete response
-                    if (onConversationUpdate) {
+                    // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
+                    if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
                     }
                     return fullResponse;
@@ -1549,7 +1470,8 @@ export async function setupSTTMode(
           // If we get here, stream ended without done flag
           if (fullResponse) {
             conversationHistory.push({ role: 'assistant', content: fullResponse });
-            if (onConversationUpdate) {
+            // Update UI (but skip for initial greeting - it will be updated after removing the prompt)
+            if (onConversationUpdate && !isInitialGreeting) {
               onConversationUpdate([...conversationHistory]);
             }
             return fullResponse;
@@ -1685,19 +1607,14 @@ export async function setupSTTMode(
         currentSTTSession.deepgramTtsAudioQueue.length = 0;
       }
       
-      // Reset processing flag
+      // Reset processing flag to allow new processing to start immediately
       currentSTTSession.deepgramTtsIsProcessingQueue = false;
       
       // Reset next play time to allow immediate playback of new response
       currentSTTSession.deepgramTtsNextPlayTime = 0;
       
-      // Increment response ID to invalidate all in-flight TTT/TTS responses
-      // This ensures stale audio chunks from interrupted responses are discarded
-      if (currentSTTSession.currentTTSResponseId === undefined) {
-        currentSTTSession.currentTTSResponseId = 0;
-      }
-      currentSTTSession.currentTTSResponseId++;
-      console.log('[TTS] Response ID incremented to:', currentSTTSession.currentTTSResponseId);
+      // Note: Global Response ID increment is handled by the caller (when transcript arrives)
+      // This ensures ID increments only once per user message, not every time stopCurrentTTS() is called
       
       // Send flush signal to Deepgram TTS to stop current generation
       if (currentSTTSession.deepgramTtsWs && 
@@ -1824,6 +1741,19 @@ export async function setupSTTMode(
         // Handle Deepgram TTS (WebSocket streaming, low latency)
         if (ttsProvider === 'deepgram') {
           return new Promise<void>((resolve, reject) => {
+            // Generate global Response ID for this TTS call (if not already set by streaming path)
+            if (currentSTTSession) {
+              if (currentSTTSession.globalResponseId === undefined) {
+                currentSTTSession.globalResponseId = 0;
+              }
+              // Only generate new ID if not already set (streaming path sets it)
+              if (currentSTTSession.currentTtsResponseId === undefined) {
+                const ttsId = ++currentSTTSession.globalResponseId;
+                currentSTTSession.currentTtsResponseId = ttsId;
+                console.log('[Deepgram TTS] Generated Response ID for direct call:', ttsId);
+              }
+            }
+            
             // Get or create persistent WebSocket connection
             let deepgramWs: WebSocket | null = null;
             let audioContext: AudioContext | null = null;
@@ -1833,6 +1763,22 @@ export async function setupSTTMode(
               deepgramWs = currentSTTSession.deepgramTtsWs;
               audioContext = currentSTTSession.deepgramTtsAudioContext || null;
               console.log('[Deepgram TTS] Reusing existing WebSocket connection');
+              
+              // Ensure AudioContext is running
+              if (audioContext && audioContext.state === 'suspended') {
+                audioContext.resume().catch((e) => {
+                  console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
+                });
+              }
+              
+              // Ensure nextPlayTime is initialized for first playback
+              if (currentSTTSession && (!currentSTTSession.deepgramTtsNextPlayTime || currentSTTSession.deepgramTtsNextPlayTime === 0)) {
+                if (audioContext) {
+                  currentSTTSession.deepgramTtsNextPlayTime = audioContext.currentTime;
+                } else {
+                  currentSTTSession.deepgramTtsNextPlayTime = 0;
+                }
+              }
             } else {
               // Create new connection
               const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -1859,14 +1805,202 @@ export async function setupSTTMode(
               if (currentSTTSession) {
                 currentSTTSession.deepgramTtsWs = deepgramWs;
                 currentSTTSession.deepgramTtsAudioContext = audioContext;
-                currentSTTSession.deepgramTtsNextPlayTime = 0;
+                // Initialize nextPlayTime to currentTime for proper first playback timing
+                // This ensures smooth playback without distortion
+                currentSTTSession.deepgramTtsNextPlayTime = audioContext.currentTime;
                 currentSTTSession.deepgramTtsAudioQueue = []; // Initialize shared audio queue
                 currentSTTSession.deepgramTtsIsProcessingQueue = false; // Initialize processing flag
                 currentSTTSession.deepgramTtsActiveSources = new Set(); // Initialize active sources tracking
               }
               
-              deepgramWs.onopen = () => {
+              // Wait a bit after WebSocket opens to ensure connection is stable
+              deepgramWs.onopen = async () => {
                 console.log('[Deepgram TTS] WebSocket connected (new connection)');
+                // Ensure AudioContext is running
+                if (audioContext && audioContext.state === 'suspended') {
+                  await audioContext.resume();
+                }
+                // Small delay to ensure connection is fully stable before sending data
+                await new Promise(resolve => setTimeout(resolve, 100));
+                // Double-check AudioContext is still running
+                if (audioContext && audioContext.state === 'suspended') {
+                  await audioContext.resume();
+                }
+              };
+              
+              // Set up shared message handler that checks Response ID dynamically
+              // This avoids handler conflicts when multiple responses are in flight
+              // Define processAudioQueue outside to avoid closure issues - it always checks current Response ID
+              const processAudioQueueShared = async () => {
+                if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
+                  return;
+                }
+                
+                // Prevent concurrent processing
+                if (currentSTTSession.deepgramTtsIsProcessingQueue) {
+                  return;
+                }
+                
+                const queue = currentSTTSession.deepgramTtsAudioQueue;
+                if (queue.length === 0) {
+                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                  return;
+                }
+                
+                currentSTTSession.deepgramTtsIsProcessingQueue = true;
+                
+                try {
+                  const audioContext = currentSTTSession.deepgramTtsAudioContext;
+                  if (!audioContext) {
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    return;
+                  }
+                  
+                  if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                  }
+
+                  // Get global Response ID for validation
+                  const globalId = currentSTTSession.globalResponseId || 0;
+
+                  const chunkObj = queue.shift();
+                  if (!chunkObj) {
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    return;
+                  }
+
+                  // CRITICAL: Validate chunk ID against global ID right before playback
+                  // This ensures we don't play stale chunks from interrupted responses
+                  if (chunkObj.id !== globalId) {
+                    console.log('[Deepgram TTS] Discarding stale chunk before playback - ID mismatch:', 
+                      'chunk ID:', chunkObj.id, 'global ID:', globalId);
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    // Clear remaining stale chunks - they belong to old/interrupted response
+                    if (currentSTTSession.deepgramTtsAudioQueue) {
+                      currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                    }
+                    return;
+                  }
+
+                  // Final validation passed - printing both IDs before sending chunk for playback
+                  console.log('[Deepgram TTS] Final validation passed - sending chunk for playback:', 
+                    'chunk ID:', chunkObj.id, 'global ID:', globalId);
+
+                  const audioBuffer = audioContext.createBuffer(1, chunkObj.data.length, 48000);
+                  audioBuffer.getChannelData(0).set(chunkObj.data);
+
+                  const source = audioContext.createBufferSource();
+                  source.buffer = audioBuffer;
+                  source.connect(audioContext.destination);
+
+                  // Track active source for interruption handling
+                  if (!currentSTTSession.deepgramTtsActiveSources) {
+                    currentSTTSession.deepgramTtsActiveSources = new Set();
+                  }
+                  currentSTTSession.deepgramTtsActiveSources.add(source);
+
+                  const currentTime = audioContext.currentTime;
+                  // For first playback, initialize nextPlayTime to currentTime if it's 0 or undefined
+                  // This ensures proper timing and prevents distortion
+                  if (!currentSTTSession.deepgramTtsNextPlayTime || currentSTTSession.deepgramTtsNextPlayTime === 0) {
+                    currentSTTSession.deepgramTtsNextPlayTime = currentTime;
+                  }
+                  const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime;
+                  const playTime = Math.max(currentTime, nextPlayTime);
+                  source.start(playTime);
+
+                  const duration = audioBuffer.duration;
+                  const newNextPlayTime = playTime + duration;
+                  currentSTTSession.deepgramTtsNextPlayTime = newNextPlayTime;
+
+                  source.onended = () => {
+                    // Remove from active sources
+                    if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
+                      currentSTTSession.deepgramTtsActiveSources.delete(source);
+                    }
+                    
+                    // Mark processing as done
+                    if (currentSTTSession) {
+                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    }
+                    
+                    // Process next chunk if available
+                    // Response ID validation happens at the start of processAudioQueueShared()
+                    // It will check if Response ID changed and stop if needed
+                    if (queue.length > 0) {
+                      processAudioQueueShared();
+                    }
+                  };
+                } catch (e) {
+                  console.error('[Deepgram TTS] Error processing audio queue:', e);
+                  if (currentSTTSession) {
+                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                  }
+                  // Try to continue processing if queue has more chunks
+                  // Response ID validation will happen at the start of processAudioQueueShared()
+                  if (queue.length > 0) {
+                    processAudioQueueShared();
+                  }
+                }
+              };
+              
+              deepgramWs.onmessage = async (event) => {
+                if (!currentSTTSession) return;
+                
+                try {
+                  if (event.data instanceof ArrayBuffer) {
+                    // Convert ArrayBuffer to Float32Array (PCM audio)
+                    const int16Array = new Int16Array(event.data);
+                    const float32Array = new Float32Array(int16Array.length);
+                    for (let i = 0; i < int16Array.length; i++) {
+                      float32Array[i] = int16Array[i] / 32768.0;
+                    }
+
+                    // Get the current TTS response ID that was stored when text was sent
+                    const chunkId = currentSTTSession.currentTtsResponseId;
+                    const globalId = currentSTTSession.globalResponseId || 0;
+                    
+                    // CRITICAL: Validate ID before adding to queue
+                    // If chunk ID doesn't match global ID, this chunk is stale (user interrupted)
+                    if (chunkId === undefined || chunkId !== globalId) {
+                      console.log('[Deepgram TTS] Discarding stale audio chunk - ID mismatch:', 
+                        'chunk ID:', chunkId, 'global ID:', globalId);
+                      return; // Discard stale chunk
+                    }
+                    
+                    // Create audio chunk object with ID
+                    const chunkObj: AudioChunkObject = {
+                      data: float32Array,
+                      id: chunkId
+                    };
+
+                    // Add to shared queue - ID already validated
+                    if (currentSTTSession.deepgramTtsAudioQueue) {
+                      currentSTTSession.deepgramTtsAudioQueue.push(chunkObj);
+                      
+                      // Start processing queue if not already processing
+                      if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
+                        processAudioQueueShared();
+                        console.log('[Deepgram TTS] Added chunk to queue (ID:', chunkId, '), started processing');
+                      }
+                    }
+                  } else if (typeof event.data === 'string') {
+                    try {
+                      const data = JSON.parse(event.data);
+                      if (data.type === 'playback_finished') {
+                        // Playback finished signal - no need to track per Response ID
+                        // The queue processing will naturally stop when queue is empty
+                        console.log('[Deepgram TTS] Playback finished signal received');
+                      } else if (data.type === 'error') {
+                        console.error('[Deepgram TTS] Error:', data.message);
+                      }
+                    } catch (e) {
+                      // Not JSON, ignore
+                    }
+                  }
+                } catch (e) {
+                  console.error('[Deepgram TTS] Error processing message:', e);
+                }
               };
               
               // Handle reconnection on close
@@ -1909,9 +2043,18 @@ export async function setupSTTMode(
             }
             
             // Wait for WebSocket to be ready (if new connection)
-            const sendTextWhenReady = () => {
+            const sendTextWhenReady = async () => {
               if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-                // Send text to Deepgram with smaller chunks for lower latency
+                // Small delay to ensure connection is fully stable before sending data
+                // This prevents distortion on first playback
+                await new Promise(resolve => setTimeout(resolve, 150));
+                
+                // Ensure AudioContext is running before sending
+                if (audioContext && audioContext.state === 'suspended') {
+                  await audioContext.resume();
+                }
+                
+                // Send text to Deepgram with smaller chunks for low latency
                 // Reduced from 180 to 50-80 chars to start TTS faster
                 const SEND_EVERY = 60; // characters per chunk (optimized for low latency)
                 const MIN_FIRST_CHUNK = 20; // Send first chunk even smaller for immediate start
@@ -1954,8 +2097,16 @@ export async function setupSTTMode(
                   console.log('[Deepgram TTS] Sent flush signal');
                 }
               } else if (deepgramWs && deepgramWs.readyState === WebSocket.CONNECTING) {
-                // Wait for connection to open
-                deepgramWs.addEventListener('open', sendTextWhenReady, { once: true });
+                // Wait for connection to open, then send text
+                deepgramWs.addEventListener('open', async () => {
+                  // Small delay after WebSocket opens to ensure connection is stable
+                  await new Promise(resolve => setTimeout(resolve, 150));
+                  // Ensure AudioContext is running
+                  if (audioContext && audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                  }
+                  await sendTextWhenReady();
+                }, { once: true });
               } else {
                 reject(new Error('Deepgram TTS WebSocket is not available'));
               }
@@ -1963,9 +2114,22 @@ export async function setupSTTMode(
             
             // Send text immediately if connection is ready, otherwise wait
             if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-              sendTextWhenReady();
+              sendTextWhenReady().then(() => resolve()).catch(reject);
             } else if (deepgramWs) {
-              deepgramWs.addEventListener('open', sendTextWhenReady, { once: true });
+              deepgramWs.addEventListener('open', async () => {
+                try {
+                  // Small delay after WebSocket opens to ensure connection is stable
+                  await new Promise(resolve => setTimeout(resolve, 150));
+                  // Ensure AudioContext is running
+                  if (audioContext && audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                  }
+                  await sendTextWhenReady();
+                  resolve();
+                } catch (e) {
+                  reject(e);
+                }
+              }, { once: true });
             } else {
               reject(new Error('Failed to create Deepgram TTS WebSocket'));
               return;
@@ -1986,11 +2150,6 @@ export async function setupSTTMode(
               currentSTTSession.deepgramTtsIsProcessingQueue = false;
             }
             
-            // Capture current Response ID for this TTT/TTS cycle
-            // All audio chunks from this response must match this ID
-            const currentResponseId = currentSTTSession.currentTTSResponseId || 0;
-            console.log('[Deepgram TTS] Captured Response ID:', currentResponseId);
-            
             // Resume AudioContext if suspended
             if (audioContext && audioContext.state === 'suspended') {
               audioContext.resume().catch((e) => {
@@ -1998,150 +2157,8 @@ export async function setupSTTMode(
               });
             }
             
-            // Shared queue processor function (processes all audio chunks sequentially)
-            const processAudioQueue = async () => {
-              if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
-                return;
-              }
-              
-              // Prevent concurrent processing
-              if (currentSTTSession.deepgramTtsIsProcessingQueue) {
-                return;
-              }
-              
-              // Check if Response ID still matches (response not interrupted)
-              const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
-              if (sessionResponseId !== currentResponseId) {
-                console.log('[Deepgram TTS] Stopping queue processing - Response ID mismatch:', 
-                  'queue ID:', currentResponseId, 'current ID:', sessionResponseId);
-                // Clear queue of stale chunks
-                if (currentSTTSession.deepgramTtsAudioQueue) {
-                  currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                }
-                currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                return;
-              }
-              
-              const queue = currentSTTSession.deepgramTtsAudioQueue;
-              if (queue.length === 0) {
-                return;
-              }
-              
-              currentSTTSession.deepgramTtsIsProcessingQueue = true;
-              
-              try {
-                if (audioContext.state === 'suspended') {
-                  await audioContext.resume();
-                }
-
-                const chunk = queue.shift(); // Get first chunk from queue
-                if (!chunk) {
-                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                  return;
-                }
-
-                const audioBuffer = audioContext.createBuffer(1, chunk.length, 48000);
-                audioBuffer.getChannelData(0).set(chunk);
-
-                const source = audioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(audioContext.destination);
-
-                // Track active source for interruption handling
-                if (currentSTTSession) {
-                  if (!currentSTTSession.deepgramTtsActiveSources) {
-                    currentSTTSession.deepgramTtsActiveSources = new Set();
-                  }
-                  currentSTTSession.deepgramTtsActiveSources.add(source);
-                }
-
-                const currentTime = audioContext.currentTime;
-                const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime || 0;
-                const playTime = Math.max(currentTime, nextPlayTime);
-                source.start(playTime);
-
-                const duration = audioBuffer.duration;
-                const newNextPlayTime = playTime + duration;
-                
-                // Update next play time in session
-                if (currentSTTSession) {
-                  currentSTTSession.deepgramTtsNextPlayTime = newNextPlayTime;
-                }
-
-                source.onended = () => {
-                  // Remove from active sources
-                  if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
-                    currentSTTSession.deepgramTtsActiveSources.delete(source);
-                  }
-                  
-                  // Mark processing as done
-                  if (currentSTTSession) {
-                    currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                  }
-                  
-                  // Process next chunk if available (only if Response ID still matches)
-                  const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
-                  if (queue.length > 0 && sessionResponseId === currentResponseId) {
-                    processAudioQueue();
-                  } else if (sessionResponseId !== currentResponseId) {
-                    // Response was interrupted, clear remaining stale chunks
-                    console.log('[Deepgram TTS] Clearing stale queue chunks - Response interrupted');
-                    if (currentSTTSession) {
-                      if (currentSTTSession.deepgramTtsAudioQueue) {
-                        currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                      }
-                      currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                    }
-                  } else if (playbackFinished) {
-                    // All chunks played and playback finished signal received
-                    cleanup();
-                    resolve();
-                  }
-                };
-              } catch (e) {
-                console.error('[Deepgram TTS] Error processing audio queue:', e);
-                if (currentSTTSession) {
-                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
-                }
-                // Try to continue processing if queue has more chunks (only if Response ID matches)
-                const sessionResponseId = currentSTTSession?.currentTTSResponseId || 0;
-                if (queue.length > 0 && sessionResponseId === currentResponseId) {
-                  processAudioQueue();
-                } else if (sessionResponseId !== currentResponseId) {
-                  // Response was interrupted, clear stale chunks
-                  if (currentSTTSession && currentSTTSession.deepgramTtsAudioQueue) {
-                    currentSTTSession.deepgramTtsAudioQueue.length = 0;
-                  }
-                } else if (playbackFinished) {
-                  cleanup();
-                  resolve();
-                }
-              }
-            };
-            
-            const processAudioChunk = (float32Array: Float32Array) => {
-              // Check if this chunk belongs to the current response
-              // If Response ID has changed (due to interruption), discard this chunk
-              if (!currentSTTSession) return;
-              
-              const sessionResponseId = currentSTTSession.currentTTSResponseId || 0;
-              if (sessionResponseId !== currentResponseId) {
-                console.log('[Deepgram TTS] Discarding stale chunk - Response ID mismatch:', 
-                  'chunk ID:', currentResponseId, 'current ID:', sessionResponseId);
-                return; // Discard chunk from old/interrupted response
-              }
-              
-              // Add to shared queue instead of local array
-              if (currentSTTSession.deepgramTtsAudioQueue) {
-                currentSTTSession.deepgramTtsAudioQueue.push(float32Array);
-                
-                // Start processing queue if not already processing
-                if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
-                  processAudioQueue();
-                  console.log('[Deepgram TTS] Added chunk to queue, started processing');
-                }
-              }
-            };
+            // Note: Message handler is set up once when WebSocket is created (shared handler)
+            // The shared handler validates IDs at queue insertion and playback time
             
             const cleanup = () => {
               // Don't close WebSocket - keep it open for reuse
@@ -2154,30 +2171,9 @@ export async function setupSTTMode(
             if (!deepgramWs.onmessage) {
               deepgramWs.onmessage = async (event) => {
                 try {
-                  // Deepgram sends PCM audio as ArrayBuffer (binary data)
-                  if (event.data instanceof ArrayBuffer) {
-                    const int16Array = new Int16Array(event.data);
-                    
-                    // Convert Int16 to Float32 (-1.0 to 1.0 range)
-                    const float32Array = new Float32Array(int16Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                      float32Array[i] = int16Array[i] / 32768.0;
-                    }
-                    
-                    processAudioChunk(float32Array);
-                  } else if (event.data instanceof Blob) {
-                    // Fallback: Convert Blob to ArrayBuffer if needed
-                    const arrayBuffer = await event.data.arrayBuffer();
-                    const int16Array = new Int16Array(arrayBuffer);
-                    
-                    // Convert Int16 to Float32 (-1.0 to 1.0 range)
-                    const float32Array = new Float32Array(int16Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                      float32Array[i] = int16Array[i] / 32768.0;
-                    }
-                    
-                    processAudioChunk(float32Array);
-                  } else if (typeof event.data === 'string') {
+                  // Audio chunks are handled by the shared handler set up when WebSocket is created
+                  // This handler only processes control messages (playback_finished, errors)
+                  if (typeof event.data === 'string') {
                     // Control message
                     const data = JSON.parse(event.data);
                     if (data.type === 'playback_finished') {
@@ -2231,14 +2227,9 @@ export async function setupSTTMode(
               // Create a temporary handler for this request
               const tempHandler = async (event: MessageEvent) => {
                 try {
-                  if (event.data instanceof ArrayBuffer) {
-                    const int16Array = new Int16Array(event.data);
-                    const float32Array = new Float32Array(int16Array.length);
-                    for (let i = 0; i < int16Array.length; i++) {
-                      float32Array[i] = int16Array[i] / 32768.0;
-                    }
-                    processAudioChunk(float32Array);
-                  } else if (typeof event.data === 'string') {
+                  // Audio chunks are handled by the shared handler set up when WebSocket is created
+                  // This handler only processes control messages (playback_finished, errors)
+                  if (typeof event.data === 'string') {
                     const data = JSON.parse(event.data);
                     if (data.type === 'playback_finished') {
                       playbackFinished = true;
@@ -2825,6 +2816,13 @@ export async function setupSTTMode(
       } catch (e) {}
     };
 
+    // Promise to wait for recognition to be ready (for greeting)
+    // Declare outside if block so it's accessible for greeting
+    let recognitionReadyResolver: (() => void) | null = null;
+    const recognitionReadyPromise = new Promise<void>((resolve) => {
+      recognitionReadyResolver = resolve;
+    });
+
     // Only set up Web Speech API handlers if using Web Speech API
     if (recognition) {
     recognition.onresult = async (event: any) => {
@@ -2835,7 +2833,26 @@ export async function setupSTTMode(
 
       console.log('[STT] User said:', transcript);
       
+      // Generate new global Response ID for this user message → TTT → TTS cycle
+      // Create transcript object with ID that will flow through the entire pipeline
+      if (!currentSTTSession) {
+        return;
+      }
+      if (currentSTTSession.globalResponseId === undefined) {
+        currentSTTSession.globalResponseId = 0;
+      }
+      const globalId = ++currentSTTSession.globalResponseId;
+      
+      // Create transcript object with ID
+      const transcriptObj: TranscriptObject = {
+        text: transcript,
+        id: globalId
+      };
+      
+      console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
+      
       // Stop current TTS playback if user interrupts (for all TTS providers)
+      // Note: Response ID was already incremented above, so stopCurrentTTS() won't increment it again
       stopCurrentTTS();
 
       // Get TTS provider to determine feedback method
@@ -3050,6 +3067,13 @@ export async function setupSTTMode(
           console.warn('[STT] Error stopping processing audio on recognition start:', e);
         }
       }
+      
+      // Resolve promise when recognition is ready (for greeting)
+      if (recognitionReadyResolver) {
+        recognitionReadyResolver();
+        recognitionReadyResolver = null;
+        console.log('[STT] Recognition is ready');
+      }
     };
 
     // Detect if we're on Android to handle beep issue
@@ -3150,15 +3174,289 @@ export async function setupSTTMode(
     recognition.start();
     }
     
+    // Wait for recognition to be ready before generating greeting
+    // This ensures AudioContext and all initialization is complete
+    try {
+      if (recognition) {
+        // Wait for recognition.onstart with a timeout fallback
+        await Promise.race([
+          recognitionReadyPromise,
+          new Promise(resolve => setTimeout(resolve, 2000)) // 2 second timeout fallback
+        ]);
+        console.log('[STT] Recognition ready, proceeding with greeting');
+      } else {
+        // No recognition (Deepgram STT), wait a short time for initialization
+        await new Promise(resolve => setTimeout(resolve, 500));
+        console.log('[STT] No Web Speech recognition, proceeding with greeting');
+      }
+    } catch (e) {
+      console.warn('[STT] Error waiting for recognition ready:', e);
+      // Continue anyway after a short delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
     try {
+      // Check TTS provider to determine if we should use streaming
+      let ttsProvider: string | null = null;
+      try {
+        const stored = localStorage.getItem('adminSettings');
+        if (stored) {
+          const settings = JSON.parse(stored);
+          if (settings.ttsProvider) {
+            ttsProvider = settings.ttsProvider.toLowerCase();
+          }
+        }
+      } catch (e) {
+        // Will check backend below
+      }
+      
+      // If not in localStorage, fetch from backend
+      if (!ttsProvider) {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        try {
+          const resp = await fetch(`${backendUrl}/api/config`);
+          if (resp.ok) {
+            const config = await resp.json();
+            ttsProvider = config.tts_provider || 'gtts';
+          } else {
+            ttsProvider = 'gtts';
+          }
+        } catch (e) {
+          ttsProvider = 'gtts';
+        }
+      }
+      
       // Send a prompt that will generate a dynamic greeting
       // The AI will use the instructions to greet with the child's name in the first message
       const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
+      // Don't add to conversationHistory here - getChatResponseStream will add it
+      // This prevents the greeting prompt from appearing twice in the UI
+      
+      let greeting = '';
+      
+      // Use streaming chat for Deepgram TTS, non-streaming for others
+      if (ttsProvider === 'deepgram') {
+        // Use streaming chat response for Deepgram TTS (low latency)
+        try {
+          // CRITICAL: Ensure Deepgram TTS WebSocket and handler are set up BEFORE sending greeting
+          // The WebSocket and handler are created in textToSpeech(), so we need to ensure it's set up first
+          // We'll call textToSpeech with a minimal text to set up the WebSocket and handler
+          // This ensures the message handler is ready to process audio chunks from the greeting
+          if (!currentSTTSession?.deepgramTtsWs || currentSTTSession.deepgramTtsWs.readyState !== WebSocket.OPEN) {
+            console.log('[Greeting] Setting up Deepgram TTS WebSocket before greeting...');
+            // Call textToSpeech with a space character to set up WebSocket and handler
+            // The space won't produce meaningful audio but will initialize the WebSocket
+            // We don't await it fully - we just need the WebSocket to be created and handler set up
+            const setupPromise = textToSpeech(' ').catch(() => {
+              // Ignore errors from the setup call - we just need the WebSocket created
+            });
+            
+            // Wait for WebSocket to be created and opened (with timeout)
+            let retries = 0;
+            while ((!currentSTTSession?.deepgramTtsWs || currentSTTSession.deepgramTtsWs.readyState !== WebSocket.OPEN) && retries < 30) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+              retries++;
+            }
+            
+            // Once WebSocket is ready, flush any pending audio from the dummy setup call
+            // This ensures clean state before sending the greeting
+            if (currentSTTSession?.deepgramTtsWs && currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
+              try {
+                currentSTTSession.deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+                // Clear any audio queue from the dummy call
+                if (currentSTTSession.deepgramTtsAudioQueue) {
+                  currentSTTSession.deepgramTtsAudioQueue.length = 0;
+                }
+                // Reset processing flags
+                currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                // Reset next play time for clean start
+                if (currentSTTSession.deepgramTtsAudioContext) {
+                  currentSTTSession.deepgramTtsNextPlayTime = currentSTTSession.deepgramTtsAudioContext.currentTime;
+                }
+                console.log('[Greeting] Flushed dummy setup call, ready for greeting');
+              } catch (e) {
+                console.warn('[Greeting] Error flushing dummy setup:', e);
+              }
+            }
+            
+            if (!currentSTTSession?.deepgramTtsWs || currentSTTSession.deepgramTtsWs.readyState !== WebSocket.OPEN) {
+              // If WebSocket still not ready, fallback to non-streaming
+              console.warn('[Greeting] Deepgram TTS WebSocket not ready after setup, falling back to non-streaming');
+              const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+              const response = await fetch(`${backendUrl}/api/chat`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  messages: conversationHistory,
+                }),
+              });
+
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Chat API error: ${text}`);
+              }
+
+              const data = await response.json();
+              greeting = data.response || data.message || '';
+            } else {
+              // WebSocket is now ready - use streaming
+              console.log('[Greeting] Deepgram TTS WebSocket ready, using streaming chat');
+              
+              // Generate global Response ID for greeting (so audio chunks are tagged correctly)
+              if (currentSTTSession) {
+                if (currentSTTSession.globalResponseId === undefined) {
+                  currentSTTSession.globalResponseId = 0;
+                }
+                const greetingId = ++currentSTTSession.globalResponseId;
+                // Store ID for TTS WebSocket handler to use
+                currentSTTSession.currentTtsResponseId = greetingId;
+                console.log('[Greeting] Generated Global Response ID:', greetingId);
+              }
+              
+              const deepgramTtsWs = currentSTTSession.deepgramTtsWs;
+            
+            // Buffer for accumulating text chunks before sending to TTS
+            let textBuffer = '';
+            const SEND_EVERY = 60; // Same as in regular conversations
+            const MIN_FIRST_CHUNK = 20;
+
+            // Function to send text chunks to Deepgram TTS WebSocket
+            const sendTextChunk = (chunk: string) => {
+              textBuffer += chunk;
+              
+              // Send first chunk early for low latency
+              if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                const toSend = textBuffer;
+                textBuffer = '';
+                deepgramTtsWs.send(JSON.stringify({
+                  type: 'speak',
+                  text: toSend
+                }));
+                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+              } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                const toSend = textBuffer;
+                textBuffer = '';
+                deepgramTtsWs.send(JSON.stringify({
+                  type: 'speak',
+                  text: toSend
+                }));
+                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+              }
+            };
+
+            // Get streaming chat response (this will call sendTextChunk as chunks arrive)
+            greeting = await getChatResponseStream(greetingPrompt, sendTextChunk, true);
+            
+            // Send remaining buffer and flush signal after streaming completes
+            if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
+              deepgramTtsWs.send(JSON.stringify({
+                type: 'speak',
+                text: textBuffer
+              }));
+              textBuffer = '';
+            }
+            if (deepgramTtsWs.readyState === WebSocket.OPEN) {
+              deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+              console.log('[Greeting Deepgram TTS Stream] Sent flush signal after streaming complete');
+            }
+            }
+          } else {
+            // WebSocket already exists and is OPEN - use streaming directly
+            console.log('[Greeting] Deepgram TTS WebSocket already ready, using streaming chat');
+            
+            // Generate global Response ID for greeting (so audio chunks are tagged correctly)
+            if (currentSTTSession) {
+              if (currentSTTSession.globalResponseId === undefined) {
+                currentSTTSession.globalResponseId = 0;
+              }
+              const greetingId = ++currentSTTSession.globalResponseId;
+              // Store ID for TTS WebSocket handler to use
+              currentSTTSession.currentTtsResponseId = greetingId;
+              console.log('[Greeting] Generated Global Response ID:', greetingId);
+            }
+            
+            const deepgramTtsWs = currentSTTSession?.deepgramTtsWs;
+            if (!deepgramTtsWs) {
+              throw new Error('Deepgram TTS WebSocket not available');
+            }
+            
+            // Buffer for accumulating text chunks before sending to TTS
+            let textBuffer = '';
+            const SEND_EVERY = 60; // Same as in regular conversations
+            const MIN_FIRST_CHUNK = 20;
+
+            // Function to send text chunks to Deepgram TTS WebSocket
+            const sendTextChunk = (chunk: string) => {
+              textBuffer += chunk;
+              
+              // Send first chunk early for low latency
+              if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                const toSend = textBuffer;
+                textBuffer = '';
+                deepgramTtsWs.send(JSON.stringify({
+                  type: 'speak',
+                  text: toSend
+                }));
+                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+              } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                const toSend = textBuffer;
+                textBuffer = '';
+                deepgramTtsWs.send(JSON.stringify({
+                  type: 'speak',
+                  text: toSend
+                }));
+                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+              }
+            };
+
+            // Get streaming chat response (this will call sendTextChunk as chunks arrive)
+            greeting = await getChatResponseStream(greetingPrompt, sendTextChunk, true);
+            
+            // Send remaining buffer and flush signal after streaming completes
+            if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
+              deepgramTtsWs.send(JSON.stringify({
+                type: 'speak',
+                text: textBuffer
+              }));
+              textBuffer = '';
+            }
+            if (deepgramTtsWs.readyState === WebSocket.OPEN) {
+              deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+              console.log('[Greeting Deepgram TTS Stream] Sent flush signal after streaming complete');
+            }
+          }
+        } catch (e) {
+          console.error('[Greeting] Error with streaming chat, falling back to non-streaming:', e);
+          // Fallback to non-streaming
+          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+          const response = await fetch(`${backendUrl}/api/chat`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messages: conversationHistory,
+            }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Chat API error: ${text}`);
+          }
+
+          const data = await response.json();
+          greeting = data.response || data.message || '';
+        }
+      } else {
+        // Non-Deepgram TTS - use non-streaming chat
+        // Add greeting prompt to conversationHistory for the API call
+        // (getChatResponseStream adds it automatically, but we need to add it here for non-streaming)
       conversationHistory.push({ role: 'user', content: greetingPrompt });
       
-      // Get the greeting from AI
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       const response = await fetch(`${backendUrl}/api/chat`, {
         method: 'POST',
@@ -3176,22 +3474,40 @@ export async function setupSTTMode(
       }
 
       const data = await response.json();
-      const greeting = data.response || data.message || '';
+        greeting = data.response || data.message || '';
+      }
       
       // Remove the greeting prompt from history (it was just to trigger the greeting)
       // Keep only the system message and the assistant's greeting
-      conversationHistory.pop(); // Remove the user greeting prompt
-      conversationHistory.push({ role: 'assistant', content: greeting });
+      // Find and remove the user greeting prompt (it might be the last user message or second-to-last if assistant response was already added)
+      const greetingPromptIndex = conversationHistory.findIndex(
+        (msg) => msg.role === 'user' && msg.content === greetingPrompt
+      );
+      if (greetingPromptIndex !== -1) {
+        conversationHistory.splice(greetingPromptIndex, 1);
+      }
       
-      // Update UI
+      // Ensure assistant greeting is in history (it might already be there from getChatResponseStream)
+      const hasAssistantGreeting = conversationHistory.some(
+        (msg) => msg.role === 'assistant' && msg.content === greeting
+      );
+      if (!hasAssistantGreeting) {
+      conversationHistory.push({ role: 'assistant', content: greeting });
+      }
+      
+      // Update UI (now without the greeting prompt)
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
       
       // Only speak greeting once (prevent duplicate with Web Speech API)
+      // For Deepgram TTS, audio is already being streamed, so we don't need to call textToSpeech
+      // For other TTS providers, call textToSpeech as before
       if (currentSTTSession && !currentSTTSession.greetingSpoken) {
         currentSTTSession.greetingSpoken = true;
+        if (ttsProvider !== 'deepgram') {
         await textToSpeech(greeting);
+        }
       }
     } catch (e) {
       console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
