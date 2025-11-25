@@ -3009,6 +3009,13 @@ export async function setupSTTMode(
           onThinkingUpdate(false);
         }
 
+        // For Deepgram TTS: Set the transcript's ID before calling textToSpeech
+        // This ensures audio chunks use the same ID as the transcript for validation
+        if (ttsProvider === 'deepgram' && currentSTTSession) {
+          currentSTTSession.currentTtsResponseId = transcriptObj.id;
+          console.log('[Web Speech API] Set TTS Response ID to transcript ID:', transcriptObj.id);
+        }
+
         // Convert to speech (this will stop the processing audio)
         await textToSpeech(response);
       } catch (e) {
