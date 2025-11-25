@@ -46,7 +46,7 @@ load_dotenv()
 # Lower values = faster response but may split sentences on natural pauses
 # Higher values = more natural but slightly higher latency
 # Recommended: 1200ms (1.2 seconds) for real-time conversation
-DEEPGRAM_STT_ENDPOINTING_MS = 1200
+DEEPGRAM_STT_ENDPOINTING_MS = 100
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
 
