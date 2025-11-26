@@ -167,8 +167,16 @@ let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) 
 // Callback to update thinking indicator state
 let onThinkingUpdate: ((isThinking: boolean) => void) | null = null;
 
+// Avatar visual states:
+// - idle: default
+// - listening: mic is on / user speaking
+// - processing: STT result received / TTT running
+// - speaking: TTS playing
+// - success / error: brief flashes for feedback
+type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
+
 // Callback to update avatar state
-let onAvatarStateUpdate: ((state: 'idle' | 'processing' | 'tts', isTTSPlaying: boolean) => void) | null = null;
+let onAvatarStateUpdate: ((state: AvatarState, isTTSPlaying: boolean) => void) | null = null;
 
 // Make memory text as crisp as possible by removing user's name and connectors
 function crispifyMemoryText(text: string, userName?: string): string {
@@ -1691,11 +1699,6 @@ export async function setupSTTMode(
         onThinkingUpdate(false);
       }
       
-      // Update avatar state to 'tts' when TTS starts
-      if (onAvatarStateUpdate) {
-        onAvatarStateUpdate('tts', false);
-      }
-      
       // Resume AudioContext if suspended (required for Android Chrome)
       if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
         try {
@@ -1726,7 +1729,7 @@ export async function setupSTTMode(
         
         // Fallback to backend config if admin settings not available
         if (!hasAdminSettings || !ttsProvider) {
-          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
           try {
             const resp = await fetch(`${backendUrl}/api/config`);
             if (resp.ok) {
@@ -1750,6 +1753,7 @@ export async function setupSTTMode(
         // Handle Deepgram TTS (WebSocket streaming, low latency)
         if (ttsProvider === 'deepgram') {
           return new Promise<void>((resolve, reject) => {
+            console.log('[TTS PATH] Using Deepgram TTS (textToSpeech)');
             // Generate global Response ID for this TTS call (if not already set by streaming path)
             if (currentSTTSession) {
               if (currentSTTSession.globalResponseId === undefined) {
@@ -1918,11 +1922,11 @@ export async function setupSTTMode(
                   const playTime = Math.max(currentTime, nextPlayTime);
                   source.start(playTime);
                   
-                  // Update avatar: TTS is now playing (first chunk)
-                  // Check if this is the first chunk by checking if queue was empty before this chunk
-                  const wasFirstChunk = currentSTTSession.deepgramTtsAudioQueue.length === 0;
-                  if (onAvatarStateUpdate && wasFirstChunk) {
-                    onAvatarStateUpdate('tts', true);
+                  // Update avatar: TTS is now speaking (Deepgram streaming)
+                  // It's safe to set this on each chunk; color doesn't change per chunk.
+                  if (onAvatarStateUpdate) {
+                    console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
+                    onAvatarStateUpdate('speaking', true);
                   }
 
                   const duration = audioBuffer.duration;
@@ -2319,6 +2323,7 @@ export async function setupSTTMode(
         
         // Handle Web Speech API (browser-native, no backend call needed)
         if (ttsProvider === 'webspeech') {
+          console.log('[TTS PATH] Using Web Speech API TTS');
           if (!('speechSynthesis' in window)) {
             throw new Error('Web Speech API is not supported in this browser');
           }
@@ -2360,9 +2365,10 @@ export async function setupSTTMode(
                 
                 // Set up speech completion handlers
                 utterance.onstart = () => {
-                  // Update avatar: TTS is now playing
+                  console.log('[TTS SPEAKING] WebSpeech (voiceschanged path) onstart');
+                  // Update avatar: TTS is now speaking
                   if (onAvatarStateUpdate) {
-                    onAvatarStateUpdate('tts', true);
+                    onAvatarStateUpdate('speaking', true);
                   }
                 };
                 utterance.onend = () => {
@@ -2435,9 +2441,10 @@ export async function setupSTTMode(
           // Return a promise that resolves when speech completes
           return new Promise<void>((resolve, reject) => {
             utterance.onstart = () => {
-              // Update avatar: TTS is now playing
+              console.log('[TTS SPEAKING] WebSpeech (direct path) onstart');
+              // Update avatar: TTS is now speaking
               if (onAvatarStateUpdate) {
-                onAvatarStateUpdate('tts', true);
+                onAvatarStateUpdate('speaking', true);
               }
             };
             utterance.onend = () => {
@@ -2466,6 +2473,7 @@ export async function setupSTTMode(
         
         // For other providers (gtts, openai), use backend API
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        console.log('[TTS PATH] Using backend /api/tts TTS provider:', ttsProvider);
         const response = await fetch(`${backendUrl}/api/tts`, {
           method: 'POST',
           headers: {
@@ -2672,9 +2680,10 @@ export async function setupSTTMode(
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
-            // Update avatar: TTS is now playing
+            // Update avatar: TTS is now speaking
             if (onAvatarStateUpdate) {
-              onAvatarStateUpdate('tts', true);
+              console.log('[TTS SPEAKING] Backend audio element play()');
+              onAvatarStateUpdate('speaking', true);
             }
           };
           
@@ -2799,6 +2808,11 @@ export async function setupSTTMode(
             isPlaying = true;
             await audioEl.play();
             console.log('[TTS] Audio playback started');
+            // Ensure avatar enters 'speaking' state as soon as playback starts
+            if (onAvatarStateUpdate) {
+              console.log('[TTS SPEAKING] Backend play() resolved, forcing speaking state');
+              onAvatarStateUpdate('speaking', true);
+            }
           } catch (playError: any) {
             // If play fails, try resuming AudioContext and retry
             if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
@@ -2808,6 +2822,10 @@ export async function setupSTTMode(
                 await audioEl.play();
                 isPlaying = true;
                 console.log('[TTS] Audio playback started after AudioContext resume');
+                if (onAvatarStateUpdate) {
+                  console.log('[TTS SPEAKING] Backend play() after resume, forcing speaking state');
+                  onAvatarStateUpdate('speaking', true);
+                }
               } else {
                 console.error('[TTS] Cannot retry play - invalid src after resume:', audioEl.src);
                 throw new Error('Invalid audio source after resume');
@@ -2902,7 +2920,7 @@ export async function setupSTTMode(
 
       console.log('[STT] User said:', transcript);
       
-      // Update avatar state to 'processing' when input is detected
+      // Update avatar: user finished speaking, now processing
       if (onAvatarStateUpdate) {
         onAvatarStateUpdate('processing', false);
       }
@@ -3151,6 +3169,11 @@ export async function setupSTTMode(
         } catch (e) {
           console.warn('[STT] Error stopping processing audio on recognition start:', e);
         }
+      }
+      
+      // Update avatar: mic is now listening for user speech
+      if (onAvatarStateUpdate) {
+        onAvatarStateUpdate('listening', false);
       }
       
       // Resolve promise when recognition is ready (for greeting)
@@ -3660,7 +3683,7 @@ export default function Page() {
   const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [isMobile, setIsMobile] = useState(false);
   const [isThinking, setIsThinking] = useState(false); // For Deepgram TTS thinking indicator
-  const [avatarState, setAvatarState] = useState<'idle' | 'processing' | 'tts'>('idle');
+  const [avatarState, setAvatarState] = useState<AvatarState>('idle');
   const [isTTSPlaying, setIsTTSPlaying] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
@@ -3731,9 +3754,12 @@ export default function Page() {
 
   // Set up callback to receive avatar state updates
   useEffect(() => {
-    onAvatarStateUpdate = (state: 'idle' | 'processing' | 'tts', isTTS: boolean) => {
+    onAvatarStateUpdate = (state: AvatarState, isTTS: boolean) => {
+      console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS);
       setAvatarState(state);
-      setIsTTSPlaying(isTTS);
+      // Derive isTTSPlaying from state so mouth always moves when speaking,
+      // regardless of any inconsistent boolean flags passed in.
+      setIsTTSPlaying(state === 'speaking');
     };
 
     return () => {

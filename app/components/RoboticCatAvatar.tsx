@@ -2,8 +2,10 @@
 
 import React from 'react';
 
+type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
+
 interface RoboticCatAvatarProps {
-  eyeColor: 'idle' | 'processing' | 'tts';
+  eyeColor: AvatarState;
   isTTSPlaying: boolean;
   size?: number;
 }
@@ -13,11 +15,14 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
   isTTSPlaying,
   size = 200,
 }) => {
-  // Color mapping for eyes
-  const eyeColors = {
-    idle: '#3b82f6',      // Blue
-    processing: '#f59e0b', // Amber/Orange
-    tts: '#8b5cf6',       // Purple
+  // Color mapping for eyes by avatar state
+  const eyeColors: Record<AvatarState, string> = {
+    idle: '#3b82f6',        // Blue
+    listening: '#38bdf8',   // Sky blue
+    processing: '#f59e0b',  // Amber/Orange
+    speaking: '#8b5cf6',    // Purple
+    success: '#22c55e',     // Green
+    error: '#ef4444',       // Red
   };
 
   const currentEyeColor = eyeColors[eyeColor];
@@ -29,6 +34,8 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
   return (
     <div
+      className="robotic-cat-avatar"
+      data-state={eyeColor}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -38,6 +45,28 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         padding: '20px',
       }}
     >
+      {/* Inline styles for idle micro-animations (blink + subtle breathing) */}
+      <style>{`
+        .robotic-cat-avatar[data-state="idle"] .avatar-head {
+          animation: avatarBreath 6s ease-in-out infinite;
+          transform-origin: 100px 100px;
+        }
+
+        .robotic-cat-avatar[data-state="idle"] .eye-iris {
+          animation: eyeBlink 4s infinite;
+          transform-origin: center;
+        }
+
+        @keyframes avatarBreath {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.02); }
+        }
+
+        @keyframes eyeBlink {
+          0%, 88%, 100% { transform: scaleY(1); }
+          90%, 92% { transform: scaleY(0.15); }
+        }
+      `}</style>
       <svg
         width={size}
         height={size}
@@ -78,6 +107,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         {/* Head - Rounded cat face */}
         <circle
+          className="avatar-head"
           cx="100"
           cy="100"
           r="60"
@@ -92,6 +122,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         {/* Left Eye */}
         <circle
+          className="eye-iris eye-iris-left"
           cx="80"
           cy="85"
           r="18"
@@ -123,6 +154,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         {/* Right Eye */}
         <circle
+          className="eye-iris eye-iris-right"
           cx="120"
           cy="85"
           r="18"
