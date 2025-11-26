@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
+import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
@@ -165,6 +166,9 @@ let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) 
 
 // Callback to update thinking indicator state
 let onThinkingUpdate: ((isThinking: boolean) => void) | null = null;
+
+// Callback to update avatar state
+let onAvatarStateUpdate: ((state: 'idle' | 'processing' | 'tts', isTTSPlaying: boolean) => void) | null = null;
 
 // Make memory text as crisp as possible by removing user's name and connectors
 function crispifyMemoryText(text: string, userName?: string): string {
@@ -1312,7 +1316,7 @@ export async function setupSTTMode(
     
     // If not in localStorage, fetch from backend (async, but don't wait - will initialize later if needed)
     if (!ttsProvider) {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       fetch(`${backendUrl}/api/config`)
         .then(resp => {
           if (resp.ok) {
@@ -1687,6 +1691,11 @@ export async function setupSTTMode(
         onThinkingUpdate(false);
       }
       
+      // Update avatar state to 'tts' when TTS starts
+      if (onAvatarStateUpdate) {
+        onAvatarStateUpdate('tts', false);
+      }
+      
       // Resume AudioContext if suspended (required for Android Chrome)
       if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
         try {
@@ -1908,6 +1917,13 @@ export async function setupSTTMode(
                   const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime;
                   const playTime = Math.max(currentTime, nextPlayTime);
                   source.start(playTime);
+                  
+                  // Update avatar: TTS is now playing (first chunk)
+                  // Check if this is the first chunk by checking if queue was empty before this chunk
+                  const wasFirstChunk = currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                  if (onAvatarStateUpdate && wasFirstChunk) {
+                    onAvatarStateUpdate('tts', true);
+                  }
 
                   const duration = audioBuffer.duration;
                   const newNextPlayTime = playTime + duration;
@@ -2165,6 +2181,10 @@ export async function setupSTTMode(
               // Don't close AudioContext - it's shared across requests
               // Next play time is already updated in processAudioQueue
               playbackFinished = true;
+              // Update avatar: TTS playback finished, return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
             };
             
             // Set up message handler (only if not already set up for new connections)
@@ -2339,10 +2359,24 @@ export async function setupSTTMode(
                 }
                 
                 // Set up speech completion handlers
+                utterance.onstart = () => {
+                  // Update avatar: TTS is now playing
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('tts', true);
+                  }
+                };
                 utterance.onend = () => {
+                  // Update avatar: TTS playback finished, return to idle
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('idle', false);
+                  }
                   resolve();
                 };
                 utterance.onerror = (e) => {
+                  // Update avatar on error: return to idle
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('idle', false);
+                  }
                   // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
                   if (e.error === 'interrupted') {
                     resolve(); // Resolve instead of reject - cancellation is expected
@@ -2400,10 +2434,24 @@ export async function setupSTTMode(
           
           // Return a promise that resolves when speech completes
           return new Promise<void>((resolve, reject) => {
+            utterance.onstart = () => {
+              // Update avatar: TTS is now playing
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('tts', true);
+              }
+            };
             utterance.onend = () => {
+              // Update avatar: TTS playback finished, return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               resolve();
             };
             utterance.onerror = (e) => {
+              // Update avatar on error: return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
               if (e.error === 'interrupted') {
                 resolve(); // Resolve instead of reject - cancellation is expected
@@ -2624,6 +2672,10 @@ export async function setupSTTMode(
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
+            // Update avatar: TTS is now playing
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('tts', true);
+            }
           };
           
           const handleEnded = () => {
@@ -2636,6 +2688,10 @@ export async function setupSTTMode(
             // Clear current audio element reference
             if (currentSTTSession && currentSTTSession.currentTTSAudioElement === audioEl) {
               currentSTTSession.currentTTSAudioElement = null;
+            }
+            // Update avatar: TTS playback finished, return to idle
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('idle', false);
             }
             // Remove event listeners to prevent beeps after audio ends
             if (audioEl) {
@@ -2709,6 +2765,11 @@ export async function setupSTTMode(
               src: audioEl.src
             });
             
+            // Reset avatar to idle on error
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('idle', false);
+            }
+            
             // CRITICAL: Clean up on error to prevent memory leaks
             // Only revoke if it's a permanent error
             if (audioEl.error) {
@@ -2752,6 +2813,10 @@ export async function setupSTTMode(
                 throw new Error('Invalid audio source after resume');
               }
             } else {
+              // Reset avatar to idle on play error
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               console.error('[TTS] Failed to play audio:', playError, {
                 src: audioEl.src,
                 readyState: audioEl.readyState,
@@ -2766,6 +2831,10 @@ export async function setupSTTMode(
         }
       } catch (e) {
         console.error('TTS error:', e);
+        // Reset avatar to idle on error
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('idle', false);
+        }
         // Fallback: Use Web Speech Synthesis API
         if ('speechSynthesis' in window) {
           const utterance = new SpeechSynthesisUtterance(text);
@@ -2832,6 +2901,11 @@ export async function setupSTTMode(
       }
 
       console.log('[STT] User said:', transcript);
+      
+      // Update avatar state to 'processing' when input is detected
+      if (onAvatarStateUpdate) {
+        onAvatarStateUpdate('processing', false);
+      }
       
       // Generate new global Response ID for this user message → TTT → TTS cycle
       // Create transcript object with ID that will flow through the entire pipeline
@@ -3023,6 +3097,10 @@ export async function setupSTTMode(
         // Hide thinking indicator on error
         if (onThinkingUpdate) {
           onThinkingUpdate(false);
+        }
+        // Reset avatar to idle on error
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('idle', false);
         }
         // Stop processing audio on error as well
         if (currentSTTSession) {
@@ -3582,6 +3660,8 @@ export default function Page() {
   const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [isMobile, setIsMobile] = useState(false);
   const [isThinking, setIsThinking] = useState(false); // For Deepgram TTS thinking indicator
+  const [avatarState, setAvatarState] = useState<'idle' | 'processing' | 'tts'>('idle');
+  const [isTTSPlaying, setIsTTSPlaying] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
   
@@ -3646,6 +3726,18 @@ export default function Page() {
     
     return () => {
       onConversationUpdate = null;
+    };
+  }, []);
+
+  // Set up callback to receive avatar state updates
+  useEffect(() => {
+    onAvatarStateUpdate = (state: 'idle' | 'processing' | 'tts', isTTS: boolean) => {
+      setAvatarState(state);
+      setIsTTSPlaying(isTTS);
+    };
+
+    return () => {
+      onAvatarStateUpdate = null;
     };
   }, []);
 
@@ -3827,6 +3919,27 @@ export default function Page() {
       flexDirection: isMobile ? 'column' : 'row',
       gap: 0,
     }}>
+      {/* Avatar Section - Half Screen */}
+      <div style={{
+        flex: isMobile ? 'none' : '1',
+        display: 'flex',
+        flexDirection: 'column',
+        height: isMobile ? '50vh' : '100vh',
+        minHeight: isMobile ? '400px' : '100vh',
+        backgroundColor: '#1a1a2e',
+        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
+        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}>
+        <RoboticCatAvatar
+          eyeColor={avatarState}
+          isTTSPlaying={isTTSPlaying}
+          size={isMobile ? 150 : 250}
+        />
+      </div>
+
       {/* Chat UI Section - WhatsApp-like */}
       <div style={{
         flex: isMobile ? 'none' : '1',
@@ -3836,8 +3949,6 @@ export default function Page() {
         minHeight: isMobile ? '400px' : '100vh',
         backgroundColor: '#e5ddd5',
         backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
-        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
-        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
       }}>
         {/* Chat Header */}
         <div style={{
@@ -3872,33 +3983,33 @@ export default function Page() {
           </div>
         {userData && (
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
-            <div style={{ textAlign: 'right', fontSize: '12px' }}>
-              <div>{userData.name}</div>
-            </div>
+              <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                <div>{userData.name}</div>
+          </div>
             {/* Three-dot menu button */}
-            <button
-              type="button"
+        <button
+          type="button"
               onClick={() => setShowMenu(!showMenu)}
-              style={{
+          style={{
                 padding: '8px',
                 fontSize: '18px',
-                fontWeight: 500,
-                color: 'white',
+            fontWeight: 500,
+                  color: 'white',
                 backgroundColor: 'transparent',
                 border: 'none',
                 borderRadius: '50%',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 width: '36px',
                 height: '36px',
-              }}
-              onMouseEnter={(e) => {
+          }}
+          onMouseEnter={(e) => {
                 e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
-              }}
-              onMouseLeave={(e) => {
+          }}
+          onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }}
               aria-label="Menu"
@@ -3970,14 +4081,14 @@ export default function Page() {
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  Logout
-                </button>
+          }}
+        >
+          Logout
+        </button>
               </div>
             )}
-          </div>
-        )}
+            </div>
+          )}
       </div>
 
         {/* Chat Messages Container */}
@@ -4261,23 +4372,23 @@ export default function Page() {
               }
               
               // Clean up realtime session
-              if (currentSession) {
-                // Stop recognition if it exists
-                if (currentSession.recognition) {
-                  try {
-                    currentSession.recognition.stop();
-                    currentSession.recognition.abort();
-                  } catch (e) {
-                    // Ignore errors
+                if (currentSession) {
+                  // Stop recognition if it exists
+                  if (currentSession.recognition) {
+                    try {
+                      currentSession.recognition.stop();
+                      currentSession.recognition.abort();
+                    } catch (e) {
+                      // Ignore errors
+                    }
                   }
+                  currentSession.session.close();
+                  currentSession = null;
                 }
-                currentSession.session.close();
-                currentSession = null;
-              }
               
               // Clean up STT session
-              if (currentSTTSession) {
-                if (currentSTTSession.recognition) {
+                if (currentSTTSession) {
+                  if (currentSTTSession.recognition) {
                   try {
                     currentSTTSession.recognition.stop();
                     currentSTTSession.recognition.abort();
@@ -4323,23 +4434,23 @@ export default function Page() {
                 }
                 if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
                   currentSTTSession.mediaRecorder.stop();
-                }
-                if (currentSTTSession.audioContext) {
+                  }
+                  if (currentSTTSession.audioContext) {
                   await currentSTTSession.audioContext.close();
-                }
-                // Stop and clean up processing audio
-                if (currentSTTSession.processingOscillator) {
-                  try {
-                    currentSTTSession.processingOscillator.stop();
-                    currentSTTSession.processingOscillator.disconnect();
-                  } catch (e) {}
-                }
-                if (currentSTTSession.processingGain) {
-                  try {
-                    currentSTTSession.processingGain.disconnect();
-                  } catch (e) {}
-                }
-                if (currentSTTSession.processingAudio) {
+                  }
+                  // Stop and clean up processing audio
+                  if (currentSTTSession.processingOscillator) {
+                    try {
+                      currentSTTSession.processingOscillator.stop();
+                      currentSTTSession.processingOscillator.disconnect();
+                    } catch (e) {}
+                  }
+                  if (currentSTTSession.processingGain) {
+                    try {
+                      currentSTTSession.processingGain.disconnect();
+                    } catch (e) {}
+                  }
+                  if (currentSTTSession.processingAudio) {
                   // Aggressively stop processing audio
                   try {
                     currentSTTSession.processingAudio.volume = 0;
@@ -4349,9 +4460,9 @@ export default function Page() {
                   } catch (e) {
                     console.warn('[Disconnect] Error stopping processing audio:', e);
                   }
+                  }
+                  currentSTTSession = null;
                 }
-                currentSTTSession = null;
-              }
               
               // Reset state
               setStatus('idle');
@@ -4408,43 +4519,43 @@ export default function Page() {
         >
           Disconnect
         </button>
-        <button
-          ref={buttonRef}
-          onClick={() => {
-            if (status === 'connecting...') return;
-            setStatus('connecting...');
-            setupCounter(
-              buttonRef.current as HTMLButtonElement,
-              audioRef.current,
-              selectedInput,
-              selectedOutput,
-              useSTTMode,
-              userData?.name,
-              userData?.age,
-              currentUser?.uid || userData?.uid,
-            )
-              .then(() => setStatus('connected'))
-              .catch((e) => {
-                console.error(e);
-                setStatus('error - see console');
-              });
-          }}
+      <button
+        ref={buttonRef}
+        onClick={() => {
+          if (status === 'connecting...') return;
+          setStatus('connecting...');
+          setupCounter(
+            buttonRef.current as HTMLButtonElement,
+            audioRef.current,
+            selectedInput,
+            selectedOutput,
+            useSTTMode,
+            userData?.name,
+            userData?.age,
+            currentUser?.uid || userData?.uid,
+          )
+            .then(() => setStatus('connected'))
+            .catch((e) => {
+              console.error(e);
+              setStatus('error - see console');
+            });
+        }}
           disabled={status === 'connecting...' || status === 'connected'}
-          type="button"
-          style={{
-            padding: '14px 32px',
-            fontSize: 16,
-            fontWeight: 600,
-            color: '#ffffff',
-            backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
-            border: 'none',
-            borderRadius: '8px',
+        type="button"
+        style={{
+          padding: '14px 32px',
+          fontSize: 16,
+          fontWeight: 600,
+          color: '#ffffff',
+          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
+          border: 'none',
+          borderRadius: '8px',
             cursor: status === 'connecting...' || status === 'connected' ? 'not-allowed' : 'pointer',
-            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-            transition: 'all 0.2s ease-in-out',
-            minWidth: '180px',
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+          transition: 'all 0.2s ease-in-out',
+          minWidth: '180px',
             flex: 1,
-          }}
+        }}
         onMouseEnter={(e) => {
           if (status !== 'connecting...' && status !== 'connected') {
             e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#dc2626' : '#2563eb';
