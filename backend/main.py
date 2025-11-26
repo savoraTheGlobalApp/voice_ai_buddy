@@ -11,6 +11,7 @@ import re
 import httpx
 import json
 import asyncio
+import time
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -38,6 +39,14 @@ try:
 except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
+
+# Import Google Cloud Speech (lazy import)
+try:
+    from google.cloud import speech
+    GOOGLE_CLOUD_SPEECH_AVAILABLE = True
+except ImportError:
+    GOOGLE_CLOUD_SPEECH_AVAILABLE = False
+    speech = None
 
 # Load environment variables from .env file
 load_dotenv()
@@ -155,11 +164,20 @@ async def get_config():
     # Check if Deepgram TTS is available (requires DEEPGRAM_API_KEY)
     deepgram_tts_available = bool(os.getenv("DEEPGRAM_API_KEY"))
     
+    # Check if Google Cloud STT is available (requires GOOGLE_APPLICATION_CREDENTIALS or service account key)
+    google_cloud_stt_available = False
+    if GOOGLE_CLOUD_SPEECH_AVAILABLE:
+        # Check for credentials via environment variable or service account key file
+        google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        service_account_key = os.getenv("GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY")
+        google_cloud_stt_available = bool(google_creds or service_account_key)
+    
     return {
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
         "chat_model": chat_model,
         "deepgram_tts_available": deepgram_tts_available,
+        "google_cloud_stt_available": google_cloud_stt_available,
     }
 
 
@@ -792,6 +810,424 @@ async def deepgram_stt_websocket(websocket: WebSocket):
         )
     except Exception as e:
         print(f"[Deepgram STT] Connection error: {e}")
+        await websocket.close(code=1011, reason=f"Server error: {str(e)}")
+
+
+@app.websocket("/api/stt/googlecloud")
+async def googlecloud_stt_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for Google Cloud Speech-to-Text streaming STT.
+    Receives audio from frontend and streams transcripts back in real-time.
+    """
+    await websocket.accept()
+    
+    if not GOOGLE_CLOUD_SPEECH_AVAILABLE or speech is None:
+        await websocket.close(
+            code=1011,
+            reason="google-cloud-speech library not installed. Run: pip install google-cloud-speech"
+        )
+        return
+    
+    # Check for Google Cloud credentials
+    google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    service_account_key = os.getenv("GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY")
+    
+    if not google_creds and not service_account_key:
+        await websocket.close(
+            code=1008,
+            reason="GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY not configured"
+        )
+        return
+    
+    try:
+        # Set up Google Cloud Speech client
+        # If service account key is provided as JSON string, write it to a temp file
+        import tempfile
+        import os as os_module
+        import threading
+        
+        client = None
+        temp_cred_file = None
+        
+        if service_account_key:
+            # Parse JSON and write to temp file
+            try:
+                creds_json = json.loads(service_account_key)
+                temp_cred_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+                json.dump(creds_json, temp_cred_file)
+                temp_cred_file.close()
+                os_module.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_cred_file.name
+                client = speech.SpeechClient()
+            except json.JSONDecodeError:
+                await websocket.close(code=1008, reason="Invalid GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY JSON")
+                return
+        else:
+            # Use GOOGLE_APPLICATION_CREDENTIALS path
+            client = speech.SpeechClient()
+        
+        print("[Google Cloud STT] Client initialized")
+        
+        # Audio configuration
+        # Google Cloud Speech expects LINEAR16 PCM at 16kHz (as per the reference code)
+        RATE = 16000
+        language_code = os.getenv("GOOGLE_CLOUD_STT_LANGUAGE", "en-US")
+        
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=RATE,
+            language_code=language_code,
+            enable_automatic_punctuation=True,
+        )
+        
+        streaming_config = speech.StreamingRecognitionConfig(
+            config=config,
+            interim_results=True,  # Enable interim results for real-time feedback
+        )
+        
+        # Thread-safe queue to buffer audio chunks from WebSocket
+        import queue as thread_queue
+        audio_queue = thread_queue.Queue()
+        recognition_active = threading.Event()
+        recognition_active.set()
+        
+        # Task to receive audio from WebSocket and add to queue
+        # Frontend sends audio continuously (including silence), so we should always receive chunks
+        # Process chunks as fast as possible to prevent gaps in Google Cloud stream
+        async def receive_audio():
+            try:
+                while recognition_active.is_set():
+                    try:
+                        # Wait for audio chunks from frontend (frontend sends continuously every ~128ms)
+                        # Use shorter timeout to process chunks faster and reduce gaps
+                        audio_data = await asyncio.wait_for(websocket.receive_bytes(), timeout=0.5)
+                        # Put chunk in queue immediately (non-blocking if possible)
+                        try:
+                            audio_queue.put_nowait(audio_data)
+                        except thread_queue.Full:
+                            # Queue is full, use blocking put (shouldn't happen with continuous flow)
+                            audio_queue.put(audio_data)
+                    except asyncio.TimeoutError:
+                        # Timeout is OK - just check if still active and continue
+                        # Frontend should be sending continuously, so timeouts should be rare
+                        continue
+            except WebSocketDisconnect:
+                print("[Google Cloud STT] Client disconnected")
+                recognition_active.clear()
+                try:
+                    audio_queue.put_nowait(None)  # Signal end
+                except thread_queue.Full:
+                    audio_queue.put(None)
+            except Exception as e:
+                print(f"[Google Cloud STT] Error receiving audio: {e}")
+                recognition_active.clear()
+                try:
+                    audio_queue.put_nowait(None)  # Signal end
+                except thread_queue.Full:
+                    audio_queue.put(None)
+        
+        # Generator function to yield audio chunks from queue (runs in thread)
+        # CRITICAL: Never wait - always yield chunks (real audio or silence) to prevent Google Cloud timeout
+        # Google Cloud requires continuous audio stream - any gap causes timeout
+        def audio_generator():
+            # Calculate silence chunk size: frontend sends 2048 samples at 16kHz = 4096 bytes (Int16)
+            # This matches the frontend buffer size to maintain consistent chunk timing
+            CHUNK_SIZE_BYTES = 2048 * 2  # 2048 samples * 2 bytes per Int16 sample = 4096 bytes
+            SILENCE_CHUNK = bytes(CHUNK_SIZE_BYTES)  # Zero-filled silence chunk
+            
+            # Timing: Frontend sends chunks every ~128ms (2048 samples / 16000 Hz)
+            # We'll yield chunks at similar rate to maintain continuous flow
+            # Use slightly longer interval to reduce silence chunk frequency and allow real audio to be processed
+            YIELD_INTERVAL = 0.15  # Yield every 150ms - balances continuity with allowing real audio processing
+            last_yield_time = time.time()
+            silence_chunk_count = 0
+            real_audio_chunk_count = 0
+            
+            while recognition_active.is_set():
+                try:
+                    # Step 1: Try to get chunks from queue (non-blocking)
+                    data_chunks = []
+                    max_collect = 5  # Collect up to 5 chunks at a time
+                    collected = 0
+                    
+                    while collected < max_collect:
+                        try:
+                            chunk = audio_queue.get_nowait()
+                            if chunk is None:  # End signal
+                                # Yield any collected chunks before breaking
+                                if data_chunks:
+                                    combined = b"".join(data_chunks)
+                                    yield speech.StreamingRecognizeRequest(audio_content=combined)
+                                return
+                            data_chunks.append(chunk)
+                            collected += 1
+                        except thread_queue.Empty:
+                            # Queue is empty - break and handle below
+                            break
+                    
+                    # Step 2: If we have real audio chunks, yield them immediately
+                    # Prioritize real audio over silence to ensure speech detection works
+                    if data_chunks:
+                        combined_audio = b"".join(data_chunks)
+                        yield speech.StreamingRecognizeRequest(audio_content=combined_audio)
+                        last_yield_time = time.time()
+                        real_audio_chunk_count += len(data_chunks)
+                        # Log every 50 real audio chunks for debugging
+                        if real_audio_chunk_count % 50 == 0:
+                            print(f"[Google Cloud STT] Yielded {real_audio_chunk_count} real audio chunks")
+                    else:
+                        # Step 3: Queue is empty - yield silence chunk to keep stream alive
+                        # But only if enough time has passed to maintain rate without overwhelming Google Cloud
+                        current_time = time.time()
+                        time_since_last_yield = current_time - last_yield_time
+                        
+                        # Yield silence chunk if enough time has passed (maintains rate without flooding)
+                        # This prevents Google Cloud timeout while allowing real audio to be processed
+                        if time_since_last_yield >= YIELD_INTERVAL:
+                            yield speech.StreamingRecognizeRequest(audio_content=SILENCE_CHUNK)
+                            last_yield_time = current_time
+                            silence_chunk_count += 1
+                            # Log every 100 silence chunks for debugging
+                            if silence_chunk_count % 100 == 0:
+                                print(f"[Google Cloud STT] Yielded {silence_chunk_count} silence chunks (keeping stream alive)")
+                        else:
+                            # Just yielded recently - very short sleep then check queue again
+                            # This prevents CPU spinning while maintaining responsiveness for real audio
+                            time.sleep(0.005)  # 5ms sleep
+                    
+                except Exception as e:
+                    print(f"[Google Cloud STT] Error in audio generator: {e}")
+                    break
+        
+        # Task to process recognition responses
+        # CRITICAL: Process responses as they arrive (streaming), not after recognition completes
+        # Automatically restart sessions before 305-second limit for seamless continuous operation
+        async def process_responses():
+            try:
+                # Google Cloud has a 305-second limit per streaming session
+                # We'll restart sessions at 290 seconds (with 15-second buffer) for seamless transition
+                MAX_SESSION_DURATION = 290  # seconds (restart before 305-second limit)
+                session_restart_count = 0
+                total_response_count = 0
+                
+                # Continuous session loop - automatically restarts to handle 305-second limit
+                while recognition_active.is_set():
+                    session_start_time = time.time()
+                    session_restart_count += 1
+                    print(f"[Google Cloud STT] Starting session #{session_restart_count} (will restart at {MAX_SESSION_DURATION}s)")
+                    
+                    # Use thread-safe queue to pass responses from executor thread to async context
+                    thread_response_queue = thread_queue.Queue()
+                    loop = asyncio.get_event_loop()
+                    
+                    def run_recognition_and_queue():
+                        """Run recognition in executor thread and queue responses"""
+                        try:
+                            # streaming_recognize returns an iterable that yields responses as they arrive
+                            # This blocks until the generator stops, connection closes, or 305-second limit
+                            responses_iterable = client.streaming_recognize(streaming_config, audio_generator())
+                            
+                            response_count = 0
+                            for response in responses_iterable:
+                                response_count += 1
+                                # Put response in thread-safe queue (non-blocking if possible)
+                                try:
+                                    thread_response_queue.put_nowait(response)
+                                except thread_queue.Full:
+                                    # Queue full - use blocking put (shouldn't happen with async consumption)
+                                    thread_response_queue.put(response)
+                                
+                                # Check if recognition is still active
+                                if not recognition_active.is_set():
+                                    print(f"[Google Cloud STT] Recognition stopped, exiting iterator after {response_count} responses")
+                                    break
+                                
+                                # Check if we're approaching the limit (shouldn't happen due to proactive restart)
+                                elapsed = time.time() - session_start_time
+                                if elapsed >= MAX_SESSION_DURATION:
+                                    print(f"[Google Cloud STT] Session duration limit approaching ({elapsed:.1f}s), will restart")
+                                    break
+                            
+                            # Signal end of responses for this session
+                            try:
+                                thread_response_queue.put_nowait(None)
+                            except thread_queue.Full:
+                                thread_response_queue.put(None)
+                            
+                            print(f"[Google Cloud STT] Session #{session_restart_count} iterator completed after {response_count} responses")
+                            return response_count
+                        except Exception as e:
+                            error_str = str(e)
+                            # Check if it's the duration limit error
+                            if "Exceeded maximum allowed stream duration" in error_str or "OUT_OF_RANGE" in error_str:
+                                print(f"[Google Cloud STT] Session #{session_restart_count} hit duration limit (expected), restarting...")
+                            else:
+                                print(f"[Google Cloud STT] Session #{session_restart_count} recognition error: {e}")
+                                import traceback
+                                traceback.print_exc()
+                            # Signal error/end
+                            try:
+                                thread_response_queue.put_nowait(None)
+                            except thread_queue.Full:
+                                thread_response_queue.put(None)
+                            return 0
+                    
+                    # Start recognition in executor (runs in background thread)
+                    executor_future = loop.run_in_executor(None, run_recognition_and_queue)
+                    
+                    # Process responses from queue as they arrive (async)
+                    session_response_count = 0
+                    last_response_time = time.time()
+                    
+                    while recognition_active.is_set():
+                        # Check if we need to restart proactively (before hitting limit)
+                        elapsed = time.time() - session_start_time
+                        if elapsed >= MAX_SESSION_DURATION:
+                            print(f"[Google Cloud STT] Proactively restarting session #{session_restart_count} after {elapsed:.1f}s (before 305s limit)")
+                            # Break to restart - audio generator continues seamlessly
+                            break
+                        
+                        try:
+                            # Get response from thread-safe queue with timeout
+                            try:
+                                def get_from_queue():
+                                    try:
+                                        return thread_response_queue.get(timeout=1.0)
+                                    except thread_queue.Empty:
+                                        return None  # Signal timeout
+                                
+                                response = await asyncio.to_thread(get_from_queue)
+                                
+                                # None means timeout
+                                if response is None:
+                                    # Check if executor completed
+                                    if executor_future.done():
+                                        try:
+                                            executor_future.result()  # Check for errors
+                                        except Exception as exec_error:
+                                            error_str = str(exec_error)
+                                            if "Exceeded maximum allowed stream duration" in error_str:
+                                                print(f"[Google Cloud STT] Session hit duration limit, restarting seamlessly...")
+                                            else:
+                                                print(f"[Google Cloud STT] Executor error: {exec_error}")
+                                        break
+                                    # Queue timeout is OK - continue waiting
+                                    continue
+                            except Exception as queue_error:
+                                # Error getting from queue - check if executor completed
+                                if executor_future.done():
+                                    try:
+                                        executor_future.result()  # Check for errors
+                                    except Exception as exec_error:
+                                        error_str = str(exec_error)
+                                        if "Exceeded maximum allowed stream duration" in error_str:
+                                            print(f"[Google Cloud STT] Session hit duration limit, restarting seamlessly...")
+                                        else:
+                                            print(f"[Google Cloud STT] Executor error: {exec_error}")
+                                    break
+                                continue
+                            
+                            # None signals end of responses for this session
+                            if response is None:
+                                print(f"[Google Cloud STT] Session #{session_restart_count} ended after {session_response_count} responses")
+                                # Break to restart session seamlessly
+                                break
+                            
+                            session_response_count += 1
+                            total_response_count += 1
+                            last_response_time = time.time()
+                            print(f"[Google Cloud STT] Session #{session_restart_count}, Response #{session_response_count} (total: {total_response_count}), has_results: {bool(response.results)}")
+                            
+                            if not response.results:
+                                print(f"[Google Cloud STT] Response has no results, continuing...")
+                                continue
+                            
+                            # Process the first result (most recent)
+                            result = response.results[0]
+                            print(f"[Google Cloud STT] Response result: is_final={result.is_final}, has_alternatives={bool(result.alternatives)}")
+                            
+                            if not result.alternatives:
+                                print(f"[Google Cloud STT] Response has no alternatives, continuing...")
+                                continue
+                            
+                            transcript = result.alternatives[0].transcript.strip()
+                            confidence = getattr(result.alternatives[0], 'confidence', None)
+                            print(f"[Google Cloud STT] Response transcript: '{transcript}' (confidence: {confidence}, is_final: {result.is_final})")
+                            
+                            if not transcript:
+                                print(f"[Google Cloud STT] Response transcript is empty, continuing...")
+                                continue
+                            
+                            # Send final transcripts only (not interim results)
+                            # This matches Deepgram behavior - only send finalized transcripts
+                            if result.is_final:
+                                print(f"[Google Cloud STT] Sending final transcript to frontend: '{transcript}'")
+                                try:
+                                    await websocket.send_text(json.dumps({
+                                        "type": "transcript",
+                                        "text": transcript
+                                    }))
+                                    print(f"[Google Cloud STT] Final transcript sent successfully: {transcript}")
+                                except Exception as send_error:
+                                    print(f"[Google Cloud STT] Error sending transcript to frontend: {send_error}")
+                                    import traceback
+                                    traceback.print_exc()
+                            else:
+                                # Log interim results for debugging (but don't send to frontend)
+                                print(f"[Google Cloud STT] Interim result (not sending): {transcript}")
+                        except Exception as process_error:
+                            print(f"[Google Cloud STT] Error processing response: {process_error}")
+                            import traceback
+                            traceback.print_exc()
+                            # Continue processing other responses
+                            continue
+                    
+                    # Wait for executor to complete (with timeout)
+                    try:
+                        await asyncio.wait_for(executor_future, timeout=2.0)
+                    except asyncio.TimeoutError:
+                        print(f"[Google Cloud STT] Executor still running, continuing to next session...")
+                    
+                    session_duration = time.time() - session_start_time
+                    print(f"[Google Cloud STT] Session #{session_restart_count} completed: {session_response_count} responses in {session_duration:.1f}s")
+                    
+                    # If recognition is still active, seamlessly restart (audio generator continues)
+                    if recognition_active.is_set():
+                        print(f"[Google Cloud STT] Seamlessly restarting session (user won't notice)...")
+                        # Small delay to ensure clean transition
+                        await asyncio.sleep(0.1)
+                    else:
+                        print(f"[Google Cloud STT] Recognition stopped, exiting session loop")
+                        break
+                
+                print(f"[Google Cloud STT] Exited session loop after {session_restart_count} sessions, {total_response_count} total responses")
+                print(f"[Google Cloud STT] Recognition active: {recognition_active.is_set()}")
+                        
+            except WebSocketDisconnect:
+                print("[Google Cloud STT] Client disconnected during recognition")
+            except Exception as e:
+                print(f"[Google Cloud STT] Error processing responses: {e}")
+                import traceback
+                traceback.print_exc()
+                recognition_active.clear()
+        
+        # Run both tasks concurrently
+        try:
+            await asyncio.gather(receive_audio(), process_responses())
+        except Exception as e:
+            print(f"[Google Cloud STT] Error: {e}")
+        finally:
+            recognition_active.clear()
+            # Clean up temp file if created
+            if temp_cred_file and os_module.path.exists(temp_cred_file.name):
+                try:
+                    os_module.unlink(temp_cred_file.name)
+                except Exception:
+                    pass
+                    
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[Google Cloud STT] Connection error: {error_details}")
         await websocket.close(code=1011, reason=f"Server error: {str(e)}")
 
 
