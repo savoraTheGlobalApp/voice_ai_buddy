@@ -5,7 +5,7 @@ Future: Hardware control, ML models, parental insights
 """
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import os
 import re
 import httpx
@@ -41,6 +41,12 @@ except ImportError:
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Deepgram STT endpointing configuration (silence duration in milliseconds before finalizing transcript)
+# Lower values = faster response but may split sentences on natural pauses
+# Higher values = more natural but slightly higher latency
+# Recommended: 1200ms (1.2 seconds) for real-time conversation
+DEEPGRAM_STT_ENDPOINTING_MS = 100
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
 
@@ -146,10 +152,14 @@ async def get_config():
     tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
     chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
     
+    # Check if Deepgram TTS is available (requires DEEPGRAM_API_KEY)
+    deepgram_tts_available = bool(os.getenv("DEEPGRAM_API_KEY"))
+    
     return {
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
         "chat_model": chat_model,
+        "deepgram_tts_available": deepgram_tts_available,
     }
 
 
@@ -263,6 +273,96 @@ async def chat(request: ChatRequest):
             status_code=500,
             detail=f"Unexpected server error: {str(e)}"
         )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat API endpoint for low-latency TTS (e.g., Deepgram TTS).
+    Streams chat completions as Server-Sent Events (SSE).
+    Only use this when TTS provider supports streaming (e.g., Deepgram).
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    # Use model from request, or fall back to environment variable, or default
+    model = request.model or os.getenv("CHAT_MODEL", "gpt-4o-mini")
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    'POST',
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": request.messages,
+                        "temperature": 0.7,
+                        "max_tokens": 500,
+                        "stream": True,  # Enable streaming
+                    },
+                    timeout=30.0,
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        yield f"data: {json.dumps({'error': f'OpenAI API error: {error_text.decode()}'})}\n\n"
+                        return
+
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        
+                        # OpenAI SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            
+                            # Check for [DONE] marker
+                            if data_str.strip() == "[DONE]":
+                                yield f"data: {json.dumps({'done': True})}\n\n"
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                choices = data.get("choices", [])
+                                if choices and len(choices) > 0:
+                                    delta = choices[0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    
+                                    if content:
+                                        # Send text chunk
+                                        yield f"data: {json.dumps({'delta': content, 'done': False})}\n\n"
+                                    
+                                    # Check if this is the final chunk
+                                    finish_reason = choices[0].get("finish_reason")
+                                    if finish_reason:
+                                        yield f"data: {json.dumps({'delta': '', 'done': True})}\n\n"
+                                        break
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON lines
+                                continue
+
+        except httpx.HTTPError as e:
+            yield f"data: {json.dumps({'error': f'Network error: {str(e)}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': f'Server error: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
 
 
 async def _generate_gtts(text: str, lang: str = "en") -> bytes:
@@ -483,9 +583,10 @@ async def text_to_speech(request: TTSRequest):
     - "gtts" (default): Free gTTS (Google Text-to-Speech) - most reliable free option
     - "edge": Edge TTS (Microsoft, can be blocked/rate-limited)
     - "openai": OpenAI TTS API (requires OPENAI_API_KEY, paid)
+    - "deepgram": Deepgram Aura-2 streaming TTS (requires DEEPGRAM_API_KEY, paid, low latency)
     - "webspeech": Web Speech API (browser-native, handled client-side only)
     
-    Note: "webspeech" is handled entirely in the browser and will not reach this endpoint.
+    Note: "webspeech" and "deepgram" are handled via WebSocket and should not reach this endpoint.
     Automatic fallback: If gTTS fails, tries OpenAI if API key is available.
     """
     # Get TTS provider from request (admin settings) or environment variable, default to "gtts"
@@ -497,6 +598,13 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(
             status_code=400,
             detail="Web Speech API is browser-native and must be handled client-side. This request should not reach the backend."
+        )
+    
+    # Deepgram TTS uses WebSocket, not HTTP POST
+    if tts_provider == "deepgram":
+        raise HTTPException(
+            status_code=400,
+            detail="Deepgram TTS uses WebSocket connection. Use /api/tts/deepgram WebSocket endpoint instead."
         )
     
     # Validate text is not empty
@@ -623,11 +731,12 @@ async def deepgram_stt_websocket(websocket: WebSocket):
     try:
         import websockets as ws_lib
         
-        # Deepgram WebSocket URL
+        # Deepgram WebSocket URL with endpointing configuration
         dg_url = (
             f"wss://api.deepgram.com/v1/listen?"
             f"model=nova-3&encoding=linear16&sample_rate=48000"
             f"&punctuate=true&interim_results=false"
+            f"&endpointing={DEEPGRAM_STT_ENDPOINTING_MS}"
         )
         
         # Connect to Deepgram
@@ -683,6 +792,120 @@ async def deepgram_stt_websocket(websocket: WebSocket):
         )
     except Exception as e:
         print(f"[Deepgram STT] Connection error: {e}")
+        await websocket.close(code=1011, reason=f"Server error: {str(e)}")
+
+
+@app.websocket("/api/tts/deepgram")
+async def deepgram_tts_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint for Deepgram Aura-2 streaming TTS.
+    Receives text from frontend, sends to Deepgram, and streams PCM audio back.
+    Optimized for low latency real-time conversation.
+    """
+    await websocket.accept()
+    
+    dg_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not dg_api_key:
+        await websocket.close(code=1008, reason="DEEPGRAM_API_KEY not configured")
+        return
+    
+    try:
+        import websockets as ws_lib
+        
+        # Get Deepgram TTS model from env (default: aura-2-thalia-en)
+        tts_model = os.getenv("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en")
+        sample_rate = int(os.getenv("DEEPGRAM_TTS_SAMPLE_RATE", "48000"))
+        
+        # Deepgram TTS WebSocket URL
+        dg_url = (
+            f"wss://api.deepgram.com/v1/speak?"
+            f"model={tts_model}&encoding=linear16&sample_rate={sample_rate}"
+        )
+        
+        # Connect to Deepgram TTS
+        async with ws_lib.connect(
+            dg_url,
+            extra_headers={"Authorization": f"Token {dg_api_key}"}
+        ) as dg_ws:
+            print(f"[Deepgram TTS] WebSocket connected to Deepgram (model: {tts_model})")
+            
+            # Task to forward text messages from client to Deepgram
+            async def forward_text():
+                try:
+                    while True:
+                        # Receive text message from frontend
+                        message = await websocket.receive_text()
+                        try:
+                            data = json.loads(message)
+                            msg_type = data.get("type")
+                            
+                            if msg_type == "speak":
+                                # Send Speak message to Deepgram
+                                text = data.get("text", "")
+                                if text:
+                                    await dg_ws.send(json.dumps({
+                                        "type": "Speak",
+                                        "text": text
+                                    }))
+                            elif msg_type == "flush":
+                                # Send Flush message to Deepgram
+                                await dg_ws.send(json.dumps({"type": "Flush"}))
+                        except json.JSONDecodeError:
+                            # If not JSON, treat as plain text
+                            if message.strip():
+                                await dg_ws.send(json.dumps({
+                                    "type": "Speak",
+                                    "text": message
+                                }))
+                except WebSocketDisconnect:
+                    print("[Deepgram TTS] Client disconnected")
+                except Exception as e:
+                    print(f"[Deepgram TTS] Error forwarding text: {e}")
+            
+            # Task to forward audio from Deepgram to client
+            async def forward_audio():
+                try:
+                    async for message in dg_ws:
+                        if isinstance(message, bytes):
+                            # PCM audio data - forward to client
+                            await websocket.send_bytes(message)
+                        elif isinstance(message, str):
+                            # Control frame (JSON)
+                            try:
+                                data = json.loads(message)
+                                msg_type = data.get("type")
+                                
+                                if msg_type == "PlaybackFinished":
+                                    # Notify client that playback finished
+                                    await websocket.send_text(json.dumps({
+                                        "type": "playback_finished"
+                                    }))
+                                elif msg_type == "Error":
+                                    # Forward error to client
+                                    await websocket.send_text(json.dumps({
+                                        "type": "error",
+                                        "message": data.get("message", "Unknown error")
+                                    }))
+                            except json.JSONDecodeError:
+                                pass
+                except Exception as e:
+                    print(f"[Deepgram TTS] Error forwarding audio: {e}")
+            
+            # Run both tasks concurrently
+            try:
+                await asyncio.gather(forward_text(), forward_audio())
+            except WebSocketDisconnect:
+                print("[Deepgram TTS] Client disconnected")
+            except Exception as e:
+                print(f"[Deepgram TTS] Error: {e}")
+                
+    except ImportError:
+        await websocket.close(
+            code=1011,
+            reason="websockets library not installed. Run: pip install websockets"
+        )
+    except Exception as e:
+        print(f"[Deepgram TTS] Connection error: {e}")
         await websocket.close(code=1011, reason=f"Server error: {str(e)}")
 
 
