@@ -30,8 +30,8 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
   const currentEyeColor = eyeColors[eyeColor];
 
-  // Mouth animation: cycle through shapes when TTS is playing, default is smile
-  const [mouthShape, setMouthShape] = useState<'closed' | 'mid' | 'wide'>('closed');
+  // Mouth animation: cycle through opening and closing when TTS is playing, default is smile
+  const [mouthShape, setMouthShape] = useState<'closed' | 'open' | 'mid'>('closed');
 
   useEffect(() => {
     if (!isTTSPlaying) {
@@ -40,31 +40,34 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
       return;
     }
 
-    // Cycle through mouth shapes during TTS playback
+    // Cycle through mouth shapes: closed -> open -> mid -> closed for natural talking motion
     const interval = setInterval(() => {
       setMouthShape((prev) => {
-        if (prev === 'closed') return 'mid';
-        if (prev === 'mid') return 'wide';
+        if (prev === 'closed') return 'open';
+        if (prev === 'open') return 'mid';
         return 'closed';
       });
-    }, 150); // Cycle every 150ms for natural talking motion
+    }, 120); // Cycle every 120ms for natural talking motion
 
     return () => clearInterval(interval);
   }, [isTTSPlaying]);
 
-  // Mouth dimensions based on shape - all are smiles, varying in width
+  // Mouth shapes: closed (smile), open (oval), mid (semi-open)
   const mouthConfig = {
     closed: { 
       // Subtle smile (default/idle)
       path: 'M 85,140 Q 100,145 115,140',
+      fill: 'none',
+    },
+    open: { 
+      // Open mouth (oval shape)
+      path: 'M 90,135 Q 100,150 110,135 Q 100,155 90,135',
+      fill: '#1a202c',
     },
     mid: { 
-      // Happy smile (mid = talking)
-      path: 'M 80,138 Q 100,148 120,138',
-    },
-    wide: { 
-      // Big happy smile (wide = talking)
-      path: 'M 75,136 Q 100,150 125,136',
+      // Semi-open (smaller oval)
+      path: 'M 88,137 Q 100,148 112,137 Q 100,152 88,137',
+      fill: '#1a202c',
     },
   };
 
@@ -284,15 +287,15 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           strokeWidth="1"
         />
 
-        {/* Mouth - Animated smile curve */}
+        {/* Mouth - Animated opening and closing */}
         <path
           d={mouth.path}
-          stroke="#1a202c"
-          strokeWidth="3"
+          stroke={mouthShape === 'closed' ? '#1a202c' : 'none'}
+          strokeWidth={mouthShape === 'closed' ? 3 : 0}
           strokeLinecap="round"
-          fill="none"
+          fill={mouth.fill}
           style={{
-            transition: 'd 0.3s ease-in-out',
+            transition: 'd 0.12s ease-in-out, fill 0.12s ease-in-out, stroke 0.12s ease-in-out',
           }}
         />
         
