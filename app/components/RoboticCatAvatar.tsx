@@ -15,14 +15,14 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
   isTTSPlaying,
   size = 200,
 }) => {
-  // Color mapping for eyes by avatar state
+  // Color mapping for eyes by avatar state (yellow/orange family)
   const eyeColors: Record<AvatarState, string> = {
-    idle: '#3b82f6',        // Blue
-    listening: '#38bdf8',   // Sky blue
-    processing: '#f59e0b',  // Amber/Orange
-    speaking: '#8b5cf6',    // Purple
-    success: '#22c55e',     // Green
-    error: '#ef4444',       // Red
+    idle: '#facc15',        // yellow
+    listening: '#fbbf24',   // warm yellow
+    processing: '#f97316',  // orange
+    speaking: '#8b5cf6',    // purple
+    success: '#22c55e',     // green
+    error: '#ef4444',       // red
   };
 
   const currentEyeColor = eyeColors[eyeColor];
@@ -53,7 +53,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         }
 
         .robotic-cat-avatar[data-state="idle"] .eye-iris {
-          animation: eyeBlink 4s infinite;
+          animation: eyeBlink 3s infinite;
           transform-origin: center;
         }
 
@@ -79,8 +79,8 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         {/* Robotic Cat Head - Round with Cat Ears */}
         <defs>
           <linearGradient id="headGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#4a5568" stopOpacity="1" />
-            <stop offset="100%" stopColor="#2d3748" stopOpacity="1" />
+            <stop offset="0%" stopColor="#fef08a" stopOpacity="1" />   {/* light yellow */}
+            <stop offset="100%" stopColor="#eab308" stopOpacity="1" /> {/* golden yellow */}
           </linearGradient>
           <filter id="glow">
             <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
@@ -117,8 +117,8 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         />
 
         {/* Robotic details - Side panels */}
-        <rect x="35" y="80" width="18" height="28" fill="#4a5568" opacity="0.6" rx="3" />
-        <rect x="147" y="80" width="18" height="28" fill="#4a5568" opacity="0.6" rx="3" />
+        <rect x="35" y="80" width="18" height="28" fill="#e5e7eb" opacity="0.8" rx="3" />
+        <rect x="147" y="80" width="18" height="28" fill="#e5e7eb" opacity="0.8" rx="3" />
 
         {/* Left Eye */}
         <circle
@@ -203,11 +203,11 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         />
 
         {/* Robotic details - Cheek panels */}
-        <rect x="50" y="112" width="22" height="16" fill="#4a5568" opacity="0.5" rx="3" />
-        <rect x="128" y="112" width="22" height="16" fill="#4a5568" opacity="0.5" rx="3" />
+        <rect x="50" y="112" width="22" height="16" fill="#e5e7eb" opacity="0.8" rx="3" />
+        <rect x="128" y="112" width="22" height="16" fill="#e5e7eb" opacity="0.8" rx="3" />
 
         {/* Robotic details - Chin panel */}
-        <rect x="80" y="152" width="40" height="10" fill="#4a5568" opacity="0.7" rx="3" />
+        <rect x="80" y="152" width="40" height="10" fill="#e5e7eb" opacity="0.9" rx="3" />
 
         {/* Decorative lines - Robotic aesthetic */}
         <line x1="100" y1="52" x2="100" y2="64" stroke="#60a5fa" strokeWidth="1" opacity="0.5" />

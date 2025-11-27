@@ -3952,17 +3952,17 @@ export default function Page() {
         flexDirection: 'column',
         height: isMobile ? '50vh' : '100vh',
         minHeight: isMobile ? '400px' : '100vh',
-        backgroundColor: '#1a1a2e',
-        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
-        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
+        backgroundColor: '#fed7aa', // soft orange background
+        borderRight: isMobile ? 'none' : '1px solid #fdba74',
+        borderBottom: isMobile ? '1px solid #fdba74' : 'none',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: '20px',
+        padding: '24px',
       }}>
         <RoboticCatAvatar
           eyeColor={avatarState}
           isTTSPlaying={isTTSPlaying}
-          size={isMobile ? 150 : 250}
+          size={isMobile ? 275 : 450}
         />
       </div>
 
