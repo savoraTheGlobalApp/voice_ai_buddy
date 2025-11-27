@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
 
@@ -27,10 +27,38 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
   const currentEyeColor = eyeColors[eyeColor];
 
-  // Mouth animation: open when TTS is playing
-  const mouthHeight = isTTSPlaying ? 12 : 4;
-  const mouthWidth = isTTSPlaying ? 40 : 20;
-  const mouthY = isTTSPlaying ? 142 : 148;
+  // Mouth animation: cycle through shapes when TTS is playing
+  const [mouthShape, setMouthShape] = useState<'closed' | 'mid' | 'wide'>('closed');
+
+  useEffect(() => {
+    if (!isTTSPlaying) {
+      setMouthShape('closed');
+      return;
+    }
+
+    // Cycle through mouth shapes during TTS playback
+    const interval = setInterval(() => {
+      setMouthShape((prev) => {
+        if (prev === 'closed') return 'mid';
+        if (prev === 'mid') return 'wide';
+        return 'closed';
+      });
+    }, 150); // Cycle every 150ms for natural talking motion
+
+    return () => clearInterval(interval);
+  }, [isTTSPlaying]);
+
+  // Mouth dimensions based on shape
+  const mouthConfig = {
+    closed: { height: 4, width: 20, y: 148 },
+    mid: { height: 8, width: 32, y: 144 },
+    wide: { height: 12, width: 40, y: 142 },
+  };
+
+  const mouth = mouthConfig[mouthShape];
+  const mouthHeight = mouth.height;
+  const mouthWidth = mouth.width;
+  const mouthY = mouth.y;
 
   return (
     <div
