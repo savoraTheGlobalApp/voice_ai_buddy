@@ -88,7 +88,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
       <style>{`
         .robotic-cat-avatar[data-state="idle"] .avatar-head {
           animation: avatarBreath 6s ease-in-out infinite;
-          transform-origin: 100px 100px;
+          transform-origin: 100px 105px;
         }
 
         .robotic-cat-avatar[data-state="idle"] .eye-iris {
@@ -106,7 +106,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           90%, 92% { transform: scaleY(0.1); }
         }
         
-        /* Cat eye blink - preserve almond shape */
+        /* Cat eye blink - preserve round shape */
         .robotic-cat-avatar[data-state="idle"] .eye-iris-left,
         .robotic-cat-avatar[data-state="idle"] .eye-iris-right {
           transform-origin: center;
@@ -145,7 +145,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         /* Celebratory: slight scale up, more energetic */
         .robotic-cat-avatar[data-mood="celebratory"] .avatar-head {
           animation: avatarCelebrate 2s ease-in-out infinite;
-          transform-origin: 100px 100px;
+          transform-origin: 100px 105px;
         }
         @keyframes avatarCelebrate {
           0%, 100% { transform: scale(1); }
@@ -177,6 +177,11 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
             <stop offset="0%" stopColor="#fef08a" stopOpacity="1" />   {/* light yellow */}
             <stop offset="100%" stopColor="#eab308" stopOpacity="1" /> {/* golden yellow */}
           </linearGradient>
+          {/* Inner ear color - light peach/salmon pink */}
+          <linearGradient id="earInnerGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#fecdd3" stopOpacity="1" />   {/* light peach */}
+            <stop offset="100%" stopColor="#fda4af" stopOpacity="1" /> {/* salmon pink */}
+          </linearGradient>
           <filter id="glow">
             <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
             <feMerge>
@@ -186,13 +191,18 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           </filter>
         </defs>
 
-        {/* Cat ears */}
+        {/* Cat ears - outer edges match head color, inner part is peach/pink */}
         <polygon
           className="avatar-ear-left"
           points="55,55 80,25 90,65"
           fill="url(#headGradient)"
           stroke="#1a202c"
           strokeWidth="2"
+        />
+        {/* Inner ear left */}
+        <polygon
+          points="65,45 80,30 85,55"
+          fill="url(#earInnerGradient)"
         />
         <polygon
           className="avatar-ear-right"
@@ -201,98 +211,75 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           stroke="#1a202c"
           strokeWidth="2"
         />
+        {/* Inner ear right */}
+        <polygon
+          points="135,45 120,30 115,55"
+          fill="url(#earInnerGradient)"
+        />
 
-        {/* Head - Round cat face */}
-        <circle
+        {/* Head - Rounded rectangular shape (wider at bottom, tapering at top) */}
+        <path
           className="avatar-head"
-          cx="100"
-          cy="100"
-          r="60"
+          d="M 50,70 Q 50,50 60,45 L 140,45 Q 150,50 150,70 L 150,150 Q 150,160 140,165 L 60,165 Q 50,160 50,150 Z"
           fill="url(#headGradient)"
           stroke="#1a202c"
           strokeWidth="2"
         />
 
-        {/* Left Eye - Cat-like almond shape */}
-        <ellipse
+        {/* Left Eye - Large round eye */}
+        <circle
           className="eye-iris eye-iris-left"
           cx="80"
           cy="85"
-          rx="16"
-          ry="12"
+          r="18"
           fill="#1a202c"
-          transform="rotate(-5 80 85)"
         />
-        <ellipse
+        <circle
           cx="80"
           cy="85"
-          rx="12"
-          ry="9"
+          r="14"
           fill={currentEyeColor}
-          transform="rotate(-5 80 85)"
           style={{
             transition: 'fill 0.3s ease-in-out',
             filter: 'url(#glow)',
           }}
         />
-        <ellipse
-          cx="80"
-          cy="85"
-          rx="6"
-          ry="5"
-          fill="#ffffff"
-          opacity="0.4"
-          transform="rotate(-5 80 85)"
-        />
-        <circle
-          cx="81"
-          cy="83"
-          r="3"
-          fill="#ffffff"
+        {/* Crescent-shaped pupil positioned towards inner corner */}
+        <path
+          d="M 75,85 A 6 6 0 0 1 82,80 A 6 6 0 0 1 82,90 Z"
+          fill="#1a202c"
+          transform="rotate(-15 80 85)"
         />
 
-        {/* Right Eye - Cat-like almond shape */}
-        <ellipse
+        {/* Right Eye - Large round eye */}
+        <circle
           className="eye-iris eye-iris-right"
           cx="120"
           cy="85"
-          rx="16"
-          ry="12"
+          r="18"
           fill="#1a202c"
-          transform="rotate(5 120 85)"
         />
-        <ellipse
+        <circle
           cx="120"
           cy="85"
-          rx="12"
-          ry="9"
+          r="14"
           fill={currentEyeColor}
-          transform="rotate(5 120 85)"
           style={{
             transition: 'fill 0.3s ease-in-out',
             filter: 'url(#glow)',
           }}
         />
-        <ellipse
-          cx="120"
-          cy="85"
-          rx="6"
-          ry="5"
-          fill="#ffffff"
-          opacity="0.4"
-          transform="rotate(5 120 85)"
-        />
-        <circle
-          cx="121"
-          cy="83"
-          r="3"
-          fill="#ffffff"
+        {/* Crescent-shaped pupil positioned towards inner corner */}
+        <path
+          d="M 115,85 A 6 6 0 0 1 122,80 A 6 6 0 0 1 122,90 Z"
+          fill="#1a202c"
+          transform="rotate(15 120 85)"
         />
 
-        {/* Nose - Triangular cat nose (pink-ish) */}
-        <polygon
-          points="100,105 95,115 105,115"
-          fill="#f472b6"
+        {/* Nose - Dark inverted triangular/heart-shaped nose */}
+        <path
+          d="M 100,105 L 95,115 Q 100,118 105,115 Z"
+          fill="#1a202c"
           stroke="#1a202c"
           strokeWidth="1"
         />
@@ -309,15 +296,15 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           }}
         />
         
-        {/* Whiskers - Left side */}
-        <line x1="40" y1="95" x2="60" y2="100" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
-        <line x1="40" y1="105" x2="60" y2="105" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
-        <line x1="40" y1="115" x2="60" y2="110" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        {/* Whiskers - Left side (evenly spaced, slightly curved) */}
+        <path d="M 40,100 Q 50,98 60,100" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        <path d="M 40,108 Q 50,108 60,108" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        <path d="M 40,116 Q 50,118 60,116" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
         
-        {/* Whiskers - Right side */}
-        <line x1="140" y1="100" x2="160" y2="95" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
-        <line x1="140" y1="105" x2="160" y2="105" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
-        <line x1="140" y1="110" x2="160" y2="115" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        {/* Whiskers - Right side (evenly spaced, slightly curved) */}
+        <path d="M 160,100 Q 150,98 140,100" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        <path d="M 160,108 Q 150,108 140,108" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        <path d="M 160,116 Q 150,118 140,116" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
       </svg>
     </div>
   );

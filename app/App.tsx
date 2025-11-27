@@ -4035,7 +4035,7 @@ export default function Page() {
           eyeColor={avatarState}
           isTTSPlaying={isTTSPlaying}
           mood={avatarMood}
-          size={isMobile ? 275 : 450}
+          size={isMobile ? 344 : 563}
         />
       </div>
 
