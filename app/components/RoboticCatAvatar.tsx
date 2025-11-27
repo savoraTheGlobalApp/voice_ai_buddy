@@ -3,16 +3,19 @@
 import React, { useState, useEffect } from 'react';
 
 type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
+type AvatarMood = 'neutral' | 'encouraging' | 'concerned' | 'celebratory';
 
 interface RoboticCatAvatarProps {
   eyeColor: AvatarState;
   isTTSPlaying: boolean;
+  mood?: AvatarMood;
   size?: number;
 }
 
 const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
   eyeColor,
   isTTSPlaying,
+  mood = 'neutral',
   size = 200,
 }) => {
   // Color mapping for eyes by avatar state (yellow/orange family)
@@ -64,6 +67,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
     <div
       className="robotic-cat-avatar"
       data-state={eyeColor}
+      data-mood={mood}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -115,6 +119,35 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           0%, 100% { transform: rotate(0deg); }
           50% { transform: rotate(8deg); }
         }
+
+        /* MOOD-BASED SUBTLE CHANGES */
+        /* Encouraging: slight upward tilt, warmer glow */
+        .robotic-cat-avatar[data-mood="encouraging"] .avatar-head {
+          transform: translateY(-2px);
+        }
+        .robotic-cat-avatar[data-mood="encouraging"] .eye-iris {
+          filter: url(#glow) brightness(1.1);
+        }
+
+        /* Celebratory: slight scale up, more energetic */
+        .robotic-cat-avatar[data-mood="celebratory"] .avatar-head {
+          animation: avatarCelebrate 2s ease-in-out infinite;
+          transform-origin: 100px 100px;
+        }
+        @keyframes avatarCelebrate {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.03); }
+        }
+
+        /* Concerned: slight downward tilt, dimmer */
+        .robotic-cat-avatar[data-mood="concerned"] .avatar-head {
+          transform: translateY(2px);
+        }
+        .robotic-cat-avatar[data-mood="concerned"] .eye-iris {
+          filter: url(#glow) brightness(0.9);
+        }
+
+        /* Neutral: no special styling */
       `}</style>
       <svg
         width={size}

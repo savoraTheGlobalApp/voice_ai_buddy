@@ -175,8 +175,61 @@ let onThinkingUpdate: ((isThinking: boolean) => void) | null = null;
 // - success / error: brief flashes for feedback
 type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
 
+// Mood types for emotional expression
+type AvatarMood = 'neutral' | 'encouraging' | 'concerned' | 'celebratory';
+
+// Function to detect mood from assistant response text
+function detectMoodFromText(text: string): AvatarMood {
+  if (!text) return 'neutral';
+  
+  const lowerText = text.toLowerCase();
+  
+  // Celebratory: exclamation marks, positive words, emojis
+  if (
+    (lowerText.includes('!') && (lowerText.match(/!/g) || []).length >= 2) ||
+    lowerText.includes('great!') ||
+    lowerText.includes('excellent!') ||
+    lowerText.includes('wonderful!') ||
+    lowerText.includes('amazing!') ||
+    lowerText.includes('🎉') ||
+    lowerText.includes('🎊') ||
+    lowerText.includes('🌟')
+  ) {
+    return 'celebratory';
+  }
+  
+  // Encouraging: positive reinforcement words
+  if (
+    lowerText.includes('good job') ||
+    lowerText.includes('well done') ||
+    lowerText.includes('keep going') ||
+    lowerText.includes('you can do it') ||
+    lowerText.includes('nice work') ||
+    lowerText.includes('👍') ||
+    lowerText.includes('💪')
+  ) {
+    return 'encouraging';
+  }
+  
+  // Concerned: words indicating difficulty or worry
+  if (
+    lowerText.includes('difficult') ||
+    lowerText.includes('challenging') ||
+    lowerText.includes('struggling') ||
+    lowerText.includes('concerned') ||
+    lowerText.includes('worry') ||
+    lowerText.includes('😟') ||
+    lowerText.includes('😔')
+  ) {
+    return 'concerned';
+  }
+  
+  // Default to neutral
+  return 'neutral';
+}
+
 // Callback to update avatar state
-let onAvatarStateUpdate: ((state: AvatarState, isTTSPlaying: boolean) => void) | null = null;
+let onAvatarStateUpdate: ((state: AvatarState, isTTSPlaying: boolean, mood?: AvatarMood) => void) | null = null;
 
 // Make memory text as crisp as possible by removing user's name and connectors
 function crispifyMemoryText(text: string, userName?: string): string {
@@ -1463,6 +1516,13 @@ export async function setupSTTMode(
                   if (data.done) {
                     // Stream complete
                     conversationHistory.push({ role: 'assistant', content: fullResponse });
+                    
+                    // Detect mood from assistant response and update avatar
+                    const detectedMood = detectMoodFromText(fullResponse);
+                    if (onAvatarStateUpdate) {
+                      onAvatarStateUpdate('processing', false, detectedMood);
+                    }
+                    
                     // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
@@ -1564,6 +1624,13 @@ export async function setupSTTMode(
           const data = await response.json();
           const assistantMessage = data.response || data.message || '';
           conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          
+          // Detect mood from assistant response and update avatar
+          const detectedMood = detectMoodFromText(assistantMessage);
+          if (onAvatarStateUpdate) {
+            onAvatarStateUpdate('processing', false, detectedMood);
+          }
+          
           // Update UI
           if (onConversationUpdate) {
             onConversationUpdate([...conversationHistory]);
@@ -3752,14 +3819,19 @@ export default function Page() {
     };
   }, []);
 
+  const [avatarMood, setAvatarMood] = useState<AvatarMood>('neutral');
+
   // Set up callback to receive avatar state updates
   useEffect(() => {
-    onAvatarStateUpdate = (state: AvatarState, isTTS: boolean) => {
-      console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS);
+    onAvatarStateUpdate = (state: AvatarState, isTTS: boolean, mood?: AvatarMood) => {
+      console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS, 'mood:', mood);
       setAvatarState(state);
       // Derive isTTSPlaying from state so mouth always moves when speaking,
       // regardless of any inconsistent boolean flags passed in.
       setIsTTSPlaying(state === 'speaking');
+      if (mood) {
+        setAvatarMood(mood);
+      }
     };
 
     return () => {
@@ -3962,6 +4034,7 @@ export default function Page() {
         <RoboticCatAvatar
           eyeColor={avatarState}
           isTTSPlaying={isTTSPlaying}
+          mood={avatarMood}
           size={isMobile ? 275 : 450}
         />
       </div>
