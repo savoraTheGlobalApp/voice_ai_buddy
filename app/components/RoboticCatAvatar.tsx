@@ -30,11 +30,12 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
   const currentEyeColor = eyeColors[eyeColor];
 
-  // Mouth animation: cycle through shapes when TTS is playing
+  // Mouth animation: cycle through shapes when TTS is playing, default is smile
   const [mouthShape, setMouthShape] = useState<'closed' | 'mid' | 'wide'>('closed');
 
   useEffect(() => {
     if (!isTTSPlaying) {
+      // Default to subtle smile when idle
       setMouthShape('closed');
       return;
     }
@@ -51,17 +52,23 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
     return () => clearInterval(interval);
   }, [isTTSPlaying]);
 
-  // Mouth dimensions based on shape
+  // Mouth dimensions based on shape - all are smiles, varying in width
   const mouthConfig = {
-    closed: { height: 4, width: 20, y: 148 },
-    mid: { height: 8, width: 32, y: 144 },
-    wide: { height: 12, width: 40, y: 142 },
+    closed: { 
+      // Subtle smile (default/idle)
+      path: 'M 85,140 Q 100,145 115,140',
+    },
+    mid: { 
+      // Happy smile (mid = talking)
+      path: 'M 80,138 Q 100,148 120,138',
+    },
+    wide: { 
+      // Big happy smile (wide = talking)
+      path: 'M 75,136 Q 100,150 125,136',
+    },
   };
 
   const mouth = mouthConfig[mouthShape];
-  const mouthHeight = mouth.height;
-  const mouthWidth = mouth.width;
-  const mouthY = mouth.y;
 
   return (
     <div
@@ -96,7 +103,13 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         @keyframes eyeBlink {
           0%, 88%, 100% { transform: scaleY(1); }
-          90%, 92% { transform: scaleY(0.15); }
+          90%, 92% { transform: scaleY(0.1); }
+        }
+        
+        /* Cat eye blink - preserve almond shape */
+        .robotic-cat-avatar[data-state="idle"] .eye-iris-left,
+        .robotic-cat-avatar[data-state="idle"] .eye-iris-right {
+          transform-origin: center;
         }
 
         /* SPEAKING: ear wiggle animation */
@@ -189,7 +202,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           strokeWidth="2"
         />
 
-        {/* Head - Rounded cat face */}
+        {/* Head - Round cat face */}
         <circle
           className="avatar-head"
           cx="100"
@@ -200,102 +213,111 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           strokeWidth="2"
         />
 
-        {/* Robotic details - Side panels */}
-        <rect x="35" y="80" width="18" height="28" fill="#e5e7eb" opacity="0.8" rx="3" />
-        <rect x="147" y="80" width="18" height="28" fill="#e5e7eb" opacity="0.8" rx="3" />
-
-        {/* Left Eye */}
-        <circle
+        {/* Left Eye - Cat-like almond shape */}
+        <ellipse
           className="eye-iris eye-iris-left"
           cx="80"
           cy="85"
-          r="18"
+          rx="16"
+          ry="12"
           fill="#1a202c"
+          transform="rotate(-5 80 85)"
         />
-        <circle
+        <ellipse
           cx="80"
           cy="85"
-          r="14"
+          rx="12"
+          ry="9"
           fill={currentEyeColor}
+          transform="rotate(-5 80 85)"
           style={{
             transition: 'fill 0.3s ease-in-out',
             filter: 'url(#glow)',
           }}
         />
-        <circle
+        <ellipse
           cx="80"
           cy="85"
-          r="8"
+          rx="6"
+          ry="5"
           fill="#ffffff"
-          opacity="0.3"
+          opacity="0.4"
+          transform="rotate(-5 80 85)"
         />
         <circle
-          cx="82"
+          cx="81"
           cy="83"
-          r="4"
+          r="3"
           fill="#ffffff"
         />
 
-        {/* Right Eye */}
-        <circle
+        {/* Right Eye - Cat-like almond shape */}
+        <ellipse
           className="eye-iris eye-iris-right"
           cx="120"
           cy="85"
-          r="18"
+          rx="16"
+          ry="12"
           fill="#1a202c"
+          transform="rotate(5 120 85)"
         />
-        <circle
+        <ellipse
           cx="120"
           cy="85"
-          r="14"
+          rx="12"
+          ry="9"
           fill={currentEyeColor}
+          transform="rotate(5 120 85)"
           style={{
             transition: 'fill 0.3s ease-in-out',
             filter: 'url(#glow)',
           }}
         />
-        <circle
+        <ellipse
           cx="120"
           cy="85"
-          r="8"
+          rx="6"
+          ry="5"
           fill="#ffffff"
-          opacity="0.3"
+          opacity="0.4"
+          transform="rotate(5 120 85)"
         />
         <circle
-          cx="122"
+          cx="121"
           cy="83"
-          r="4"
+          r="3"
           fill="#ffffff"
         />
 
-        {/* Nose - Triangular cat nose */}
+        {/* Nose - Triangular cat nose (pink-ish) */}
         <polygon
           points="100,105 95,115 105,115"
-          fill="#1a202c"
+          fill="#f472b6"
+          stroke="#1a202c"
+          strokeWidth="1"
         />
 
-        {/* Mouth - Animated ellipse */}
-        <ellipse
-          cx="100"
-          cy={mouthY}
-          rx={mouthWidth}
-          ry={mouthHeight}
-          fill="#1a202c"
+        {/* Mouth - Animated smile curve */}
+        <path
+          d={mouth.path}
+          stroke="#1a202c"
+          strokeWidth="3"
+          strokeLinecap="round"
+          fill="none"
           style={{
-            transition: 'cy 0.3s ease-in-out, ry 0.3s ease-in-out, rx 0.3s ease-in-out',
+            transition: 'd 0.3s ease-in-out',
           }}
         />
-
-        {/* Robotic details - Cheek panels */}
-        <rect x="50" y="112" width="22" height="16" fill="#e5e7eb" opacity="0.8" rx="3" />
-        <rect x="128" y="112" width="22" height="16" fill="#e5e7eb" opacity="0.8" rx="3" />
-
-        {/* Robotic details - Chin panel */}
-        <rect x="80" y="152" width="40" height="10" fill="#e5e7eb" opacity="0.9" rx="3" />
-
-        {/* Decorative lines - Robotic aesthetic */}
-        <line x1="100" y1="52" x2="100" y2="64" stroke="#60a5fa" strokeWidth="1" opacity="0.5" />
-        <line x1="100" y1="136" x2="100" y2="148" stroke="#60a5fa" strokeWidth="1" opacity="0.5" />
+        
+        {/* Whiskers - Left side */}
+        <line x1="40" y1="95" x2="60" y2="100" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        <line x1="40" y1="105" x2="60" y2="105" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        <line x1="40" y1="115" x2="60" y2="110" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        
+        {/* Whiskers - Right side */}
+        <line x1="140" y1="100" x2="160" y2="95" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        <line x1="140" y1="105" x2="160" y2="105" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
+        <line x1="140" y1="110" x2="160" y2="115" stroke="#1a202c" strokeWidth="2" strokeLinecap="round" />
       </svg>
     </div>
   );
