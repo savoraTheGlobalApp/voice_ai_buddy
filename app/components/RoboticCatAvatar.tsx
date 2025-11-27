@@ -53,7 +53,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         }
 
         .robotic-cat-avatar[data-state="idle"] .eye-iris {
-          animation: eyeBlink 3s infinite;
+          animation: eyeBlink 2s infinite;
           transform-origin: center;
         }
 
@@ -65,6 +65,27 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         @keyframes eyeBlink {
           0%, 88%, 100% { transform: scaleY(1); }
           90%, 92% { transform: scaleY(0.15); }
+        }
+
+        /* SPEAKING: ear wiggle animation */
+        .robotic-cat-avatar[data-state="speaking"] .avatar-ear-left {
+          animation: earWiggleLeft 0.5s ease-in-out infinite;
+          transform-origin: 80px 25px;
+        }
+
+        .robotic-cat-avatar[data-state="speaking"] .avatar-ear-right {
+          animation: earWiggleRight 0.5s ease-in-out infinite;
+          transform-origin: 120px 25px;
+        }
+
+        @keyframes earWiggleLeft {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(-8deg); }
+        }
+
+        @keyframes earWiggleRight {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(8deg); }
         }
       `}</style>
       <svg
@@ -93,12 +114,14 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         {/* Cat ears */}
         <polygon
+          className="avatar-ear-left"
           points="55,55 80,25 90,65"
           fill="url(#headGradient)"
           stroke="#1a202c"
           strokeWidth="2"
         />
         <polygon
+          className="avatar-ear-right"
           points="145,55 120,25 110,65"
           fill="url(#headGradient)"
           stroke="#1a202c"
