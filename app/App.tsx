@@ -7,6 +7,7 @@ import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memori
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
+import CatLogo from '@/app/components/CatLogo';
 
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
@@ -3820,6 +3821,7 @@ export default function Page() {
   }, []);
 
   const [avatarMood, setAvatarMood] = useState<AvatarMood>('neutral');
+  const [showChat, setShowChat] = useState(true); // Toggle between chat and avatar
 
   // Set up callback to receive avatar state updates
   useEffect(() => {
@@ -4014,72 +4016,62 @@ export default function Page() {
       display: 'flex', 
       minHeight: '100vh', 
       padding: 0,
-      flexDirection: isMobile ? 'column' : 'row',
+      flexDirection: 'column',
       gap: 0,
     }}>
-      {/* Avatar Section - Half Screen */}
+      {/* Header - Always visible at top */}
       <div style={{
-        flex: isMobile ? 'none' : '1',
+        backgroundColor: '#3b82f6', // blue
+        color: '#ffffff',
+        padding: '12px 16px',
         display: 'flex',
-        flexDirection: 'column',
-        height: isMobile ? '50vh' : '100vh',
-        minHeight: isMobile ? '400px' : '100vh',
-        backgroundColor: '#fed7aa', // soft orange background
-        borderRight: isMobile ? 'none' : '1px solid #fdba74',
-        borderBottom: isMobile ? '1px solid #fdba74' : 'none',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        justifyContent: 'center',
-        padding: '24px',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
       }}>
-        <RoboticCatAvatar
-          eyeColor={avatarState}
-          isTTSPlaying={isTTSPlaying}
-          mood={avatarMood}
-          size={isMobile ? 344 : 563}
-        />
-      </div>
-
-      {/* Chat UI Section - WhatsApp-like */}
-      <div style={{
-        flex: isMobile ? 'none' : '1',
-        display: 'flex',
-        flexDirection: 'column',
-        height: isMobile ? '50vh' : '100vh',
-        minHeight: isMobile ? '400px' : '100vh',
-        backgroundColor: '#e5ddd5',
-        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
-      }}>
-        {/* Chat Header */}
-        <div style={{
-          backgroundColor: '#075e54',
-          color: 'white',
-          padding: '12px 16px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              backgroundColor: '#128c7e',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '18px',
-              fontWeight: 'bold',
-            }}>
-              🤖
-            </div>
-            <div>
-              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
-              <div style={{ fontSize: '12px', opacity: 0.8 }}>
-                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
-              </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <CatLogo size={40} backgroundColor="#3b82f6" />
+          <div>
+            <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+            <div style={{ fontSize: '12px', opacity: 0.8 }}>
+              {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
             </div>
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Toggle Buttons */}
+          <button
+            onClick={() => setShowChat(false)}
+            style={{
+              padding: '6px 12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: showChat ? '#ffffff' : '#3b82f6',
+              backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            Avatar
+          </button>
+          <button
+            onClick={() => setShowChat(true)}
+            style={{
+              padding: '6px 12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: showChat ? '#3b82f6' : '#ffffff',
+              backgroundColor: showChat ? '#ffffff' : 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            Chat
+          </button>
         {userData && (
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
               <div style={{ textAlign: 'right', fontSize: '12px' }}>
@@ -4106,7 +4098,7 @@ export default function Page() {
                 height: '36px',
           }}
           onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.1)';
           }}
           onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
@@ -4188,7 +4180,40 @@ export default function Page() {
             )}
             </div>
           )}
+        </div>
       </div>
+
+      {/* Middle Section - Toggles between Avatar and Chat */}
+      {!showChat && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          backgroundColor: '#fed7aa', // soft orange background
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+        }}>
+          <RoboticCatAvatar
+            eyeColor={avatarState}
+            isTTSPlaying={isTTSPlaying}
+            mood={avatarMood}
+            size={isMobile ? 344 : 563}
+          />
+        </div>
+      )}
+
+      {/* Chat UI Section - Middle section when active */}
+      {showChat && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          backgroundColor: '#fef08a', // yellow background
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
+        }}>
 
         {/* Chat Messages Container */}
         <div 
@@ -4208,7 +4233,7 @@ export default function Page() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#667781',
+              color: '#1a202c',
               fontSize: '14px',
               textAlign: 'center',
             }}>
@@ -4230,31 +4255,19 @@ export default function Page() {
                   }}
                 >
                   {!isUser && (
-                    <div style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      backgroundColor: '#128c7e',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '16px',
-                      flexShrink: 0,
-                    }}>
-                      🤖
-                    </div>
+                    <CatLogo size={32} backgroundColor="#3b82f6" />
                   )}
                   <div
                     style={{
                       maxWidth: '70%',
                       padding: '8px 12px',
                       borderRadius: '8px',
-                      backgroundColor: isUser ? '#dcf8c6' : '#ffffff',
+                      backgroundColor: isUser ? '#fef08a' : '#3b82f6', // yellow for user, blue for assistant
+                      color: isUser ? '#f97316' : '#ffffff', // orange text for user messages
                       boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                       wordWrap: 'break-word',
                       fontSize: '14px',
                       lineHeight: '1.4',
-                      color: '#111b21',
                     }}
                   >
                     {msg.content}
@@ -4264,7 +4277,7 @@ export default function Page() {
                       width: '32px',
                       height: '32px',
                       borderRadius: '50%',
-                      backgroundColor: '#128c7e',
+                      backgroundColor: '#f97316', // orange
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -4288,30 +4301,18 @@ export default function Page() {
                 gap: '8px',
               }}
             >
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: '#128c7e',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '16px',
-                flexShrink: 0,
-              }}>
-                🤖
-              </div>
+              <CatLogo size={32} backgroundColor="#3b82f6" />
               <div
                 style={{
                   maxWidth: '70%',
                   padding: '8px 12px',
                   borderRadius: '8px',
-                  backgroundColor: '#ffffff',
+                  backgroundColor: '#3b82f6', // blue
+                  color: '#ffffff', // white text for assistant
                   boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                   wordWrap: 'break-word',
                   fontSize: '14px',
                   lineHeight: '1.4',
-                  color: '#111b21',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
@@ -4348,26 +4349,19 @@ export default function Page() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Controls Section */}
+        </div>
+      )}
+      
+      {/* Controls Section - Always visible at bottom */}
       <div style={{
-        flex: isMobile ? 'none' : '0 0 380px',
-        width: isMobile ? '100%' : '380px',
-        minWidth: 0,
-        maxWidth: isMobile ? '100%' : '380px',
+        backgroundColor: '#f9fafb',
+        padding: '20px',
+        borderTop: '1px solid #e5e7eb',
         display: 'flex',
         flexDirection: 'column',
-        padding: '20px',
         gap: '12px',
-        backgroundColor: '#f9fafb',
-        height: isMobile ? 'auto' : '100vh',
-        maxHeight: isMobile ? '50vh' : 'none',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        boxSizing: 'border-box',
       }}>
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
           <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
           <select
@@ -4691,11 +4685,11 @@ export default function Page() {
               : useSTTMode 
                 ? 'Connect' 
                 : 'Connect Realtime'}
-      </button>
-      </div>
-      <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+        </button>
+        </div>
+        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
+        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
         </div>
       </div>
