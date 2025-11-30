@@ -7,6 +7,10 @@ import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memori
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
 
+// Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
+// If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
+const MIN_INTERRUPTION_INTERVAL_MS = 3500; // in ms
+
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
   let userInfoSection = '';
@@ -158,6 +162,7 @@ let currentSTTSession: {
   currentTTSAudioElement?: HTMLAudioElement | null; // Track current TTS audio element for interruption (gTTS, OpenAI, Edge TTS)
   globalResponseId?: number; // Global response ID counter (incremented for each new STT transcript)
   currentTtsResponseId?: number; // Current TTS response ID being processed (stored in closure for audio chunks)
+  lastTranscriptTimestamp?: number; // Timestamp of the last processed transcript (for rapid interruption detection)
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -906,6 +911,25 @@ export async function setupSTTMode(
             
             console.log('[STT] User said:', transcript);
             
+            // Capture timestamp immediately when transcript arrives (before any processing)
+            const transcriptArrivalTime = Date.now();
+            
+            // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+            // ignore this transcript to prevent duplicate processing
+            if (currentSTTSession) {
+              if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+                const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+                if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+                  console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+                  // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+                  // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+                  return; // Don't process this transcript, let the previous one continue
+                }
+              }
+              // Update timestamp when we process a transcript (after passing the rapid interruption check)
+              currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+            }
+            
             // Generate new global Response ID for this user message → TTT → TTS cycle
             // Create transcript object with ID that will flow through the entire pipeline
             if (!currentSTTSession) {
@@ -1293,6 +1317,25 @@ export async function setupSTTMode(
             if (!transcript) return;
             
             console.log('[STT] User said:', transcript);
+            
+            // Capture timestamp immediately when transcript arrives (before any processing)
+            const transcriptArrivalTime = Date.now();
+            
+            // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+            // ignore this transcript to prevent duplicate processing
+            if (currentSTTSession) {
+              if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+                const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+                if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+                  console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+                  // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+                  // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+                  return; // Don't process this transcript, let the previous one continue
+                }
+              }
+              // Update timestamp when we process a transcript (after passing the rapid interruption check)
+              currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+            }
             
             // Generate new global Response ID for this user message → TTT → TTS cycle
             if (!currentSTTSession) {
@@ -3185,6 +3228,25 @@ export async function setupSTTMode(
       }
 
       console.log('[STT] User said:', transcript);
+      
+      // Capture timestamp immediately when transcript arrives (before any processing)
+      const transcriptArrivalTime = Date.now();
+      
+      // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+      // ignore this transcript to prevent duplicate processing
+      if (currentSTTSession) {
+        if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+          const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+          if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+            console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+            // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+            // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+            return; // Don't process this transcript, let the previous one continue
+          }
+        }
+        // Update timestamp when we process a transcript (after passing the rapid interruption check)
+        currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+      }
       
       // Generate new global Response ID for this user message → TTT → TTS cycle
       // Create transcript object with ID that will flow through the entire pipeline
