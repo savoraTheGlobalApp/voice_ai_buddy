@@ -833,11 +833,11 @@ async def googlecloud_stt_websocket(websocket: WebSocket):
     service_account_key = os.getenv("GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY")
     
     if not google_creds and not service_account_key:
-        await websocket.close(
-            code=1008,
+                await websocket.close(
+                    code=1008,
             reason="GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY not configured"
-        )
-        return
+                )
+                return
     
     try:
         # Set up Google Cloud Speech client
@@ -993,7 +993,6 @@ async def googlecloud_stt_websocket(websocket: WebSocket):
                             # Just yielded recently - very short sleep then check queue again
                             # This prevents CPU spinning while maintaining responsiveness for real audio
                             time.sleep(0.005)  # 5ms sleep
-                    
                 except Exception as e:
                     print(f"[Google Cloud STT] Error in audio generator: {e}")
                     break
