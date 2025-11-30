@@ -70,3 +70,7 @@ backend/venv/
 backend/env/
 backend/ENV/
 backend/.venv/
+
+# IDE
+.vscode/
+.idea/
