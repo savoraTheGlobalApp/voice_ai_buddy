@@ -36,6 +36,11 @@ yarn-error.log*
 # Firebase service account key (NEVER commit this!)
 serviceAccountKey.json
 
+# Google Cloud service account keys (NEVER commit these!)
+**/service-account-key.json
+backend/service-account-key.json
+*.service-account-key.json
+
 # vercel
 .vercel
 
@@ -65,3 +70,7 @@ backend/venv/
 backend/env/
 backend/ENV/
 backend/.venv/
+
+# IDE
+.vscode/
+.idea/

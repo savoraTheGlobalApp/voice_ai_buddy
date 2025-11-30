@@ -7,6 +7,10 @@ import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memori
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
 
+// Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
+// If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
+const MIN_INTERRUPTION_INTERVAL_MS = 3500; // in ms
+
 // Function to build personalized instructions with user data
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
   let userInfoSection = '';
@@ -158,6 +162,7 @@ let currentSTTSession: {
   currentTTSAudioElement?: HTMLAudioElement | null; // Track current TTS audio element for interruption (gTTS, OpenAI, Edge TTS)
   globalResponseId?: number; // Global response ID counter (incremented for each new STT transcript)
   currentTtsResponseId?: number; // Current TTS response ID being processed (stored in closure for audio chunks)
+  lastTranscriptTimestamp?: number; // Timestamp of the last processed transcript (for rapid interruption detection)
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -906,6 +911,25 @@ export async function setupSTTMode(
             
             console.log('[STT] User said:', transcript);
             
+            // Capture timestamp immediately when transcript arrives (before any processing)
+            const transcriptArrivalTime = Date.now();
+            
+            // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+            // ignore this transcript to prevent duplicate processing
+            if (currentSTTSession) {
+              if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+                const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+                if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+                  console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+                  // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+                  // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+                  return; // Don't process this transcript, let the previous one continue
+                }
+              }
+              // Update timestamp when we process a transcript (after passing the rapid interruption check)
+              currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+            }
+            
             // Generate new global Response ID for this user message → TTT → TTS cycle
             // Create transcript object with ID that will flow through the entire pipeline
             if (!currentSTTSession) {
@@ -1202,6 +1226,377 @@ export async function setupSTTMode(
         }
       });
       
+    } else if (sttProvider === 'googlecloud') {
+      // Use Google Cloud Speech-to-Text streaming STT
+      console.log('[STT] Using Google Cloud STT');
+      
+      // Create audio context for processing
+      // Google Cloud Speech expects 16kHz LINEAR16 PCM (as per reference code)
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000, // Google Cloud expects 16kHz
+      });
+      
+      // Resume AudioContext if suspended
+      if (audioContext.state === 'suspended') {
+        try {
+          await audioContext.resume();
+          console.log('[STT] AudioContext resumed');
+        } catch (e) {
+          console.warn('[STT] Could not resume AudioContext on init:', e);
+        }
+      }
+
+      // Set up audio processing FIRST, before WebSocket connection
+      // Buffer size must be a power of 2 between 256 and 16384
+      const bufferSize = 2048; // ~128ms at 16kHz (power of 2, good for real-time)
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+      
+      // Buffer to store audio chunks until WebSocket is ready
+      const audioBuffer: ArrayBuffer[] = [];
+      const MAX_BUFFER_SIZE = 10; // Keep only last 10 chunks
+      
+      let googleCloudWs: WebSocket | null = null;
+      let audioChunkCount = 0;
+      
+      // onaudioprocess fires continuously (every ~128ms at 16kHz with 2048 buffer)
+      // This ensures continuous audio streaming to Google Cloud, including silence
+      // Google Cloud requires continuous audio to prevent timeout
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        // Convert Float32Array to Int16Array (linear16 PCM)
+        const int16Data = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          // Clamp and convert to 16-bit integer
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        
+        // Send audio chunks continuously (including silence) to keep Google Cloud stream alive
+        // This matches the reference code behavior - continuous microphone capture
+        if (googleCloudWs && googleCloudWs.readyState === WebSocket.OPEN) {
+          try {
+            googleCloudWs.send(int16Data.buffer);
+            audioChunkCount++;
+            // Log every 100 chunks (~12 seconds at 16kHz) to confirm audio is flowing
+            if (audioChunkCount % 100 === 0) {
+              console.log(`[STT] Sent ${audioChunkCount} audio chunks to Google Cloud`);
+            }
+          } catch (err) {
+            console.error('[STT] Error sending audio to Google Cloud:', err);
+          }
+        } else {
+          // Buffer audio chunks until WebSocket is ready (but limit buffer size)
+          if (audioBuffer.length < MAX_BUFFER_SIZE) {
+            audioBuffer.push(int16Data.buffer.slice(0)); // Clone the buffer
+          }
+        }
+      };
+      
+      source.connect(processor);
+      // Connect processor to a dummy destination to ensure it processes audio
+      const dummyGain = audioContext.createGain();
+      dummyGain.gain.value = 0; // Silent output
+      processor.connect(dummyGain);
+      dummyGain.connect(audioContext.destination);
+      audioProcessor = processor;
+      
+      console.log('[STT] Audio processor set up for Google Cloud, buffer size:', bufferSize, 'samples');
+      
+      // Connect to Google Cloud STT WebSocket via backend
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      const wsUrl = backendUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/api/stt/googlecloud';
+      googleCloudWs = new WebSocket(wsUrl);
+      
+      // Handle Google Cloud transcripts (same logic as Deepgram)
+      googleCloudWs.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript' && data.text) {
+            const transcript = data.text.trim();
+            if (!transcript) return;
+            
+            console.log('[STT] User said:', transcript);
+            
+            // Capture timestamp immediately when transcript arrives (before any processing)
+            const transcriptArrivalTime = Date.now();
+            
+            // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+            // ignore this transcript to prevent duplicate processing
+            if (currentSTTSession) {
+              if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+                const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+                if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+                  console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+                  // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+                  // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+                  return; // Don't process this transcript, let the previous one continue
+                }
+              }
+              // Update timestamp when we process a transcript (after passing the rapid interruption check)
+              currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+            }
+            
+            // Generate new global Response ID for this user message → TTT → TTS cycle
+            if (!currentSTTSession) {
+              return;
+            }
+            if (currentSTTSession.globalResponseId === undefined) {
+              currentSTTSession.globalResponseId = 0;
+            }
+            const globalId = ++currentSTTSession.globalResponseId;
+            
+            // Create transcript object with ID
+            const transcriptObj: TranscriptObject = {
+              text: transcript,
+              id: globalId
+            };
+            
+            console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
+            
+            // Stop current TTS playback if user interrupts
+            stopCurrentTTS();
+            
+            // Get TTS provider to determine feedback method
+            let ttsProvider: string | null = null;
+            try {
+              const stored = localStorage.getItem('adminSettings');
+              if (stored) {
+                const settings = JSON.parse(stored);
+                if (settings.ttsProvider) {
+                  ttsProvider = settings.ttsProvider.toLowerCase();
+                }
+              }
+            } catch (e) {
+              // Will fallback below
+            }
+            
+            // For Deepgram TTS: Show visual "Thinking..." indicator
+            if (ttsProvider === 'deepgram' && onThinkingUpdate) {
+              onThinkingUpdate(true);
+            }
+            
+            // If provider not found in localStorage, fetch from backend
+            if (!ttsProvider) {
+              const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+              fetch(`${backendUrl}/api/config`)
+                .then(resp => {
+                  if (resp.ok) {
+                    return resp.json();
+                  }
+                  return { tts_provider: 'gtts' };
+                })
+                .then(config => {
+                  const provider = config.tts_provider || 'gtts';
+                  if (provider === 'deepgram' && onThinkingUpdate) {
+                    onThinkingUpdate(true);
+                  }
+                })
+                .catch(() => {
+                  // Ignore errors
+                });
+              ttsProvider = 'gtts';
+            }
+            
+            // Start playing processing audio for non-Deepgram TTS providers
+            if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
+              try {
+                if (!isProcessingAudioPlaying) {
+                  currentSTTSession.processingAudio.play().catch((e: any) => {
+                    console.warn('[STT] Could not play processing audio:', e);
+                  });
+                  isProcessingAudioPlaying = true;
+                }
+              } catch (e) {
+                console.warn('[STT] Error playing processing audio:', e);
+              }
+            }
+            
+            // Get AI response - use streaming for Deepgram TTS, non-streaming for others
+            if (ttsProvider === 'deepgram') {
+              // Use streaming chat response for Deepgram TTS (low latency)
+              try {
+                const deepgramTtsWs = currentSTTSession?.deepgramTtsWs;
+                const deepgramTtsAudioContext = currentSTTSession?.deepgramTtsAudioContext;
+                
+                if (!deepgramTtsWs || deepgramTtsWs.readyState !== WebSocket.OPEN) {
+                  console.warn('[STT] Deepgram TTS WebSocket not ready, falling back to non-streaming');
+                  const assistantMessage = await getChatResponse(transcriptObj.text);
+                  if (onThinkingUpdate) {
+                    onThinkingUpdate(false);
+                  }
+                  await textToSpeech(assistantMessage);
+                  return;
+                }
+
+                const transcriptId = transcriptObj.id;
+                if (currentSTTSession) {
+                  currentSTTSession.currentTtsResponseId = transcriptId;
+                }
+                
+                let textBuffer = '';
+                const SEND_EVERY = 60;
+                const MIN_FIRST_CHUNK = 20;
+
+                const sendTextChunk = (chunk: string) => {
+                  textBuffer += chunk;
+                  
+                  if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                    const toSend = textBuffer;
+                    textBuffer = '';
+                    deepgramTtsWs.send(JSON.stringify({
+                      type: 'speak',
+                      text: toSend
+                    }));
+                  } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                    const toSend = textBuffer;
+                    textBuffer = '';
+                    deepgramTtsWs.send(JSON.stringify({
+                      type: 'speak',
+                      text: toSend
+                    }));
+                  }
+                };
+
+                let playbackFinished = false;
+                
+                if (!deepgramTtsAudioContext) {
+                  throw new Error('Deepgram TTS AudioContext not available');
+                }
+
+                const audioContext = deepgramTtsAudioContext;
+                
+                if (!currentSTTSession) {
+                  throw new Error('STT session not available');
+                }
+                if (!currentSTTSession.deepgramTtsAudioQueue) {
+                  currentSTTSession.deepgramTtsAudioQueue = [];
+                }
+                if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
+                  currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                }
+                
+                if (audioContext.state === 'suspended') {
+                  await audioContext.resume();
+                }
+
+                const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
+                
+                if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                  deepgramTtsWs.send(JSON.stringify({
+                    type: 'speak',
+                    text: textBuffer
+                  }));
+                  textBuffer = '';
+                }
+                if (deepgramTtsWs.readyState === WebSocket.OPEN) {
+                  deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+                }
+
+                if (onThinkingUpdate) {
+                  onThinkingUpdate(false);
+                }
+
+                const waitForPlayback = () => {
+                  return new Promise<void>((resolve) => {
+                    const checkComplete = () => {
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
+                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
+                      return playbackFinished && queueEmpty && notProcessing;
+                    };
+                    
+                    if (checkComplete()) {
+                      resolve();
+                      return;
+                    }
+
+                    const checkInterval = setInterval(() => {
+                      if (checkComplete()) {
+                        clearInterval(checkInterval);
+                        resolve();
+                      }
+                    }, 100);
+
+                    setTimeout(() => {
+                      clearInterval(checkInterval);
+                      resolve();
+                    }, 30000);
+                  });
+                };
+
+                await waitForPlayback();
+
+              } catch (error: any) {
+                console.error('[STT] Error in streaming chat response:', error);
+                try {
+                  const assistantMessage = await getChatResponse(transcript);
+                  if (onThinkingUpdate) {
+                    onThinkingUpdate(false);
+                  }
+                  await textToSpeech(assistantMessage);
+                } catch (fallbackError) {
+                  console.error('[STT] Fallback also failed:', fallbackError);
+                  if (onThinkingUpdate) {
+                    onThinkingUpdate(false);
+                  }
+                }
+              }
+            } else {
+              // Use non-streaming for other TTS providers
+              const assistantMessage = await getChatResponse(transcript);
+              
+              if (ttsProvider === 'deepgram' && onThinkingUpdate) {
+                onThinkingUpdate(false);
+              }
+            
+              await textToSpeech(assistantMessage);
+            }
+          }
+        } catch (e) {
+          console.error('[STT] Error processing Google Cloud transcript:', e);
+        }
+      };
+      
+      googleCloudWs.onerror = (error) => {
+        console.error('[STT] Google Cloud WebSocket error:', error);
+      };
+      
+      googleCloudWs.onclose = () => {
+        console.log('[STT] Google Cloud WebSocket closed');
+      };
+      
+      // Wait for WebSocket to open and flush buffered audio
+      await new Promise<void>((resolve, reject) => {
+        if (googleCloudWs) {
+          googleCloudWs.onopen = () => {
+            console.log('[STT] Google Cloud WebSocket connected');
+            // Flush any buffered audio chunks
+            if (audioBuffer.length > 0) {
+              console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
+              audioBuffer.forEach(chunk => {
+                try {
+                  googleCloudWs!.send(chunk);
+                } catch (err) {
+                  console.warn('[STT] Error flushing buffered audio:', err);
+                }
+              });
+              audioBuffer.length = 0; // Clear buffer
+            }
+            resolve();
+          };
+          googleCloudWs.onerror = (error) => {
+            console.error('[STT] Google Cloud WebSocket connection error:', error);
+            reject(new Error('Failed to connect to Google Cloud STT'));
+          };
+        } else {
+          reject(new Error('WebSocket not initialized'));
+        }
+      });
+      
+      // Store WebSocket reference (reuse deepgramWs variable name for consistency in session)
+      deepgramWs = googleCloudWs;
+      
     } else {
       // Use Web Speech API (default)
       console.log('[STT] Using Web Speech API for STT');
@@ -1390,8 +1785,9 @@ export async function setupSTTMode(
         let timeoutId: ReturnType<typeof setTimeout> | null = null;
         try {
           // Create timeout controller
+          // Increased timeout to 60 seconds to allow for longer AI responses
           const controller = new AbortController();
-          timeoutId = setTimeout(() => controller.abort(), 35000);
+          timeoutId = setTimeout(() => controller.abort(), 60000);
 
           const response = await fetch(`${backendUrl}/api/chat/stream`, {
             method: 'POST',
@@ -2832,6 +3228,25 @@ export async function setupSTTMode(
       }
 
       console.log('[STT] User said:', transcript);
+      
+      // Capture timestamp immediately when transcript arrives (before any processing)
+      const transcriptArrivalTime = Date.now();
+      
+      // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+      // ignore this transcript to prevent duplicate processing
+      if (currentSTTSession) {
+        if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+          const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+          if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+            console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+            // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+            // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+            return; // Don't process this transcript, let the previous one continue
+          }
+        }
+        // Update timestamp when we process a transcript (after passing the rapid interruption check)
+        currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+      }
       
       // Generate new global Response ID for this user message → TTT → TTS cycle
       // Create transcript object with ID that will flow through the entire pipeline
@@ -4653,6 +5068,7 @@ export default function Page() {
                   >
                     <option value="webspeech">Web Speech API</option>
                     <option value="deepgramnova3">Deepgram Nova 3</option>
+                    <option value="googlecloud">Google Cloud STT</option>
                   </select>
                 </div>
 

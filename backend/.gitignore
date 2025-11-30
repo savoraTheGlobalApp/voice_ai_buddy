@@ -22,3 +22,6 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Google Cloud service account key (NEVER commit this!)
+service-account-key.json
+*.service-account-key.json
