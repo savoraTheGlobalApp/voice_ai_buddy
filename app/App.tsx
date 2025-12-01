@@ -4616,7 +4616,7 @@ export default function Page() {
           backgroundColor: '#fed7aa', // soft orange background
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '24px',
+          padding: 0,
         }}>
           <RoboticCatAvatar
             eyeColor={avatarState}
@@ -4678,15 +4678,15 @@ export default function Page() {
                   }}
                 >
                   {!isUser && (
-                    <CatLogo size={32} backgroundColor="#3b82f6" />
+                    <CatLogo size={32} backgroundColor="#fef08a" />
                   )}
                   <div
                     style={{
                       maxWidth: '70%',
                       padding: '8px 12px',
                       borderRadius: '8px',
-                      backgroundColor: isUser ? '#fef08a' : '#3b82f6', // yellow for user, blue for assistant
-                      color: isUser ? '#f97316' : '#ffffff', // orange text for user messages
+                      backgroundColor: isUser ? '#023601' : '#3b82f6', // dark lime green for user, blue for assistant
+                      color: isUser ? '#ffffff' : '#ffffff', // white text for both for good contrast
                       boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                       wordWrap: 'break-word',
                       fontSize: '14px',

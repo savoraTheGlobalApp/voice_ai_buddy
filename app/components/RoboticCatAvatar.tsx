@@ -84,7 +84,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         justifyContent: 'center',
         width: '100%',
         height: '100%',
-        padding: '20px',
+        padding: 0,
       }}
     >
       {/* Inline styles for idle micro-animations (blink + subtle breathing) */}
@@ -166,12 +166,12 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
         /* Neutral: no special styling */
       `}</style>
       <svg
-        width={size}
-        height={size}
+        width="100%"
+        height="100%"
         viewBox="0 0 200 200"
+        preserveAspectRatio="xMidYMid meet"
         style={{
-          maxWidth: '100%',
-          maxHeight: '100%',
+          display: 'block',
         }}
       >
         {/* Robotic Cat Head - Round with Cat Ears */}

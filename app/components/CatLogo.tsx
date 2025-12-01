@@ -23,16 +23,16 @@ const CatLogo: React.FC<CatLogoProps> = ({
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        padding: size * 0.1, // Add some padding so the image fits nicely
+        padding: 0, // No padding to fill the entire circle
       }}
     >
       <Image
         src="/kitty.webp"
         alt="Kitty Logo"
-        width={size * 0.8}
-        height={size * 0.8}
+        width={size}
+        height={size}
         style={{
-          objectFit: 'contain',
+          objectFit: 'cover',
           width: '100%',
           height: '100%',
         }}
