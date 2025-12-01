@@ -2368,8 +2368,8 @@ export async function setupSTTMode(
                   }
 
                   // Final validation passed - printing both IDs before sending chunk for playback
-                  console.log('[Deepgram TTS] Final validation passed - sending chunk for playback:', 
-                    'chunk ID:', chunkObj.id, 'global ID:', globalId);
+                  // console.log('[Deepgram TTS] Final validation passed - sending chunk for playback:', 
+                  //   'chunk ID:', chunkObj.id, 'global ID:', globalId);
 
                   const audioBuffer = audioContext.createBuffer(1, chunkObj.data.length, 48000);
                   audioBuffer.getChannelData(0).set(chunkObj.data);
@@ -4244,12 +4244,12 @@ export default function Page() {
   }, []);
 
   const [avatarMood, setAvatarMood] = useState<AvatarMood>('neutral');
-  const [showChat, setShowChat] = useState(true); // Toggle between chat and avatar
+  const [showChat, setShowChat] = useState(false); // Toggle between chat and avatar
 
   // Set up callback to receive avatar state updates
   useEffect(() => {
     onAvatarStateUpdate = (state: AvatarState, isTTS: boolean, mood?: AvatarMood) => {
-      console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS, 'mood:', mood);
+      // console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS, 'mood:', mood);
       setAvatarState(state);
       // Derive isTTSPlaying from state so mouth always moves when speaking,
       // regardless of any inconsistent boolean flags passed in.
@@ -4574,7 +4574,7 @@ export default function Page() {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  Settings
+                  Admin Settings
                 </button>
                 <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
                 <button
