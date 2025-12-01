@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
+import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
+import CatLogo from '@/app/components/CatLogo';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -170,6 +172,70 @@ let onConversationUpdate: ((messages: Array<{ role: string; content: string }>) 
 
 // Callback to update thinking indicator state
 let onThinkingUpdate: ((isThinking: boolean) => void) | null = null;
+
+// Avatar visual states:
+// - idle: default
+// - listening: mic is on / user speaking
+// - processing: STT result received / TTT running
+// - speaking: TTS playing
+// - success / error: brief flashes for feedback
+type AvatarState = 'idle' | 'listening' | 'processing' | 'speaking' | 'success' | 'error';
+
+// Mood types for emotional expression
+type AvatarMood = 'neutral' | 'encouraging' | 'concerned' | 'celebratory';
+
+// Function to detect mood from assistant response text
+function detectMoodFromText(text: string): AvatarMood {
+  if (!text) return 'neutral';
+  
+  const lowerText = text.toLowerCase();
+  
+  // Celebratory: exclamation marks, positive words, emojis
+  if (
+    (lowerText.includes('!') && (lowerText.match(/!/g) || []).length >= 2) ||
+    lowerText.includes('great!') ||
+    lowerText.includes('excellent!') ||
+    lowerText.includes('wonderful!') ||
+    lowerText.includes('amazing!') ||
+    lowerText.includes('🎉') ||
+    lowerText.includes('🎊') ||
+    lowerText.includes('🌟')
+  ) {
+    return 'celebratory';
+  }
+  
+  // Encouraging: positive reinforcement words
+  if (
+    lowerText.includes('good job') ||
+    lowerText.includes('well done') ||
+    lowerText.includes('keep going') ||
+    lowerText.includes('you can do it') ||
+    lowerText.includes('nice work') ||
+    lowerText.includes('👍') ||
+    lowerText.includes('💪')
+  ) {
+    return 'encouraging';
+  }
+  
+  // Concerned: words indicating difficulty or worry
+  if (
+    lowerText.includes('difficult') ||
+    lowerText.includes('challenging') ||
+    lowerText.includes('struggling') ||
+    lowerText.includes('concerned') ||
+    lowerText.includes('worry') ||
+    lowerText.includes('😟') ||
+    lowerText.includes('😔')
+  ) {
+    return 'concerned';
+  }
+  
+  // Default to neutral
+  return 'neutral';
+}
+
+// Callback to update avatar state
+let onAvatarStateUpdate: ((state: AvatarState, isTTSPlaying: boolean, mood?: AvatarMood) => void) | null = null;
 
 // Make memory text as crisp as possible by removing user's name and connectors
 function crispifyMemoryText(text: string, userName?: string): string {
@@ -1203,6 +1269,10 @@ export async function setupSTTMode(
         if (deepgramWs) {
           deepgramWs.onopen = () => {
             console.log('[STT] Deepgram WebSocket connected');
+            // Update avatar: mic is now listening for user speech
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('listening', false);
+            }
             // Flush any buffered audio chunks
             if (audioBuffer.length > 0) {
               console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
@@ -1571,6 +1641,10 @@ export async function setupSTTMode(
         if (googleCloudWs) {
           googleCloudWs.onopen = () => {
             console.log('[STT] Google Cloud WebSocket connected');
+            // Update avatar: mic is now listening for user speech
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('listening', false);
+            }
             // Flush any buffered audio chunks
             if (audioBuffer.length > 0) {
               console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
@@ -1707,7 +1781,7 @@ export async function setupSTTMode(
     
     // If not in localStorage, fetch from backend (async, but don't wait - will initialize later if needed)
     if (!ttsProvider) {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       fetch(`${backendUrl}/api/config`)
         .then(resp => {
           if (resp.ok) {
@@ -1847,6 +1921,13 @@ export async function setupSTTMode(
                   if (data.done) {
                     // Stream complete
                     conversationHistory.push({ role: 'assistant', content: fullResponse });
+                    
+                    // Detect mood from assistant response and update avatar
+                    const detectedMood = detectMoodFromText(fullResponse);
+                    if (onAvatarStateUpdate) {
+                      onAvatarStateUpdate('processing', false, detectedMood);
+                    }
+                    
                     // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
@@ -1948,6 +2029,13 @@ export async function setupSTTMode(
           const data = await response.json();
           const assistantMessage = data.response || data.message || '';
           conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          
+          // Detect mood from assistant response and update avatar
+          const detectedMood = detectMoodFromText(assistantMessage);
+          if (onAvatarStateUpdate) {
+            onAvatarStateUpdate('processing', false, detectedMood);
+          }
+          
           // Update UI
           if (onConversationUpdate) {
             onConversationUpdate([...conversationHistory]);
@@ -2113,7 +2201,7 @@ export async function setupSTTMode(
         
         // Fallback to backend config if admin settings not available
         if (!hasAdminSettings || !ttsProvider) {
-          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
           try {
             const resp = await fetch(`${backendUrl}/api/config`);
             if (resp.ok) {
@@ -2137,6 +2225,7 @@ export async function setupSTTMode(
         // Handle Deepgram TTS (WebSocket streaming, low latency)
         if (ttsProvider === 'deepgram') {
           return new Promise<void>((resolve, reject) => {
+            console.log('[TTS PATH] Using Deepgram TTS (textToSpeech)');
             // Generate global Response ID for this TTS call (if not already set by streaming path)
             if (currentSTTSession) {
               if (currentSTTSession.globalResponseId === undefined) {
@@ -2279,8 +2368,8 @@ export async function setupSTTMode(
                   }
 
                   // Final validation passed - printing both IDs before sending chunk for playback
-                  console.log('[Deepgram TTS] Final validation passed - sending chunk for playback:', 
-                    'chunk ID:', chunkObj.id, 'global ID:', globalId);
+                  // console.log('[Deepgram TTS] Final validation passed - sending chunk for playback:', 
+                  //   'chunk ID:', chunkObj.id, 'global ID:', globalId);
 
                   const audioBuffer = audioContext.createBuffer(1, chunkObj.data.length, 48000);
                   audioBuffer.getChannelData(0).set(chunkObj.data);
@@ -2304,6 +2393,13 @@ export async function setupSTTMode(
                   const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime;
                   const playTime = Math.max(currentTime, nextPlayTime);
                   source.start(playTime);
+                  
+                  // Update avatar: TTS is now speaking (Deepgram streaming)
+                  // It's safe to set this on each chunk; color doesn't change per chunk.
+                  if (onAvatarStateUpdate) {
+                    console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
+                    onAvatarStateUpdate('speaking', true);
+                  }
 
                   const duration = audioBuffer.duration;
                   const newNextPlayTime = playTime + duration;
@@ -2561,6 +2657,10 @@ export async function setupSTTMode(
               // Don't close AudioContext - it's shared across requests
               // Next play time is already updated in processAudioQueue
               playbackFinished = true;
+              // Update avatar: TTS playback finished, return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
             };
             
             // Set up message handler (only if not already set up for new connections)
@@ -2695,6 +2795,7 @@ export async function setupSTTMode(
         
         // Handle Web Speech API (browser-native, no backend call needed)
         if (ttsProvider === 'webspeech') {
+          console.log('[TTS PATH] Using Web Speech API TTS');
           if (!('speechSynthesis' in window)) {
             throw new Error('Web Speech API is not supported in this browser');
           }
@@ -2735,10 +2836,25 @@ export async function setupSTTMode(
                 }
                 
                 // Set up speech completion handlers
+                utterance.onstart = () => {
+                  console.log('[TTS SPEAKING] WebSpeech (voiceschanged path) onstart');
+                  // Update avatar: TTS is now speaking
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('speaking', true);
+                  }
+                };
                 utterance.onend = () => {
+                  // Update avatar: TTS playback finished, return to idle
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('idle', false);
+                  }
                   resolve();
                 };
                 utterance.onerror = (e) => {
+                  // Update avatar on error: return to idle
+                  if (onAvatarStateUpdate) {
+                    onAvatarStateUpdate('idle', false);
+                  }
                   // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
                   if (e.error === 'interrupted') {
                     resolve(); // Resolve instead of reject - cancellation is expected
@@ -2796,10 +2912,25 @@ export async function setupSTTMode(
           
           // Return a promise that resolves when speech completes
           return new Promise<void>((resolve, reject) => {
+            utterance.onstart = () => {
+              console.log('[TTS SPEAKING] WebSpeech (direct path) onstart');
+              // Update avatar: TTS is now speaking
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('speaking', true);
+              }
+            };
             utterance.onend = () => {
+              // Update avatar: TTS playback finished, return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               resolve();
             };
             utterance.onerror = (e) => {
+              // Update avatar on error: return to idle
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               // "interrupted" is not an error - it happens when speech is cancelled (normal behavior)
               if (e.error === 'interrupted') {
                 resolve(); // Resolve instead of reject - cancellation is expected
@@ -2814,6 +2945,7 @@ export async function setupSTTMode(
         
         // For other providers (gtts, openai), use backend API
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        console.log('[TTS PATH] Using backend /api/tts TTS provider:', ttsProvider);
         const response = await fetch(`${backendUrl}/api/tts`, {
           method: 'POST',
           headers: {
@@ -3020,6 +3152,11 @@ export async function setupSTTMode(
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
+            // Update avatar: TTS is now speaking
+            if (onAvatarStateUpdate) {
+              console.log('[TTS SPEAKING] Backend audio element play()');
+              onAvatarStateUpdate('speaking', true);
+            }
           };
           
           const handleEnded = () => {
@@ -3032,6 +3169,10 @@ export async function setupSTTMode(
             // Clear current audio element reference
             if (currentSTTSession && currentSTTSession.currentTTSAudioElement === audioEl) {
               currentSTTSession.currentTTSAudioElement = null;
+            }
+            // Update avatar: TTS playback finished, return to idle
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('idle', false);
             }
             // Remove event listeners to prevent beeps after audio ends
             if (audioEl) {
@@ -3105,6 +3246,11 @@ export async function setupSTTMode(
               src: audioEl.src
             });
             
+            // Reset avatar to idle on error
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('idle', false);
+            }
+            
             // CRITICAL: Clean up on error to prevent memory leaks
             // Only revoke if it's a permanent error
             if (audioEl.error) {
@@ -3134,6 +3280,11 @@ export async function setupSTTMode(
             isPlaying = true;
             await audioEl.play();
             console.log('[TTS] Audio playback started');
+            // Ensure avatar enters 'speaking' state as soon as playback starts
+            if (onAvatarStateUpdate) {
+              console.log('[TTS SPEAKING] Backend play() resolved, forcing speaking state');
+              onAvatarStateUpdate('speaking', true);
+            }
           } catch (playError: any) {
             // If play fails, try resuming AudioContext and retry
             if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
@@ -3143,11 +3294,19 @@ export async function setupSTTMode(
                 await audioEl.play();
                 isPlaying = true;
                 console.log('[TTS] Audio playback started after AudioContext resume');
+                if (onAvatarStateUpdate) {
+                  console.log('[TTS SPEAKING] Backend play() after resume, forcing speaking state');
+                  onAvatarStateUpdate('speaking', true);
+                }
               } else {
                 console.error('[TTS] Cannot retry play - invalid src after resume:', audioEl.src);
                 throw new Error('Invalid audio source after resume');
               }
             } else {
+              // Reset avatar to idle on play error
+              if (onAvatarStateUpdate) {
+                onAvatarStateUpdate('idle', false);
+              }
               console.error('[TTS] Failed to play audio:', playError, {
                 src: audioEl.src,
                 readyState: audioEl.readyState,
@@ -3162,6 +3321,10 @@ export async function setupSTTMode(
         }
       } catch (e) {
         console.error('TTS error:', e);
+        // Reset avatar to idle on error
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('idle', false);
+        }
         // Fallback: Use Web Speech Synthesis API
         if ('speechSynthesis' in window) {
           const utterance = new SpeechSynthesisUtterance(text);
@@ -3246,6 +3409,11 @@ export async function setupSTTMode(
         }
         // Update timestamp when we process a transcript (after passing the rapid interruption check)
         currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
+      }
+      
+      // Update avatar: user finished speaking, now processing
+      if (onAvatarStateUpdate) {
+        onAvatarStateUpdate('processing', false);
       }
       
       // Generate new global Response ID for this user message → TTT → TTS cycle
@@ -3439,6 +3607,10 @@ export async function setupSTTMode(
         if (onThinkingUpdate) {
           onThinkingUpdate(false);
         }
+        // Reset avatar to idle on error
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('idle', false);
+        }
         // Stop processing audio on error as well
         if (currentSTTSession) {
           // Stop Web Audio API oscillator if any
@@ -3488,6 +3660,11 @@ export async function setupSTTMode(
         } catch (e) {
           console.warn('[STT] Error stopping processing audio on recognition start:', e);
         }
+      }
+      
+      // Update avatar: mic is now listening for user speech
+      if (onAvatarStateUpdate) {
+        onAvatarStateUpdate('listening', false);
       }
       
       // Resolve promise when recognition is ready (for greeting)
@@ -3997,6 +4174,8 @@ export default function Page() {
   const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([]);
   const [isMobile, setIsMobile] = useState(false);
   const [isThinking, setIsThinking] = useState(false); // For Deepgram TTS thinking indicator
+  const [avatarState, setAvatarState] = useState<AvatarState>('idle');
+  const [isTTSPlaying, setIsTTSPlaying] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
   
@@ -4061,6 +4240,27 @@ export default function Page() {
     
     return () => {
       onConversationUpdate = null;
+    };
+  }, []);
+
+  const [avatarMood, setAvatarMood] = useState<AvatarMood>('neutral');
+  const [showChat, setShowChat] = useState(false); // Toggle between chat and avatar
+
+  // Set up callback to receive avatar state updates
+  useEffect(() => {
+    onAvatarStateUpdate = (state: AvatarState, isTTS: boolean, mood?: AvatarMood) => {
+      // console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS, 'mood:', mood);
+      setAvatarState(state);
+      // Derive isTTSPlaying from state so mouth always moves when speaking,
+      // regardless of any inconsistent boolean flags passed in.
+      setIsTTSPlaying(state === 'speaking');
+      if (mood) {
+        setAvatarMood(mood);
+      }
+    };
+
+    return () => {
+      onAvatarStateUpdate = null;
     };
   }, []);
 
@@ -4237,83 +4437,95 @@ export default function Page() {
   return (
     <main style={{ 
       display: 'flex', 
-      minHeight: '100vh', 
+      height: '100vh',
+      maxHeight: '100vh',
       padding: 0,
-      flexDirection: isMobile ? 'column' : 'row',
+      flexDirection: 'column',
       gap: 0,
+      overflow: 'hidden',
     }}>
-      {/* Chat UI Section - WhatsApp-like */}
+      {/* Header - Always visible at top */}
       <div style={{
-        flex: isMobile ? 'none' : '1',
+        backgroundColor: '#3b82f6', // blue
+        color: '#ffffff',
+        padding: '12px 16px',
         display: 'flex',
-        flexDirection: 'column',
-        height: isMobile ? '50vh' : '100vh',
-        minHeight: isMobile ? '400px' : '100vh',
-        backgroundColor: '#e5ddd5',
-        backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
-        borderRight: isMobile ? 'none' : '1px solid #d1d5db',
-        borderBottom: isMobile ? '1px solid #d1d5db' : 'none',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
       }}>
-        {/* Chat Header */}
-        <div style={{
-          backgroundColor: '#075e54',
-          color: 'white',
-          padding: '12px 16px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              backgroundColor: '#128c7e',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '18px',
-              fontWeight: 'bold',
-            }}>
-              🤖
-            </div>
-            <div>
-              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
-              <div style={{ fontSize: '12px', opacity: 0.8 }}>
-                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
-              </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <CatLogo size={40} backgroundColor="#3b82f6" />
+          <div>
+            <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+            <div style={{ fontSize: '12px', opacity: 0.8 }}>
+              {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
             </div>
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Toggle Buttons */}
+          <button
+            onClick={() => setShowChat(false)}
+            style={{
+              padding: '6px 12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: showChat ? '#ffffff' : '#3b82f6',
+              backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            Avatar
+          </button>
+          <button
+            onClick={() => setShowChat(true)}
+            style={{
+              padding: '6px 12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: showChat ? '#3b82f6' : '#ffffff',
+              backgroundColor: showChat ? '#ffffff' : 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            Chat
+          </button>
         {userData && (
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
-            <div style={{ textAlign: 'right', fontSize: '12px' }}>
-              <div>{userData.name}</div>
-            </div>
+              <div style={{ textAlign: 'right', fontSize: '12px' }}>
+                <div>{userData.name}</div>
+          </div>
             {/* Three-dot menu button */}
-            <button
-              type="button"
+        <button
+          type="button"
               onClick={() => setShowMenu(!showMenu)}
-              style={{
+          style={{
                 padding: '8px',
                 fontSize: '18px',
-                fontWeight: 500,
-                color: 'white',
+            fontWeight: 500,
+                  color: 'white',
                 backgroundColor: 'transparent',
                 border: 'none',
                 borderRadius: '50%',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 width: '36px',
                 height: '36px',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)';
-              }}
-              onMouseLeave={(e) => {
+          }}
+          onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.1)';
+          }}
+          onMouseLeave={(e) => {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }}
               aria-label="Menu"
@@ -4362,7 +4574,7 @@ export default function Page() {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
-                  Settings
+                  Admin Settings
                 </button>
                 <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
                 <button
@@ -4385,15 +4597,49 @@ export default function Page() {
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  Logout
-                </button>
+          }}
+        >
+          Logout
+        </button>
               </div>
             )}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Middle Section - Toggles between Avatar and Chat */}
+      {!showChat && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          backgroundColor: '#fed7aa', // soft orange background
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 0,
+        }}>
+          <RoboticCatAvatar
+            eyeColor={avatarState}
+            isTTSPlaying={isTTSPlaying}
+            mood={avatarMood}
+            size={isMobile ? 344 : 563}
+          />
+        </div>
+      )}
+
+      {/* Chat UI Section - Middle section when active */}
+      {showChat && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          minHeight: 0,
+          backgroundColor: '#fef08a', // yellow background
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
+        }}>
 
         {/* Chat Messages Container */}
         <div 
@@ -4401,10 +4647,12 @@ export default function Page() {
           style={{
             flex: 1,
             overflowY: 'auto',
+            overflowX: 'hidden',
             padding: '16px',
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
+            minHeight: 0,
           }}
         >
           {messages.length === 0 ? (
@@ -4413,7 +4661,7 @@ export default function Page() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#667781',
+              color: '#1a202c',
               fontSize: '14px',
               textAlign: 'center',
             }}>
@@ -4435,31 +4683,19 @@ export default function Page() {
                   }}
                 >
                   {!isUser && (
-                    <div style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      backgroundColor: '#128c7e',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '16px',
-                      flexShrink: 0,
-                    }}>
-                      🤖
-                    </div>
+                    <CatLogo size={32} backgroundColor="#fef08a" />
                   )}
                   <div
                     style={{
                       maxWidth: '70%',
                       padding: '8px 12px',
                       borderRadius: '8px',
-                      backgroundColor: isUser ? '#dcf8c6' : '#ffffff',
+                      backgroundColor: isUser ? '#023601' : '#3b82f6', // dark lime green for user, blue for assistant
+                      color: isUser ? '#ffffff' : '#ffffff', // white text for both for good contrast
                       boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                       wordWrap: 'break-word',
                       fontSize: '14px',
                       lineHeight: '1.4',
-                      color: '#111b21',
                     }}
                   >
                     {msg.content}
@@ -4469,7 +4705,7 @@ export default function Page() {
                       width: '32px',
                       height: '32px',
                       borderRadius: '50%',
-                      backgroundColor: '#128c7e',
+                      backgroundColor: '#f97316', // orange
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -4493,30 +4729,18 @@ export default function Page() {
                 gap: '8px',
               }}
             >
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: '#128c7e',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '16px',
-                flexShrink: 0,
-              }}>
-                🤖
-              </div>
+              <CatLogo size={32} backgroundColor="#3b82f6" />
               <div
                 style={{
                   maxWidth: '70%',
                   padding: '8px 12px',
                   borderRadius: '8px',
-                  backgroundColor: '#ffffff',
+                  backgroundColor: '#3b82f6', // blue
+                  color: '#ffffff', // white text for assistant
                   boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
                   wordWrap: 'break-word',
                   fontSize: '14px',
                   lineHeight: '1.4',
-                  color: '#111b21',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
@@ -4553,26 +4777,19 @@ export default function Page() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Controls Section */}
+        </div>
+      )}
+      
+      {/* Controls Section - Always visible at bottom */}
       <div style={{
-        flex: isMobile ? 'none' : '0 0 380px',
-        width: isMobile ? '100%' : '380px',
-        minWidth: 0,
-        maxWidth: isMobile ? '100%' : '380px',
+        backgroundColor: '#f9fafb',
+        padding: '20px',
+        borderTop: '1px solid #e5e7eb',
         display: 'flex',
         flexDirection: 'column',
-        padding: '20px',
         gap: '12px',
-        backgroundColor: '#f9fafb',
-        height: isMobile ? 'auto' : '100vh',
-        maxHeight: isMobile ? '50vh' : 'none',
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        boxSizing: 'border-box',
       }}>
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
           <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
           <select
@@ -4676,23 +4893,23 @@ export default function Page() {
               }
               
               // Clean up realtime session
-              if (currentSession) {
-                // Stop recognition if it exists
-                if (currentSession.recognition) {
-                  try {
-                    currentSession.recognition.stop();
-                    currentSession.recognition.abort();
-                  } catch (e) {
-                    // Ignore errors
+                if (currentSession) {
+                  // Stop recognition if it exists
+                  if (currentSession.recognition) {
+                    try {
+                      currentSession.recognition.stop();
+                      currentSession.recognition.abort();
+                    } catch (e) {
+                      // Ignore errors
+                    }
                   }
+                  currentSession.session.close();
+                  currentSession = null;
                 }
-                currentSession.session.close();
-                currentSession = null;
-              }
               
               // Clean up STT session
-              if (currentSTTSession) {
-                if (currentSTTSession.recognition) {
+                if (currentSTTSession) {
+                  if (currentSTTSession.recognition) {
                   try {
                     currentSTTSession.recognition.stop();
                     currentSTTSession.recognition.abort();
@@ -4738,23 +4955,23 @@ export default function Page() {
                 }
                 if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
                   currentSTTSession.mediaRecorder.stop();
-                }
-                if (currentSTTSession.audioContext) {
+                  }
+                  if (currentSTTSession.audioContext) {
                   await currentSTTSession.audioContext.close();
-                }
-                // Stop and clean up processing audio
-                if (currentSTTSession.processingOscillator) {
-                  try {
-                    currentSTTSession.processingOscillator.stop();
-                    currentSTTSession.processingOscillator.disconnect();
-                  } catch (e) {}
-                }
-                if (currentSTTSession.processingGain) {
-                  try {
-                    currentSTTSession.processingGain.disconnect();
-                  } catch (e) {}
-                }
-                if (currentSTTSession.processingAudio) {
+                  }
+                  // Stop and clean up processing audio
+                  if (currentSTTSession.processingOscillator) {
+                    try {
+                      currentSTTSession.processingOscillator.stop();
+                      currentSTTSession.processingOscillator.disconnect();
+                    } catch (e) {}
+                  }
+                  if (currentSTTSession.processingGain) {
+                    try {
+                      currentSTTSession.processingGain.disconnect();
+                    } catch (e) {}
+                  }
+                  if (currentSTTSession.processingAudio) {
                   // Aggressively stop processing audio
                   try {
                     currentSTTSession.processingAudio.volume = 0;
@@ -4764,9 +4981,9 @@ export default function Page() {
                   } catch (e) {
                     console.warn('[Disconnect] Error stopping processing audio:', e);
                   }
+                  }
+                  currentSTTSession = null;
                 }
-                currentSTTSession = null;
-              }
               
               // Reset state
               setStatus('idle');
@@ -4823,43 +5040,43 @@ export default function Page() {
         >
           Disconnect
         </button>
-        <button
-          ref={buttonRef}
-          onClick={() => {
-            if (status === 'connecting...') return;
-            setStatus('connecting...');
-            setupCounter(
-              buttonRef.current as HTMLButtonElement,
-              audioRef.current,
-              selectedInput,
-              selectedOutput,
-              useSTTMode,
-              userData?.name,
-              userData?.age,
-              currentUser?.uid || userData?.uid,
-            )
-              .then(() => setStatus('connected'))
-              .catch((e) => {
-                console.error(e);
-                setStatus('error - see console');
-              });
-          }}
+      <button
+        ref={buttonRef}
+        onClick={() => {
+          if (status === 'connecting...') return;
+          setStatus('connecting...');
+          setupCounter(
+            buttonRef.current as HTMLButtonElement,
+            audioRef.current,
+            selectedInput,
+            selectedOutput,
+            useSTTMode,
+            userData?.name,
+            userData?.age,
+            currentUser?.uid || userData?.uid,
+          )
+            .then(() => setStatus('connected'))
+            .catch((e) => {
+              console.error(e);
+              setStatus('error - see console');
+            });
+        }}
           disabled={status === 'connecting...' || status === 'connected'}
-          type="button"
-          style={{
-            padding: '14px 32px',
-            fontSize: 16,
-            fontWeight: 600,
-            color: '#ffffff',
-            backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
-            border: 'none',
-            borderRadius: '8px',
+        type="button"
+        style={{
+          padding: '14px 32px',
+          fontSize: 16,
+          fontWeight: 600,
+          color: '#ffffff',
+          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
+          border: 'none',
+          borderRadius: '8px',
             cursor: status === 'connecting...' || status === 'connected' ? 'not-allowed' : 'pointer',
-            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-            transition: 'all 0.2s ease-in-out',
-            minWidth: '180px',
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+          transition: 'all 0.2s ease-in-out',
+          minWidth: '180px',
             flex: 1,
-          }}
+        }}
         onMouseEnter={(e) => {
           if (status !== 'connecting...' && status !== 'connected') {
             e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#dc2626' : '#2563eb';
@@ -4896,11 +5113,11 @@ export default function Page() {
               : useSTTMode 
                 ? 'Connect' 
                 : 'Connect Realtime'}
-      </button>
-      </div>
-      <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>Status: {status}</div>
-        <div style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+        </button>
+        </div>
+        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
+        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
         </div>
       </div>
