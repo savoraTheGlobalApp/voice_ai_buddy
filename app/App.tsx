@@ -1269,6 +1269,10 @@ export async function setupSTTMode(
         if (deepgramWs) {
           deepgramWs.onopen = () => {
             console.log('[STT] Deepgram WebSocket connected');
+            // Update avatar: mic is now listening for user speech
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('listening', false);
+            }
             // Flush any buffered audio chunks
             if (audioBuffer.length > 0) {
               console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
@@ -1637,6 +1641,10 @@ export async function setupSTTMode(
         if (googleCloudWs) {
           googleCloudWs.onopen = () => {
             console.log('[STT] Google Cloud WebSocket connected');
+            // Update avatar: mic is now listening for user speech
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('listening', false);
+            }
             // Flush any buffered audio chunks
             if (audioBuffer.length > 0) {
               console.log(`[STT] Flushing ${audioBuffer.length} buffered audio chunks`);
