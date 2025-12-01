@@ -4437,10 +4437,12 @@ export default function Page() {
   return (
     <main style={{ 
       display: 'flex', 
-      minHeight: '100vh', 
+      height: '100vh',
+      maxHeight: '100vh',
       padding: 0,
       flexDirection: 'column',
       gap: 0,
+      overflow: 'hidden',
     }}>
       {/* Header - Always visible at top */}
       <div style={{
@@ -4634,6 +4636,7 @@ export default function Page() {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          minHeight: 0,
           backgroundColor: '#fef08a', // yellow background
           backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
         }}>
@@ -4644,10 +4647,12 @@ export default function Page() {
           style={{
             flex: 1,
             overflowY: 'auto',
+            overflowX: 'hidden',
             padding: '16px',
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
+            minHeight: 0,
           }}
         >
           {messages.length === 0 ? (
