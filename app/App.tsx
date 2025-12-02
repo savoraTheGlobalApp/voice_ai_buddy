@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
 import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';
+import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 import CatLogo from '@/app/components/CatLogo';
 
@@ -4188,6 +4190,15 @@ export default function Page() {
   const [adminError, setAdminError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
   
+  // User settings state
+  const [showUserSettingsPage, setShowUserSettingsPage] = useState(false);
+  const [showEditPopup, setShowEditPopup] = useState(false);
+  const [editType, setEditType] = useState<'name' | 'age'>('name');
+  const [editValue, setEditValue] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [localUserData, setLocalUserData] = useState<{ name?: string; age?: number } | null>(null);
+  
   // Admin settings state
   interface AdminSettings {
     mode: 'realtime' | 'stt-ttt-tts';
@@ -4245,6 +4256,7 @@ export default function Page() {
 
   const [avatarMood, setAvatarMood] = useState<AvatarMood>('neutral');
   const [showChat, setShowChat] = useState(false); // Toggle between chat and avatar
+  const [activeSection, setActiveSection] = useState<'home' | 'profile'>('home');
 
   // Set up callback to receive avatar state updates
   useEffect(() => {
@@ -4278,6 +4290,93 @@ export default function Page() {
       router.push('/');
     } catch (error) {
       console.error('Error logging out:', error);
+    }
+  };
+
+  const handleUserSettingsClick = () => {
+    setShowMenu(false);
+    setShowUserSettingsPage(true);
+  };
+
+  const handleEditClick = (type: 'name' | 'age') => {
+    setEditType(type);
+    const currentName = localUserData?.name ?? userData?.name;
+    const currentAge = localUserData?.age ?? userData?.age;
+    setEditValue(type === 'name' ? (currentName || '') : (currentAge?.toString() || ''));
+    setSaveError('');
+    setShowEditPopup(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!currentUser || !userData) return;
+
+    setIsSaving(true);
+    setSaveError('');
+
+    try {
+      const userDocRef = doc(db, 'users', currentUser.uid);
+      
+      let updatedValue: string | number;
+      
+      if (editType === 'name') {
+        const trimmedName = editValue.trim();
+        if (!trimmedName) {
+          setSaveError('Name cannot be empty');
+          setIsSaving(false);
+          return;
+        }
+        updatedValue = trimmedName;
+        await updateDoc(userDocRef, { name: trimmedName });
+      } else {
+        const age = parseInt(editValue.trim());
+        if (isNaN(age) || age < 1 || age > 150) {
+          setSaveError('Please enter a valid age (1-150)');
+          setIsSaving(false);
+          return;
+        }
+        updatedValue = age;
+        await updateDoc(userDocRef, { age });
+      }
+
+      // Fetch updated user data to show changes immediately
+      try {
+        const updatedDoc = await getDoc(userDocRef);
+        if (updatedDoc.exists()) {
+          const updatedData = updatedDoc.data();
+          // Update local state with new values for instant UI update
+          setLocalUserData({
+            name: updatedData.name,
+            age: updatedData.age,
+          });
+        }
+      } catch (fetchError) {
+        console.error('Error fetching updated user data:', fetchError);
+        // Still update local state optimistically with what we just saved
+        const currentName = localUserData?.name ?? userData?.name;
+        const currentAge = localUserData?.age ?? userData?.age;
+        if (editType === 'name') {
+          setLocalUserData({
+            name: updatedValue as string,
+            age: currentAge,
+          });
+        } else {
+          setLocalUserData({
+            name: currentName,
+            age: updatedValue as number,
+          });
+        }
+      }
+
+      // Close popup and settings page gracefully
+      setShowEditPopup(false);
+      setShowUserSettingsPage(false);
+      setEditValue('');
+      setSaveError('');
+    } catch (error: any) {
+      console.error('Error updating user data:', error);
+      setSaveError(error.message || 'Failed to update. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -4434,16 +4533,25 @@ export default function Page() {
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh);
   }, []);
 
+  // Helper variables to use localUserData if available, otherwise fall back to userData
+  const displayName = localUserData?.name ?? userData?.name;
+  const displayAge = localUserData?.age ?? userData?.age;
+
   return (
     <main style={{ 
       display: 'flex', 
       height: '100vh',
       maxHeight: '100vh',
       padding: 0,
+      paddingBottom: '70px', // Space for bottom navigation bar
       flexDirection: 'column',
       gap: 0,
       overflow: 'hidden',
+      position: 'relative',
     }}>
+      {/* Home Section */}
+      {activeSection === 'home' && (
+        <>
       {/* Header - Always visible at top */}
       <div style={{
         backgroundColor: '#3b82f6', // blue
@@ -4497,114 +4605,6 @@ export default function Page() {
           >
             Chat
           </button>
-        {userData && (
-          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
-              <div style={{ textAlign: 'right', fontSize: '12px' }}>
-                <div>{userData.name}</div>
-          </div>
-            {/* Three-dot menu button */}
-        <button
-          type="button"
-              onClick={() => setShowMenu(!showMenu)}
-          style={{
-                padding: '8px',
-                fontSize: '18px',
-            fontWeight: 500,
-                  color: 'white',
-                backgroundColor: 'transparent',
-                border: 'none',
-                borderRadius: '50%',
-            cursor: 'pointer',
-            transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '36px',
-                height: '36px',
-          }}
-          onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.1)';
-          }}
-          onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              aria-label="Menu"
-              title="Menu"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="1"></circle>
-                <circle cx="12" cy="5" r="1"></circle>
-                <circle cx="12" cy="19" r="1"></circle>
-              </svg>
-            </button>
-            
-            {/* Dropdown menu */}
-            {showMenu && (
-              <div style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '8px',
-                backgroundColor: 'white',
-                borderRadius: '8px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                minWidth: '160px',
-                zIndex: 1000,
-                overflow: 'hidden',
-              }}>
-                <button
-                  type="button"
-                  onClick={handleSettingsClick}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#374151',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#f3f4f6';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  Admin Settings
-                </button>
-                <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  style={{
-                    width: '100%',
-                    padding: '12px 16px',
-                    fontSize: '14px',
-                    fontWeight: 500,
-                    color: '#ef4444',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'background-color 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = '#fef2f2';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-        >
-          Logout
-        </button>
-              </div>
-            )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -5396,6 +5396,629 @@ export default function Page() {
           </div>
         </div>
       )}
+
+        </>
+      )}
+
+      {/* Profile Section */}
+      {activeSection === 'profile' && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}>
+          {/* Header - Similar to Home section */}
+          <div style={{
+            backgroundColor: '#3b82f6', // blue
+            color: '#ffffff',
+            padding: '12px 16px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <CatLogo size={40} backgroundColor="#3b82f6" />
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+                <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                  {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              {userData && (
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', position: 'relative' }} data-menu-container>
+                  {/* Three-dot menu button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowMenu(!showMenu)}
+                    style={{
+                      padding: '8px',
+                      fontSize: '18px',
+                      fontWeight: 500,
+                      color: 'white',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderRadius: '50%',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '36px',
+                      height: '36px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(0,0,0,0.1)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                    aria-label="Menu"
+                    title="Menu"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="1"></circle>
+                      <circle cx="12" cy="5" r="1"></circle>
+                      <circle cx="12" cy="19" r="1"></circle>
+                    </svg>
+                  </button>
+                  
+                  {/* Dropdown menu */}
+                  {showMenu && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      right: 0,
+                      marginTop: '8px',
+                      backgroundColor: 'white',
+                      borderRadius: '8px',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      minWidth: '160px',
+                      zIndex: 1000,
+                      overflow: 'hidden',
+                    }}>
+                      <button
+                        type="button"
+                        onClick={handleUserSettingsClick}
+                        style={{
+                          width: '100%',
+                          padding: '12px 16px',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: '#374151',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#f3f4f6';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        Settings
+                      </button>
+                      <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
+                      <button
+                        type="button"
+                        onClick={handleSettingsClick}
+                        style={{
+                          width: '100%',
+                          padding: '12px 16px',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: '#374151',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#f3f4f6';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        Admin Settings
+                      </button>
+                      <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        style={{
+                          width: '100%',
+                          padding: '12px 16px',
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          color: '#ef4444',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.2s',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = '#fef2f2';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Profile Content */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: isMobile ? '16px' : '24px',
+            backgroundColor: '#f9fafb',
+          }}>
+            {/* Settings Page */}
+            {showUserSettingsPage ? (
+              <div style={{
+                backgroundColor: '#ffffff',
+                borderRadius: '16px',
+                padding: isMobile ? '20px' : '32px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                maxWidth: isMobile ? '100%' : '600px',
+                margin: '0 auto',
+              }}>
+                {/* Back Button */}
+                <button
+                  onClick={() => setShowUserSettingsPage(false)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    marginBottom: '24px',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#3b82f6',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    transition: 'opacity 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.opacity = '0.7';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.opacity = '1';
+                  }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                  </svg>
+                  Back
+                </button>
+
+                {/* Settings Title */}
+                <h2 style={{
+                  fontSize: isMobile ? '24px' : '28px',
+                  fontWeight: 700,
+                  color: '#111827',
+                  margin: 0,
+                  marginBottom: '32px',
+                }}>
+                  Settings
+                </h2>
+
+                {/* Settings Options */}
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}>
+                  {/* Change Name Option */}
+                  <button
+                    onClick={() => handleEditClick('name')}
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      backgroundColor: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      transition: 'all 0.2s',
+                      textAlign: 'left',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f9fafb';
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <div>
+                      <div style={{
+                        fontSize: '16px',
+                        fontWeight: 600,
+                        color: '#111827',
+                        marginBottom: '4px',
+                      }}>
+                        Change Name
+                      </div>
+                      <div style={{
+                        fontSize: '14px',
+                        color: '#6b7280',
+                      }}>
+                        {displayName || 'Not set'}
+                      </div>
+                    </div>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#9ca3af', flexShrink: 0 }}>
+                      <path d="M9 18l6-6-6-6"/>
+                    </svg>
+                  </button>
+
+                  {/* Change Age Option */}
+                  <button
+                    onClick={() => handleEditClick('age')}
+                    style={{
+                      width: '100%',
+                      padding: '16px 20px',
+                      backgroundColor: '#f9fafb',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      transition: 'all 0.2s',
+                      textAlign: 'left',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f9fafb';
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <div>
+                      <div style={{
+                        fontSize: '16px',
+                        fontWeight: 600,
+                        color: '#111827',
+                        marginBottom: '4px',
+                      }}>
+                        Change Age
+                      </div>
+                      <div style={{
+                        fontSize: '14px',
+                        color: '#6b7280',
+                      }}>
+                        {displayAge ? `${displayAge} years old` : 'Not set'}
+                      </div>
+                    </div>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#9ca3af', flexShrink: 0 }}>
+                      <path d="M9 18l6-6-6-6"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Profile Card */
+              userData && (
+              <div style={{
+                backgroundColor: '#ffffff',
+                borderRadius: '16px',
+                padding: isMobile ? '24px' : '32px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                maxWidth: isMobile ? '100%' : '600px',
+                margin: '0 auto',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '16px',
+                }}>
+                  {/* Avatar Circle */}
+                  <div style={{
+                    width: isMobile ? '80px' : '100px',
+                    height: isMobile ? '80px' : '100px',
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: isMobile ? '32px' : '40px',
+                    color: '#ffffff',
+                    fontWeight: 600,
+                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                  }}>
+                    {displayName ? displayName.charAt(0).toUpperCase() : '👤'}
+                  </div>
+                  
+                  {/* Name */}
+                  <div style={{
+                    textAlign: 'center',
+                  }}>
+                    <h2 style={{
+                      fontSize: isMobile ? '24px' : '28px',
+                      fontWeight: 700,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '8px',
+                    }}>
+                      {displayName}
+                    </h2>
+                    {displayAge && (
+                      <p style={{
+                        fontSize: isMobile ? '16px' : '18px',
+                        color: '#6b7280',
+                        margin: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                      }}>
+                        <span>{displayAge} years old</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Popup Modal */}
+      {showEditPopup && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 2000,
+          padding: '20px',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowEditPopup(false);
+            setEditValue('');
+            setSaveError('');
+          }
+        }}
+        >
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '16px',
+            padding: isMobile ? '24px' : '32px',
+            maxWidth: '400px',
+            width: '100%',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{
+              fontSize: isMobile ? '20px' : '24px',
+              fontWeight: 700,
+              marginBottom: '8px',
+              color: '#111827',
+              textAlign: 'center',
+            }}>
+              Change {editType === 'name' ? 'Name' : 'Age'}
+            </h2>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              marginBottom: '24px',
+              textAlign: 'center',
+            }}>
+              Enter your new {editType === 'name' ? 'name' : 'age'} below
+            </p>
+            
+            <div style={{ marginBottom: '20px' }}>
+              <label
+                htmlFor="editInput"
+                style={{
+                  display: 'block',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#374151',
+                  marginBottom: '8px',
+                }}
+              >
+                {editType === 'name' ? 'Name' : 'Age'}
+              </label>
+              <input
+                id="editInput"
+                type={editType === 'name' ? 'text' : 'number'}
+                value={editValue}
+                onChange={(e) => {
+                  setEditValue(e.target.value);
+                  setSaveError('');
+                }}
+                placeholder={editType === 'name' ? 'Enter your name' : 'Enter your age'}
+                disabled={isSaving}
+                required
+                autoFocus
+                min={editType === 'age' ? 1 : undefined}
+                max={editType === 'age' ? 150 : undefined}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  fontSize: '16px',
+                  border: saveError ? '2px solid #ef4444' : '2px solid #e5e7eb',
+                  borderRadius: '8px',
+                  outline: 'none',
+                  transition: 'border-color 0.2s',
+                  boxSizing: 'border-box',
+                  color: '#111827',
+                  backgroundColor: 'white',
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isSaving) {
+                    handleSaveEdit();
+                  }
+                }}
+              />
+              {saveError && (
+                <p style={{
+                  color: '#ef4444',
+                  fontSize: '12px',
+                  marginTop: '8px',
+                }}>
+                  {saveError}
+                </p>
+              )}
+            </div>
+            
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditPopup(false);
+                  setEditValue('');
+                  setSaveError('');
+                }}
+                disabled={isSaving}
+                style={{
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  fontWeight: 500,
+                  color: '#6b7280',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  cursor: isSaving ? 'not-allowed' : 'pointer',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSaving) {
+                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSaving) {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                disabled={isSaving}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  fontWeight: 600,
+                  color: 'white',
+                  backgroundColor: isSaving ? '#9ca3af' : '#3b82f6',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: isSaving ? 'not-allowed' : 'pointer',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSaving) {
+                    e.currentTarget.style.backgroundColor = '#2563eb';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSaving) {
+                    e.currentTarget.style.backgroundColor = '#3b82f6';
+                  }
+                }}
+              >
+                {isSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom Navigation Bar - Fixed at bottom */}
+      <div style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        backgroundColor: '#ffffff',
+        borderTop: '1px solid #e5e7eb',
+        display: 'flex',
+        justifyContent: 'space-around',
+        alignItems: 'center',
+        padding: '12px 0',
+        zIndex: 1000,
+        boxShadow: '0 -2px 8px rgba(0,0,0,0.1)',
+      }}>
+        <button
+          onClick={() => setActiveSection('home')}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '8px 24px',
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: activeSection === 'home' ? '#3b82f6' : '#6b7280',
+            transition: 'color 0.2s',
+          }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+          <span style={{ fontSize: '12px', fontWeight: activeSection === 'home' ? 600 : 400 }}>Home</span>
+        </button>
+        <button
+          onClick={() => setActiveSection('profile')}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '8px 24px',
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: activeSection === 'profile' ? '#3b82f6' : '#6b7280',
+            transition: 'color 0.2s',
+          }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span style={{ fontSize: '12px', fontWeight: activeSection === 'profile' ? 600 : 400 }}>Profile</span>
+        </button>
+      </div>
 
       {/* Settings Modal for Admin Code */}
       {showSettingsModal && (
