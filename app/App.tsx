@@ -4198,6 +4198,8 @@ export default function Page() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [localUserData, setLocalUserData] = useState<{ name?: string; age?: number } | null>(null);
+  const [showHelpPage, setShowHelpPage] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
   // Admin settings state
   interface AdminSettings {
@@ -4283,9 +4285,14 @@ export default function Page() {
     }
   }, [messages]);
 
-  const handleLogout = async () => {
+  const handleLogoutClick = () => {
+    setShowMenu(false);
+    setShowLogoutConfirm(true);
+  };
+
+  const handleLogoutConfirm = async () => {
     try {
-      setShowMenu(false);
+      setShowLogoutConfirm(false);
       await logout();
       router.push('/');
     } catch (error) {
@@ -4543,7 +4550,7 @@ export default function Page() {
       height: '100vh',
       maxHeight: '100vh',
       padding: 0,
-      paddingBottom: '70px', // Space for bottom navigation bar
+      paddingBottom: '56px', // Space for bottom navigation bar (reduced height)
       flexDirection: 'column',
       gap: 0,
       overflow: 'hidden',
@@ -5532,7 +5539,7 @@ export default function Page() {
                       <div style={{ height: '1px', backgroundColor: '#e5e7eb' }}></div>
                       <button
                         type="button"
-                        onClick={handleLogout}
+                        onClick={handleLogoutClick}
                         style={{
                           width: '100%',
                           padding: '12px 16px',
@@ -5568,8 +5575,223 @@ export default function Page() {
             padding: isMobile ? '16px' : '24px',
             backgroundColor: '#f9fafb',
           }}>
-            {/* Settings Page */}
-            {showUserSettingsPage ? (
+            {/* Help Page */}
+            {showHelpPage ? (
+              <div style={{
+                backgroundColor: '#ffffff',
+                borderRadius: '16px',
+                padding: isMobile ? '20px' : '32px',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                maxWidth: isMobile ? '100%' : '700px',
+                margin: '0 auto',
+              }}>
+                {/* Back Button */}
+                <button
+                  onClick={() => setShowHelpPage(false)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    marginBottom: '24px',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: '#3b82f6',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    transition: 'opacity 0.2s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.opacity = '0.7';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.opacity = '1';
+                  }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                  </svg>
+                  Back
+                </button>
+
+                {/* Title */}
+                <h2 style={{
+                  fontSize: isMobile ? '24px' : '28px',
+                  fontWeight: 700,
+                  color: '#111827',
+                  margin: 0,
+                  marginBottom: '8px',
+                }}>
+                  How to Use the App
+                </h2>
+                <p style={{
+                  fontSize: '14px',
+                  color: '#6b7280',
+                  marginBottom: '32px',
+                }}>
+                  Quick guide to get started with Learning Buddy
+                </p>
+
+                {/* Instructions */}
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '24px',
+                  marginBottom: '32px',
+                }}>
+                  <div>
+                    <h3 style={{
+                      fontSize: '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ color: '#3b82f6' }}>1.</span> Getting Started
+                    </h3>
+                    <p style={{
+                      fontSize: '15px',
+                      color: '#374151',
+                      margin: 0,
+                      lineHeight: '1.6',
+                    }}>
+                      Click the "Connect" button to start a conversation with your Learning Buddy. Make sure your microphone permissions are enabled.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 style={{
+                      fontSize: '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ color: '#3b82f6' }}>2.</span> Voice Interaction
+                    </h3>
+                    <p style={{
+                      fontSize: '15px',
+                      color: '#374151',
+                      margin: 0,
+                      lineHeight: '1.6',
+                    }}>
+                      Speak naturally into your microphone. The app will listen and respond to your questions. You can switch between Avatar and Chat views using the buttons in the header.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 style={{
+                      fontSize: '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ color: '#3b82f6' }}>3.</span> Asking Questions
+                    </h3>
+                    <p style={{
+                      fontSize: '15px',
+                      color: '#374151',
+                      margin: 0,
+                      lineHeight: '1.6',
+                    }}>
+                      Ask any question you'd like to learn about! Your Learning Buddy will guide you through thinking and help you discover answers yourself.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 style={{
+                      fontSize: '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ color: '#3b82f6' }}>4.</span> Device Settings
+                    </h3>
+                    <p style={{
+                      fontSize: '15px',
+                      color: '#374151',
+                      margin: 0,
+                      lineHeight: '1.6',
+                    }}>
+                      You can select your preferred microphone and speaker from the controls at the bottom of the Home screen.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h3 style={{
+                      fontSize: '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}>
+                      <span style={{ color: '#3b82f6' }}>5.</span> Changing Your Profile
+                    </h3>
+                    <p style={{
+                      fontSize: '15px',
+                      color: '#374151',
+                      margin: 0,
+                      lineHeight: '1.6',
+                    }}>
+                      Go to Profile section, click the menu (three dots), select Settings, and choose to edit your name or age.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Support */}
+                <div style={{
+                  marginTop: '32px',
+                  padding: '16px',
+                  backgroundColor: '#f3f4f6',
+                  borderRadius: '12px',
+                  textAlign: 'center',
+                }}>
+                  <p style={{
+                    fontSize: '14px',
+                    color: '#374151',
+                    margin: 0,
+                    lineHeight: '1.6',
+                  }}>
+                    Need more help? Reach out to us at{' '}
+                    <a 
+                      href="mailto:hello@icurious.ai" 
+                      style={{
+                        color: '#3b82f6',
+                        textDecoration: 'none',
+                        fontWeight: 500,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.textDecoration = 'underline';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.textDecoration = 'none';
+                      }}
+                    >
+                      hello@icurious.ai
+                    </a>
+                    {' '}for any questions or support required.
+                  </p>
+                </div>
+              </div>
+            ) : showUserSettingsPage ? (
               <div style={{
                 backgroundColor: '#ffffff',
                 borderRadius: '16px',
@@ -5719,69 +5941,144 @@ export default function Page() {
                 </div>
               </div>
             ) : (
-              /* Profile Card */
-              userData && (
+              /* Profile Card and Help Card */
               <div style={{
-                backgroundColor: '#ffffff',
-                borderRadius: '16px',
-                padding: isMobile ? '24px' : '32px',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
                 maxWidth: isMobile ? '100%' : '600px',
                 margin: '0 auto',
               }}>
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '16px',
-                }}>
-                  {/* Avatar Circle */}
+                {/* Profile Card */}
+                {userData && (
                   <div style={{
-                    width: isMobile ? '80px' : '100px',
-                    height: isMobile ? '80px' : '100px',
-                    borderRadius: '50%',
-                    backgroundColor: '#3b82f6',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: isMobile ? '32px' : '40px',
-                    color: '#ffffff',
-                    fontWeight: 600,
-                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+                    backgroundColor: '#ffffff',
+                    borderRadius: '16px',
+                    padding: isMobile ? '24px' : '32px',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                    marginBottom: '12px',
                   }}>
-                    {displayName ? displayName.charAt(0).toUpperCase() : '👤'}
-                  </div>
-                  
-                  {/* Name */}
-                  <div style={{
-                    textAlign: 'center',
-                  }}>
-                    <h2 style={{
-                      fontSize: isMobile ? '24px' : '28px',
-                      fontWeight: 700,
-                      color: '#111827',
-                      margin: 0,
-                      marginBottom: '8px',
+                    <div style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '16px',
                     }}>
-                      {displayName}
-                    </h2>
-                    {displayAge && (
-                      <p style={{
-                        fontSize: isMobile ? '16px' : '18px',
-                        color: '#6b7280',
-                        margin: 0,
+                      {/* Avatar Circle */}
+                      <div style={{
+                        width: isMobile ? '80px' : '100px',
+                        height: isMobile ? '80px' : '100px',
+                        borderRadius: '50%',
+                        backgroundColor: '#3b82f6',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: '8px',
+                        fontSize: isMobile ? '32px' : '40px',
+                        color: '#ffffff',
+                        fontWeight: 600,
+                        boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
                       }}>
-                        <span>{displayAge} years old</span>
-                      </p>
-                    )}
+                        {displayName ? displayName.charAt(0).toUpperCase() : '👤'}
+                      </div>
+                      
+                      {/* Name */}
+                      <div style={{
+                        textAlign: 'center',
+                      }}>
+                        <h2 style={{
+                          fontSize: isMobile ? '24px' : '28px',
+                          fontWeight: 700,
+                          color: '#111827',
+                          margin: 0,
+                          marginBottom: '8px',
+                        }}>
+                          {displayName}
+                        </h2>
+                        {displayAge && (
+                          <p style={{
+                            fontSize: isMobile ? '16px' : '18px',
+                            color: '#6b7280',
+                            margin: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                          }}>
+                            <span>{displayAge} years old</span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* How to Use Card */}
+                <button
+                  onClick={() => setShowHelpPage(true)}
+                  style={{
+                    width: '100%',
+                    padding: '20px',
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '16px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    transition: 'all 0.2s',
+                    textAlign: 'left',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = '#f9fafb';
+                    e.currentTarget.style.borderColor = '#3b82f6';
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.15)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = '#ffffff';
+                    e.currentTarget.style.borderColor = '#e5e7eb';
+                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
+                  }}
+                >
+                  <div style={{
+                    width: isMobile ? '48px' : '56px',
+                    height: isMobile ? '48px' : '56px',
+                    borderRadius: '12px',
+                    backgroundColor: '#dbeafe',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <svg width={isMobile ? '24' : '28'} height={isMobile ? '24' : '28'} viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{
+                      fontSize: isMobile ? '16px' : '18px',
+                      fontWeight: 600,
+                      color: '#111827',
+                      margin: 0,
+                      marginBottom: '4px',
+                    }}>
+                      How to Use the App
+                    </h3>
+                    <p style={{
+                      fontSize: '14px',
+                      color: '#6b7280',
+                      margin: 0,
+                    }}>
+                      Learn how to get started and find answers to common questions
+                    </p>
+                  </div>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                    <path d="M9 18l6-6-6-6"/>
+                  </svg>
+                </button>
               </div>
-              )
             )}
           </div>
         </div>
@@ -5972,53 +6269,154 @@ export default function Page() {
         display: 'flex',
         justifyContent: 'space-around',
         alignItems: 'center',
-        padding: '12px 0',
+        padding: '8px 0',
         zIndex: 1000,
         boxShadow: '0 -2px 8px rgba(0,0,0,0.1)',
       }}>
         <button
           onClick={() => setActiveSection('home')}
+          aria-label="Home"
+          title="Home"
           style={{
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            gap: '4px',
+            justifyContent: 'center',
             padding: '8px 24px',
             backgroundColor: 'transparent',
             border: 'none',
             cursor: 'pointer',
-            color: activeSection === 'home' ? '#3b82f6' : '#6b7280',
             transition: 'color 0.2s',
           }}
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill={activeSection === 'home' ? '#3b82f6' : 'none'} stroke={activeSection === 'home' ? '#3b82f6' : '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
             <polyline points="9 22 9 12 15 12 15 22"></polyline>
           </svg>
-          <span style={{ fontSize: '12px', fontWeight: activeSection === 'home' ? 600 : 400 }}>Home</span>
         </button>
         <button
           onClick={() => setActiveSection('profile')}
+          aria-label="Profile"
+          title="Profile"
           style={{
             display: 'flex',
-            flexDirection: 'column',
             alignItems: 'center',
-            gap: '4px',
+            justifyContent: 'center',
             padding: '8px 24px',
             backgroundColor: 'transparent',
             border: 'none',
             cursor: 'pointer',
-            color: activeSection === 'profile' ? '#3b82f6' : '#6b7280',
             transition: 'color 0.2s',
           }}
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill={activeSection === 'profile' ? '#3b82f6' : 'none'} stroke={activeSection === 'profile' ? '#3b82f6' : '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
             <circle cx="12" cy="7" r="4"></circle>
           </svg>
-          <span style={{ fontSize: '12px', fontWeight: activeSection === 'profile' ? 600 : 400 }}>Profile</span>
         </button>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 2000,
+          padding: '20px',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowLogoutConfirm(false);
+          }
+        }}
+        >
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '16px',
+            padding: isMobile ? '24px' : '32px',
+            maxWidth: '400px',
+            width: '100%',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{
+              fontSize: isMobile ? '20px' : '24px',
+              fontWeight: 700,
+              marginBottom: '8px',
+              color: '#111827',
+              textAlign: 'center',
+            }}>
+              Confirm Logout
+            </h2>
+            <p style={{
+              fontSize: '14px',
+              color: '#6b7280',
+              marginBottom: '24px',
+              textAlign: 'center',
+            }}>
+              Are you sure you want to logout? You'll need to sign in again to continue.
+            </p>
+            
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={handleLogoutConfirm}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  fontWeight: 500,
+                  color: '#6b7280',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f9fafb';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                Logout
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirm(false)}
+                style={{
+                  flex: 1,
+                  padding: '12px 24px',
+                  fontSize: '16px',
+                  fontWeight: 600,
+                  color: 'white',
+                  backgroundColor: '#3b82f6',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  transition: 'background-color 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#2563eb';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = '#3b82f6';
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings Modal for Admin Code */}
       {showSettingsModal && (
