@@ -4389,6 +4389,8 @@ export default function Page() {
 
   const handleSettingsClick = () => {
     setShowMenu(false);
+    // Ensure we're in profile section
+    setActiveSection('profile');
     if (isAdminVerified) {
       // If already verified, show admin settings page directly
       setShowAdminSettingsPage(true);
@@ -4411,6 +4413,8 @@ export default function Page() {
       if (isValid) {
         setIsAdminVerified(true);
         setShowSettingsModal(false);
+        // Ensure we're in profile section before showing admin settings
+        setActiveSection('profile');
         setShowAdminSettingsPage(true);
         setAdminCode('');
         // Store admin verification in sessionStorage (persists for session)
@@ -5128,281 +5132,6 @@ export default function Page() {
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
         </div>
       </div>
-
-      {/* Admin Settings Page */}
-      {showAdminSettingsPage && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: '#f9fafb',
-          zIndex: 2000,
-          overflowY: 'auto',
-          padding: isMobile ? '16px' : '32px',
-        }}>
-          <div style={{
-            maxWidth: '800px',
-            margin: '0 auto',
-            backgroundColor: 'white',
-            borderRadius: '12px',
-            padding: isMobile ? '24px' : '40px',
-            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
-          }}>
-            {/* Header */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '32px',
-            }}>
-              <h1 style={{
-                fontSize: isMobile ? '24px' : '32px',
-                fontWeight: 700,
-                color: '#111827',
-                margin: 0,
-              }}>
-                Admin Settings
-              </h1>
-              <button
-                onClick={() => {
-                  setShowAdminSettingsPage(false);
-                }}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  color: '#6b7280',
-                  backgroundColor: 'transparent',
-                  border: '1px solid #e5e7eb',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = '#f9fafb';
-                  e.currentTarget.style.color = '#374151';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                  e.currentTarget.style.color = '#6b7280';
-                }}
-              >
-                ← Back to Chat
-              </button>
-            </div>
-
-            {/* Mode Selection */}
-            <div style={{ marginBottom: '32px' }}>
-              <label style={{
-                display: 'block',
-                fontSize: '16px',
-                fontWeight: 600,
-                color: '#111827',
-                marginBottom: '12px',
-              }}>
-                Mode Selection
-              </label>
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    saveAdminSettings({ ...adminSettings, mode: 'realtime' });
-                  }}
-                  style={{
-                    flex: 1,
-                    minWidth: '200px',
-                    padding: '16px 24px',
-                    fontSize: '16px',
-                    fontWeight: 600,
-                    color: adminSettings.mode === 'realtime' ? 'white' : '#374151',
-                    backgroundColor: adminSettings.mode === 'realtime' ? '#3b82f6' : '#f3f4f6',
-                    border: adminSettings.mode === 'realtime' ? '2px solid #3b82f6' : '2px solid #e5e7eb',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  Realtime Mode
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    saveAdminSettings({ ...adminSettings, mode: 'stt-ttt-tts' });
-                  }}
-                  style={{
-                    flex: 1,
-                    minWidth: '200px',
-                    padding: '16px 24px',
-                    fontSize: '16px',
-                    fontWeight: 600,
-                    color: adminSettings.mode === 'stt-ttt-tts' ? 'white' : '#374151',
-                    backgroundColor: adminSettings.mode === 'stt-ttt-tts' ? '#3b82f6' : '#f3f4f6',
-                    border: adminSettings.mode === 'stt-ttt-tts' ? '2px solid #3b82f6' : '2px solid #e5e7eb',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  STT-TTT-TTS Mode
-                </button>
-              </div>
-            </div>
-
-            {/* STT-TTT-TTS Options */}
-            {adminSettings.mode === 'stt-ttt-tts' && (
-              <div style={{ marginTop: '32px' }}>
-                {/* STT Provider */}
-                <div style={{ marginBottom: '24px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '16px',
-                    fontWeight: 600,
-                    color: '#111827',
-                    marginBottom: '8px',
-                  }}>
-                    STT (Speech-to-Text) Provider
-                  </label>
-                  <select
-                    value={adminSettings.sttProvider}
-                    onChange={(e) => {
-                      saveAdminSettings({ ...adminSettings, sttProvider: e.target.value });
-                    }}
-                    aria-label="STT Provider Selection"
-                    title="Select Speech-to-Text Provider"
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      fontSize: '16px',
-                      border: '2px solid #e5e7eb',
-                      borderRadius: '8px',
-                      backgroundColor: 'white',
-                      color: '#111827',
-                      cursor: 'pointer',
-                      outline: 'none',
-                      transition: 'border-color 0.2s',
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#3b82f6';
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb';
-                    }}
-                  >
-                    <option value="webspeech">Web Speech API</option>
-                    <option value="deepgramnova3">Deepgram Nova 3</option>
-                    <option value="googlecloud">Google Cloud STT</option>
-                  </select>
-                </div>
-
-                {/* TTT Model */}
-                <div style={{ marginBottom: '24px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '16px',
-                    fontWeight: 600,
-                    color: '#111827',
-                    marginBottom: '8px',
-                  }}>
-                    TTT (Text-to-Text) Model
-                  </label>
-                  <select
-                    value={adminSettings.tttModel}
-                    onChange={(e) => {
-                      saveAdminSettings({ ...adminSettings, tttModel: e.target.value });
-                    }}
-                    aria-label="TTT Model Selection"
-                    title="Select Text-to-Text Model"
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      fontSize: '16px',
-                      border: '2px solid #e5e7eb',
-                      borderRadius: '8px',
-                      backgroundColor: 'white',
-                      color: '#111827',
-                      cursor: 'pointer',
-                      outline: 'none',
-                      transition: 'border-color 0.2s',
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#3b82f6';
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb';
-                    }}
-                  >
-                    <option value="gpt-4o-mini">gpt-4o-mini</option>
-                  </select>
-                </div>
-
-                {/* TTS Provider */}
-                <div style={{ marginBottom: '24px' }}>
-                  <label style={{
-                    display: 'block',
-                    fontSize: '16px',
-                    fontWeight: 600,
-                    color: '#111827',
-                    marginBottom: '8px',
-                  }}>
-                    TTS (Text-to-Speech) Provider
-                  </label>
-                  <select
-                    value={adminSettings.ttsProvider}
-                    onChange={(e) => {
-                      saveAdminSettings({ ...adminSettings, ttsProvider: e.target.value });
-                    }}
-                    aria-label="TTS Provider Selection"
-                    title="Select Text-to-Speech Provider"
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      fontSize: '16px',
-                      border: '2px solid #e5e7eb',
-                      borderRadius: '8px',
-                      backgroundColor: 'white',
-                      color: '#111827',
-                      cursor: 'pointer',
-                      outline: 'none',
-                      transition: 'border-color 0.2s',
-                    }}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = '#3b82f6';
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '#e5e7eb';
-                    }}
-                  >
-                    <option value="gtts">gTTS</option>
-                    <option value="openai">OpenAI TTS</option>
-                    <option value="deepgram">Deepgram Aura-2</option>
-                    <option value="webspeech">Web Speech API</option>
-                  </select>
-                </div>
-              </div>
-            )}
-
-            {/* Info Message */}
-            <div style={{
-              marginTop: '32px',
-              padding: '16px',
-              backgroundColor: '#eff6ff',
-              borderRadius: '8px',
-              border: '1px solid #bfdbfe',
-            }}>
-              <p style={{
-                margin: 0,
-                fontSize: '14px',
-                color: '#1e40af',
-                lineHeight: '1.5',
-              }}>
-                <strong>Note:</strong> Settings are saved automatically. The current configuration will be used when you connect to the chat interface.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
         </>
       )}
@@ -6253,6 +5982,282 @@ export default function Page() {
               >
                 {isSaving ? 'Saving...' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Admin Settings Page - Only visible in Profile section */}
+      {activeSection === 'profile' && showAdminSettingsPage && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: '#f9fafb',
+          zIndex: 2000,
+          overflowY: 'auto',
+          padding: isMobile ? '16px' : '32px',
+        }}>
+          <div style={{
+            maxWidth: '800px',
+            margin: '0 auto',
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: isMobile ? '24px' : '40px',
+            boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
+          }}>
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '32px',
+            }}>
+              <h1 style={{
+                fontSize: isMobile ? '24px' : '32px',
+                fontWeight: 700,
+                color: '#111827',
+                margin: 0,
+              }}>
+                Admin Settings
+              </h1>
+              <button
+                onClick={() => {
+                  setShowAdminSettingsPage(false);
+                  setActiveSection('profile');
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#6b7280',
+                  backgroundColor: 'transparent',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#f9fafb';
+                  e.currentTarget.style.color = '#374151';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = '#6b7280';
+                }}
+              >
+                ← Back to Profile
+              </button>
+            </div>
+
+            {/* Mode Selection */}
+            <div style={{ marginBottom: '32px' }}>
+              <label style={{
+                display: 'block',
+                fontSize: '16px',
+                fontWeight: 600,
+                color: '#111827',
+                marginBottom: '12px',
+              }}>
+                Mode Selection
+              </label>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveAdminSettings({ ...adminSettings, mode: 'realtime' });
+                  }}
+                  style={{
+                    flex: 1,
+                    minWidth: '200px',
+                    padding: '16px 24px',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: adminSettings.mode === 'realtime' ? 'white' : '#374151',
+                    backgroundColor: adminSettings.mode === 'realtime' ? '#3b82f6' : '#f3f4f6',
+                    border: adminSettings.mode === 'realtime' ? '2px solid #3b82f6' : '2px solid #e5e7eb',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  Realtime Mode
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveAdminSettings({ ...adminSettings, mode: 'stt-ttt-tts' });
+                  }}
+                  style={{
+                    flex: 1,
+                    minWidth: '200px',
+                    padding: '16px 24px',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: adminSettings.mode === 'stt-ttt-tts' ? 'white' : '#374151',
+                    backgroundColor: adminSettings.mode === 'stt-ttt-tts' ? '#3b82f6' : '#f3f4f6',
+                    border: adminSettings.mode === 'stt-ttt-tts' ? '2px solid #3b82f6' : '2px solid #e5e7eb',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  STT-TTT-TTS Mode
+                </button>
+              </div>
+            </div>
+
+            {/* STT-TTT-TTS Options */}
+            {adminSettings.mode === 'stt-ttt-tts' && (
+              <div style={{ marginTop: '32px' }}>
+                {/* STT Provider */}
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: '#111827',
+                    marginBottom: '8px',
+                  }}>
+                    STT (Speech-to-Text) Provider
+                  </label>
+                  <select
+                    value={adminSettings.sttProvider}
+                    onChange={(e) => {
+                      saveAdminSettings({ ...adminSettings, sttProvider: e.target.value });
+                    }}
+                    aria-label="STT Provider Selection"
+                    title="Select Speech-to-Text Provider"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '16px',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      backgroundColor: 'white',
+                      color: '#111827',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      transition: 'border-color 0.2s',
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <option value="webspeech">Web Speech API</option>
+                    <option value="deepgramnova3">Deepgram Nova 3</option>
+                    <option value="googlecloud">Google Cloud STT</option>
+                  </select>
+                </div>
+
+                {/* TTT Model */}
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: '#111827',
+                    marginBottom: '8px',
+                  }}>
+                    TTT (Text-to-Text) Model
+                  </label>
+                  <select
+                    value={adminSettings.tttModel}
+                    onChange={(e) => {
+                      saveAdminSettings({ ...adminSettings, tttModel: e.target.value });
+                    }}
+                    aria-label="TTT Model Selection"
+                    title="Select Text-to-Text Model"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '16px',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      backgroundColor: 'white',
+                      color: '#111827',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      transition: 'border-color 0.2s',
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  </select>
+                </div>
+
+                {/* TTS Provider */}
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{
+                    display: 'block',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: '#111827',
+                    marginBottom: '8px',
+                  }}>
+                    TTS (Text-to-Speech) Provider
+                  </label>
+                  <select
+                    value={adminSettings.ttsProvider}
+                    onChange={(e) => {
+                      saveAdminSettings({ ...adminSettings, ttsProvider: e.target.value });
+                    }}
+                    aria-label="TTS Provider Selection"
+                    title="Select Text-to-Speech Provider"
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '16px',
+                      border: '2px solid #e5e7eb',
+                      borderRadius: '8px',
+                      backgroundColor: 'white',
+                      color: '#111827',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      transition: 'border-color 0.2s',
+                    }}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = '#3b82f6';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '#e5e7eb';
+                    }}
+                  >
+                    <option value="gtts">gTTS</option>
+                    <option value="openai">OpenAI TTS</option>
+                    <option value="deepgram">Deepgram Aura-2</option>
+                    <option value="webspeech">Web Speech API</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {/* Info Message */}
+            <div style={{
+              marginTop: '32px',
+              padding: '16px',
+              backgroundColor: '#eff6ff',
+              borderRadius: '8px',
+              border: '1px solid #bfdbfe',
+            }}>
+              <p style={{
+                margin: 0,
+                fontSize: '14px',
+                color: '#1e40af',
+                lineHeight: '1.5',
+              }}>
+                <strong>Note:</strong> Settings are saved automatically. The current configuration will be used when you connect to the chat interface.
+              </p>
             </div>
           </div>
         </div>
