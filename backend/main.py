@@ -13,6 +13,11 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
+from fastapi import WebSocket, WebSocketDisconnect, Query
+import asyncio
+import json
+from typing import Callable
+
 # Import TTS libraries (lazy imports)
 # This prevents import errors from crashing the server if packages aren't installed
 try:
@@ -37,6 +42,15 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
+try:
+    from deepgram import DeepgramClient, SpeakOptions
+    DEEPGRAM_AVAILABLE = True
+except ImportError:
+    DEEPGRAM_AVAILABLE = False
+    DeepgramClient = None
+    SpeakOptions = None
+
+    
 # Load environment variables from .env file
 load_dotenv()
 
@@ -107,6 +121,10 @@ class MemoryExtractResponse(BaseModel):
     memories: List[MemoryCandidate]
 
 
+class WSTTSRequest(BaseModel):
+    text: str
+    voice: str = "aura-asteria-en"
+    
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -457,6 +475,17 @@ async def text_to_speech(request: TTSRequest):
         )
     
     text = request.text.strip()
+    
+    if tts_provider == "deepgram" and DEEPGRAM_AVAILABLE:
+        # Return WebSocket URL for frontend to connect (not audio)
+        ws_url = f"ws://{request.client.host}:{os.getenv('PORT', '8000')}/ws/tts"
+        response = Response(
+            content=f"Use WebSocket: {ws_url}".encode(),
+            media_type="text/plain"
+        )
+        response.headers["X-TTS-WS-URL"] = ws_url
+        response.headers["X-TTS-PROVIDER"] = "deepgram"
+        return response
 
     try:
         audio_data = None
@@ -557,6 +586,132 @@ async def text_to_speech(request: TTSRequest):
         )
 
 
+import asyncio
+import json
+from fastapi import WebSocket, WebSocketDisconnect
+
+# Make sure you have: pip install deepgram-sdk
+try:
+    from deepgram import DeepgramClient, SpeakOptions
+    DEEPGRAM_AVAILABLE = True
+except ImportError:
+    DEEPGRAM_AVAILABLE = False
+    DeepgramClient = None
+    SpeakOptions = None
+
+class DeepgramTTSStream:
+    def __init__(self, api_key: str):
+        if not DEEPGRAM_AVAILABLE or not DeepgramClient:
+            raise Exception("Deepgram SDK not installed")
+        self.client = DeepgramClient(api_key)
+
+    async def speak_text(
+        self,
+        text: str,
+        websocket: WebSocket,
+        voice: str = "aura-asteria-en",
+    ) -> None:
+        """Stream TTS audio to the frontend via WebSocket."""
+        try:
+            print(f"🔄 Deepgram TTS streaming: '{text[:50]}...' with voice: {voice}")
+
+            options = SpeakOptions(
+                model=voice,          # model = aura-asteria-en
+                encoding="linear16",  # 16‑bit PCM
+                sample_rate=24000,
+                container="none",     # raw bytes
+            )
+
+            # v3 SDK: returns an async generator of bytes
+            stream = self.client.speak.v("1").stream_raw({"text": text}, options)
+
+            chunk_count = 0
+            async for chunk in stream:
+                if not chunk:
+                    continue
+                await websocket.send_bytes(chunk)
+                chunk_count += 1
+
+            await websocket.send_text(json.dumps({"type": "complete"}))
+            print(f"✅ Deepgram TTS complete: {chunk_count} chunks sent")
+
+        except Exception as e:
+            msg = str(e)
+            print(f"❌ Deepgram TTS error: {msg}")
+            try:
+                await websocket.send_text(json.dumps({"type": "error", "message": msg}))
+            except Exception:
+                pass
+
+
+@app.websocket("/ws/tts")
+async def websocket_tts(websocket: WebSocket):
+    await websocket.accept()
+    print("🔌 TTS WebSocket connected")
+    
+    if not DEEPGRAM_AVAILABLE:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Deepgram SDK not installed. Run: pip install deepgram-sdk"
+        }))
+        await websocket.close(code=1011)
+        return
+    
+    api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not api_key:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "DEEPGRAM_API_KEY not configured"
+        }))
+        await websocket.close(code=1011)
+        return
+    
+    stream = DeepgramTTSStream(api_key)
+    
+    try:
+        while True:
+            # Receive message from frontend
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message.get("type") == "text":
+                text = message.get("text", "")
+                voice = message.get("voice", "aura-asteria-en")
+                
+                if not text.strip():
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Empty text received"
+                    }))
+                    continue
+                
+                print(f"🎤 TTS Request: '{text[:50]}...'")
+                await stream.speak_text(text, websocket, voice)
+                
+            elif message.get("type") == "close":
+                print("👋 Client requested close")
+                break
+                
+    except WebSocketDisconnect:
+        print("👋 Client disconnected")
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON: {e}")
+    except Exception as e:
+        print(f"❌ WebSocket error: {e}")
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "message": str(e)
+            }))
+        except:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except:
+            pass
+        print("🔌 TTS WebSocket closed")
+
 if __name__ == "__main__":
     import uvicorn
     
@@ -567,4 +722,5 @@ if __name__ == "__main__":
         port=port,
         reload=os.getenv("ENV", "development") == "development",
     )
+
 

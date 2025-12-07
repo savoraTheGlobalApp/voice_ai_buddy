@@ -880,8 +880,204 @@ export async function setupSTTMode(
       throw lastError || new Error('Chat API error: All retry attempts failed');
     };
 
+
+
+    /**
+ * Fixed textToSpeechStreaming function for Deepgram TTS
+ * Replace the existing textToSpeechStreaming function in your page.tsx
+ */
+
+const textToSpeechStreaming = async (
+  text: string,
+  audioEl: HTMLAudioElement
+): Promise<void> => {
+  return new Promise<void>(async (resolve, reject) => {
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/tts';
+    
+    console.log('[TTS] Connecting to:', wsUrl);
+    
+    let ws: WebSocket | null = null;
+    let audioContext: AudioContext | null = null;
+    let sourceNode: AudioBufferSourceNode | null = null;
+    let audioChunks: ArrayBuffer[] = [];
+    let isPlaying = false;
+    
+    // Cleanup function
+    const cleanup = () => {
+      try {
+        if (sourceNode) {
+          sourceNode.stop();
+          sourceNode.disconnect();
+          sourceNode = null;
+        }
+        if (audioContext) {
+          audioContext.close();
+          audioContext = null;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close();
+        }
+        ws = null;
+        audioChunks = [];
+      } catch (e) {
+        console.warn('[TTS] Cleanup error:', e);
+      }
+    };
+    
+    try {
+      // Stop any currently playing audio
+      if (currentSTTSession?.processingAudio) {
+        currentSTTSession.processingAudio.pause();
+        currentSTTSession.processingAudio.currentTime = 0;
+      }
+      
+      // Create AudioContext
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Resume if suspended (Android requirement)
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+      
+      // Connect WebSocket
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      
+      // WebSocket opened
+      ws.onopen = () => {
+        console.log('[TTS] WebSocket connected');
+        // Send text to convert
+        ws?.send(JSON.stringify({
+          type: 'text',
+          text: text,
+          voice: 'aura-asteria-en'
+        }));
+      };
+      
+      // Receive audio chunks
+      ws.onmessage = async (event: MessageEvent) => {
+        if (event.data instanceof ArrayBuffer) {
+          // Received audio chunk
+          audioChunks.push(event.data);
+          console.log(`[TTS] Received chunk ${audioChunks.length}, size: ${event.data.byteLength}`);
+          
+          // Start playing after receiving first few chunks
+          if (audioChunks.length === 3 && !isPlaying && audioContext) {
+            isPlaying = true;
+            await playAudioChunks(audioContext, audioChunks);
+          }
+        } else if (typeof event.data === 'string') {
+          // Received JSON message
+          try {
+            const message = JSON.parse(event.data);
+            
+            if (message.type === 'complete') {
+              console.log('[TTS] Stream complete, total chunks:', audioChunks.length);
+              
+              // Play remaining audio if not started yet
+              if (!isPlaying && audioChunks.length > 0 && audioContext) {
+                isPlaying = true;
+                await playAudioChunks(audioContext, audioChunks);
+              }
+              
+              // Wait a bit for audio to finish, then cleanup
+              setTimeout(() => {
+                cleanup();
+                resolve();
+              }, 500);
+              
+            } else if (message.type === 'error') {
+              console.error('[TTS] Server error:', message.message);
+              cleanup();
+              reject(new Error(message.message || 'TTS error'));
+            }
+          } catch (e) {
+            console.warn('[TTS] Failed to parse message:', e);
+          }
+        }
+      };
+      
+      // WebSocket error
+      ws.onerror = (error) => {
+        console.error('[TTS] WebSocket error:', error);
+        cleanup();
+        reject(new Error('WebSocket connection failed'));
+      };
+      
+      // WebSocket closed
+      ws.onclose = (event) => {
+        console.log('[TTS] WebSocket closed:', event.code, event.reason);
+        if (!isPlaying) {
+          cleanup();
+          reject(new Error('Connection closed before audio played'));
+        }
+      };
+      
+      // Helper function to play audio chunks
+      const playAudioChunks = async (ctx: AudioContext, chunks: ArrayBuffer[]) => {
+        try {
+          // Combine all chunks into single buffer
+          const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+          const combinedBuffer = new Uint8Array(totalLength);
+          let offset = 0;
+          
+          for (const chunk of chunks) {
+            combinedBuffer.set(new Uint8Array(chunk), offset);
+            offset += chunk.byteLength;
+          }
+          
+          console.log('[TTS] Combined audio size:', combinedBuffer.length, 'bytes');
+          
+          // Convert to AudioBuffer (linear16, 24000Hz, mono)
+          const audioBuffer = ctx.createBuffer(
+            1, // mono
+            combinedBuffer.length / 2, // 16-bit = 2 bytes per sample
+            24000 // sample rate
+          );
+          
+          // Convert Int16 to Float32 for Web Audio API
+          const channelData = audioBuffer.getChannelData(0);
+          const dataView = new DataView(combinedBuffer.buffer);
+          
+          for (let i = 0; i < channelData.length; i++) {
+            // Read 16-bit signed integer (little-endian)
+            const int16 = dataView.getInt16(i * 2, true);
+            // Convert to float32 (-1.0 to 1.0)
+            channelData[i] = int16 / 32768.0;
+          }
+          
+          // Create source and play
+          sourceNode = ctx.createBufferSource();
+          sourceNode.buffer = audioBuffer;
+          sourceNode.connect(ctx.destination);
+          
+          // Handle playback end
+          sourceNode.onended = () => {
+            console.log('[TTS] Playback finished');
+            cleanup();
+            resolve();
+          };
+          
+          sourceNode.start(0);
+          console.log('[TTS] Playback started, duration:', audioBuffer.duration, 'seconds');
+          
+        } catch (e) {
+          console.error('[TTS] Playback error:', e);
+          cleanup();
+          reject(e);
+        }
+      };
+      
+    } catch (e) {
+      console.error('[TTS] Setup error:', e);
+      cleanup();
+      reject(e);
+    }
+  });
+};
     // Function to convert text to speech using OpenAI TTS
-    const textToSpeech = async (text: string): Promise<void> => {
+    const textToSpeech = async (text: string,audioEl: HTMLAudioElement): Promise<void> => {
       // Stop processing audio completely before playing TTS (critical for Android)
       if (currentSTTSession) {
         // Stop Web Audio API processing sound first (if any)
@@ -1407,7 +1603,21 @@ export async function setupSTTMode(
         }
 
         // Convert to speech (this will stop the processing audio)
-        await textToSpeech(response);
+        // Get TTS provider from environment
+const ttsProvider = process.env.NEXT_PUBLIC_TTS_PROVIDER?.toLowerCase() || 'gtts';
+
+// Convert to speech with proper provider selection
+if (ttsProvider === 'deepgram') {
+  try {
+    console.log('[TTS] Using Deepgram streaming');
+    await textToSpeechStreaming(response, audioEl || processingAudio);
+  } catch (deepgramError) {
+    console.error('[TTS] Deepgram failed, falling back to standard TTS:', deepgramError);
+    await textToSpeech(response, audioEl || processingAudio);
+  }
+} else {
+  await textToSpeech(response, audioEl || processingAudio);
+}
       } catch (e) {
         console.error('[STT/TTT/TTS] Error:', e);
         // Stop processing audio on error as well
@@ -1591,8 +1801,18 @@ export async function setupSTTMode(
       conversationHistory.pop(); // Remove the user greeting prompt
       conversationHistory.push({ role: 'assistant', content: greeting });
       
-      await textToSpeech(greeting);
-      // Update UI
+const ttsProviderGreeting = process.env.NEXT_PUBLIC_TTS_PROVIDER?.toLowerCase() || 'gtts';
+
+if (ttsProviderGreeting === 'deepgram') {
+  try {
+    await textToSpeechStreaming(greeting, audioEl || processingAudio);
+  } catch (deepgramError) {
+    console.error('[TTS] Deepgram greeting failed, falling back:', deepgramError);
+    await textToSpeech(greeting, processingAudio || audioEl);
+  }
+} else {
+  await textToSpeech(greeting, processingAudio || audioEl);
+}      // Update UI
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
@@ -1603,7 +1823,16 @@ export async function setupSTTMode(
         ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
         : "Hi! I'm your learning buddy! What would you like to explore today?";
       conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
-      await textToSpeech(fallbackGreeting);
+      const ttsProviderGreeting = process.env.NEXT_PUBLIC_TTS_PROVIDER?.toLowerCase() || 'gtts';
+      if (ttsProviderGreeting === 'deepgram') {
+  try {
+    await textToSpeechStreaming(fallbackGreeting, audioEl || processingAudio);
+  } catch (e) {
+    await textToSpeech(fallbackGreeting, processingAudio || audioEl);
+  }
+} else {
+  await textToSpeech(fallbackGreeting, processingAudio || audioEl);
+}
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
