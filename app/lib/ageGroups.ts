@@ -5,12 +5,37 @@
 
 export type AgeGroup = 'early' | 'elementary' | 'upper';
 
+export type SubAgeLevel = 
+  // Early (3-6)
+  | 'early_low'    // 3-4 years
+  | 'early_mid'    // 4-5 years  
+  | 'early_high'   // 5-6 years
+  // Elementary (6-9)
+  | 'elem_low'     // 6-7 years
+  | 'elem_mid'     // 7-8 years
+  | 'elem_high'    // 8-9 years
+  // Upper (9-12)
+  | 'upper_low'    // 9-10 years
+  | 'upper_mid'    // 10-11 years
+  | 'upper_high';  // 11-12 years
+
 export interface AgeGroupConfig {
   name: string;
   range: { min: number; max: number };
   montessoriFocus: string;
   psychologyStage: string;
   description: string;
+}
+
+export interface SubAgeLevelConfig {
+  level: SubAgeLevel;
+  ageRange: { min: number; max: number };
+  wordCountRange: { min: number; max: number };
+  vocabularyComplexity: 'very_simple' | 'simple' | 'moderate' | 'complex';
+  sentenceStructure: 'fragments' | 'simple' | 'compound' | 'complex';
+  abstractConcepts: boolean; // Whether to introduce abstract concepts
+  hintComplexity: 'immediate' | 'simple' | 'progressive' | 'deep';
+  responseLength: { min: number; max: number }; // Words in AI response
 }
 
 export const AGE_GROUPS: Record<AgeGroup, AgeGroupConfig> = {
@@ -34,6 +59,99 @@ export const AGE_GROUPS: Record<AgeGroup, AgeGroupConfig> = {
     montessoriFocus: 'Abstract reasoning, research skills, peer collaboration',
     psychologyStage: 'Transition to formal operations, abstract thinking',
     description: 'Ages 9-12: Focus on abstract concepts, multiple perspectives, and deeper analysis',
+  },
+};
+
+export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
+  early_low: {
+    level: 'early_low',
+    ageRange: { min: 3, max: 4 },
+    wordCountRange: { min: 8, max: 12 },
+    vocabularyComplexity: 'very_simple',
+    sentenceStructure: 'fragments',
+    abstractConcepts: false,
+    hintComplexity: 'immediate',
+    responseLength: { min: 5, max: 8 },
+  },
+  early_mid: {
+    level: 'early_mid',
+    ageRange: { min: 4, max: 5 },
+    wordCountRange: { min: 10, max: 15 },
+    vocabularyComplexity: 'simple',
+    sentenceStructure: 'simple',
+    abstractConcepts: false,
+    hintComplexity: 'simple',
+    responseLength: { min: 8, max: 12 },
+  },
+  early_high: {
+    level: 'early_high',
+    ageRange: { min: 5, max: 6 },
+    wordCountRange: { min: 12, max: 18 },
+    vocabularyComplexity: 'simple',
+    sentenceStructure: 'simple',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 10, max: 15 },
+  },
+  elem_low: {
+    level: 'elem_low',
+    ageRange: { min: 6, max: 7 },
+    wordCountRange: { min: 15, max: 20 },
+    vocabularyComplexity: 'moderate',
+    sentenceStructure: 'compound',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 15, max: 20 },
+  },
+  elem_mid: {
+    level: 'elem_mid',
+    ageRange: { min: 7, max: 8 },
+    wordCountRange: { min: 18, max: 25 },
+    vocabularyComplexity: 'moderate',
+    sentenceStructure: 'compound',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 15, max: 25 },
+  },
+  elem_high: {
+    level: 'elem_high',
+    ageRange: { min: 8, max: 9 },
+    wordCountRange: { min: 20, max: 30 },
+    vocabularyComplexity: 'moderate',
+    sentenceStructure: 'complex',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 15, max: 25 },
+  },
+  upper_low: {
+    level: 'upper_low',
+    ageRange: { min: 9, max: 10 },
+    wordCountRange: { min: 25, max: 35 },
+    vocabularyComplexity: 'complex',
+    sentenceStructure: 'complex',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 15, max: 25 },
+  },
+  upper_mid: {
+    level: 'upper_mid',
+    ageRange: { min: 10, max: 11 },
+    wordCountRange: { min: 30, max: 40 },
+    vocabularyComplexity: 'complex',
+    sentenceStructure: 'complex',
+    abstractConcepts: true,
+    hintComplexity: 'progressive',
+    responseLength: { min: 15, max: 30 },
+  },
+  upper_high: {
+    level: 'upper_high',
+    ageRange: { min: 11, max: 12 },
+    wordCountRange: { min: 35, max: 45 },
+    vocabularyComplexity: 'complex',
+    sentenceStructure: 'complex',
+    abstractConcepts: true,
+    hintComplexity: 'deep',
+    responseLength: { min:15, max: 30 },
   },
 };
 
@@ -75,5 +193,95 @@ export function getAgeGroupConfig(age?: number): AgeGroupConfig | null {
  */
 export function isValidAge(age?: number): boolean {
   return age !== undefined && age !== null && age >= 3 && age <= 12;
+}
+
+/**
+ * Determines the sub-age level for a given chronological age
+ * @param age - The child's chronological age
+ * @returns The sub-age level category
+ */
+export function getSubAgeLevel(age?: number): SubAgeLevel | null {
+  if (!age || age < 3 || age > 12) {
+    return null;
+  }
+
+  if (age >= 3 && age < 4) return 'early_low';
+  if (age >= 4 && age < 5) return 'early_mid';
+  if (age >= 5 && age < 6) return 'early_high';
+  if (age >= 6 && age < 7) return 'elem_low';
+  if (age >= 7 && age < 8) return 'elem_mid';
+  if (age >= 8 && age < 9) return 'elem_high';
+  if (age >= 9 && age < 10) return 'upper_low';
+  if (age >= 10 && age < 11) return 'upper_mid';
+  if (age >= 11 && age <= 12) return 'upper_high';
+
+  return null;
+}
+
+/**
+ * Gets the sub-age level configuration
+ * @param level - The sub-age level
+ * @returns The sub-age level configuration or null
+ */
+export function getSubAgeLevelConfig(level: SubAgeLevel): SubAgeLevelConfig | null {
+  return SUB_AGE_LEVELS[level] || null;
+}
+
+/**
+ * Gets all sub-age levels in order (for transitions)
+ * @returns Array of all sub-age levels in ascending order
+ */
+export function getAllSubLevels(): SubAgeLevel[] {
+  return [
+    'early_low',
+    'early_mid',
+    'early_high',
+    'elem_low',
+    'elem_mid',
+    'elem_high',
+    'upper_low',
+    'upper_mid',
+    'upper_high',
+  ];
+}
+
+/**
+ * Gets the next level up from a given level
+ * @param level - Current sub-age level
+ * @returns Next level up, or null if already at highest
+ */
+export function getNextLevel(level: SubAgeLevel): SubAgeLevel | null {
+  const allLevels = getAllSubLevels();
+  const currentIndex = allLevels.indexOf(level);
+  if (currentIndex === -1 || currentIndex === allLevels.length - 1) {
+    return null;
+  }
+  return allLevels[currentIndex + 1];
+}
+
+/**
+ * Gets the previous level down from a given level
+ * @param level - Current sub-age level
+ * @returns Previous level down, or null if already at lowest
+ */
+export function getPreviousLevel(level: SubAgeLevel): SubAgeLevel | null {
+  const allLevels = getAllSubLevels();
+  const currentIndex = allLevels.indexOf(level);
+  if (currentIndex === -1 || currentIndex === 0) {
+    return null;
+  }
+  return allLevels[currentIndex - 1];
+}
+
+/**
+ * Gets the base age group for a sub-age level
+ * @param level - The sub-age level
+ * @returns The base age group
+ */
+export function getAgeGroupFromSubLevel(level: SubAgeLevel): AgeGroup {
+  if (level.startsWith('early')) return 'early';
+  if (level.startsWith('elem')) return 'elementary';
+  if (level.startsWith('upper')) return 'upper';
+  return 'elementary'; // Default fallback
 }
 

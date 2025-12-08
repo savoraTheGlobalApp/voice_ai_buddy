@@ -4,12 +4,13 @@ import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/ag
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
-import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
+import { startConversationSession, appendConversationChunk, ConversationMessage } from '@/lib/conversations';
 import { verifyAdminCode } from '@/lib/admin';import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 import CatLogo from '@/app/components/CatLogo';
 import { buildAgeSpecificInstructions } from './lib/ageSpecificInstructions';
+import { loadAdaptiveState, initializeAdaptiveState, analyzeAndUpdateState, AdaptiveState, updateAdaptiveStateAge } from './lib/adaptiveState';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -17,8 +18,14 @@ const MIN_INTERRUPTION_INTERVAL_MS = 3500; // in ms
 
 // Function to build personalized instructions with user data
 // Now uses age-specific instruction builders based on Montessori and child psychology
-function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
-  return buildAgeSpecificInstructions(userName, userAge, topMemories);
+// Supports adaptive learning with effectiveLevel parameter
+function buildSocraticTutorInstructions(
+  userName?: string, 
+  userAge?: number, 
+  topMemories?: UserMemory[],
+  effectiveLevel?: import('./lib/ageGroups').SubAgeLevel
+): string {
+  return buildAgeSpecificInstructions(userName, userAge, topMemories, effectiveLevel);
 }
 
 let currentSession: {
@@ -171,7 +178,23 @@ export async function setupRealtimeMode(
       memories = await fetchTopMemories(uid);
     }
   } catch {}
-  const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+  
+  // Load or initialize adaptive state
+  let adaptiveState: AdaptiveState | null = null;
+  if (uid && userAge) {
+    try {
+      adaptiveState = await loadAdaptiveState(uid);
+      if (!adaptiveState) {
+        adaptiveState = await initializeAdaptiveState(uid, userAge);
+      }
+    } catch (error) {
+      console.error('[Adaptive] Error loading adaptive state:', error);
+      // Continue without adaptive state
+    }
+  }
+  
+  const effectiveLevel = adaptiveState?.effectiveLevel;
+  const instructions = buildSocraticTutorInstructions(userName, userAge, memories, effectiveLevel);
 
   const agent = new RealtimeAgent({
     name: 'SocraticTutor',
@@ -698,7 +721,23 @@ export async function setupSTTMode(
         memories = await fetchTopMemories(uid);
       }
     } catch {}
-    const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+    
+    // Load or initialize adaptive state
+    let adaptiveState: AdaptiveState | null = null;
+    if (uid && userAge) {
+      try {
+        adaptiveState = await loadAdaptiveState(uid);
+        if (!adaptiveState) {
+          adaptiveState = await initializeAdaptiveState(uid, userAge);
+        }
+      } catch (error) {
+        console.error('[Adaptive] Error loading adaptive state:', error);
+        // Continue without adaptive state
+      }
+    }
+    
+    const effectiveLevel = adaptiveState?.effectiveLevel;
+    const instructions = buildSocraticTutorInstructions(userName, userAge, memories, effectiveLevel);
 
     // Conversation session tracking
     let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1820,6 +1859,28 @@ export async function setupSTTMode(
                       onAvatarStateUpdate('processing', false, detectedMood);
                     }
                     
+                    // Update adaptive state based on conversation
+                    if (adaptiveState && uid && !isInitialGreeting) {
+                      try {
+                        const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
+                        adaptiveState = result.state;
+                        
+                        // If transition occurred, update instructions for next interaction
+                        if (result.transition) {
+                          console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
+                          // Update system message in conversation history
+                          const newEffectiveLevel = adaptiveState.effectiveLevel;
+                          const newInstructions = buildSocraticTutorInstructions(userName, userAge, memories, newEffectiveLevel);
+                          conversationHistory[0] = {
+                            role: 'system',
+                            content: newInstructions,
+                          };
+                        }
+                      } catch (error) {
+                        console.error('[Adaptive] Error updating state:', error);
+                      }
+                    }
+                    
                     // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
@@ -1881,6 +1942,27 @@ export async function setupSTTMode(
         // Update UI (but skip the initial greeting user message for cleaner display)
         if (onConversationUpdate && !isInitialGreeting) {
           onConversationUpdate([...conversationHistory]);
+        }
+      }
+      
+      // Update adaptive state based on conversation (before getting response)
+      if (adaptiveState && uid && !isInitialGreeting) {
+        try {
+          const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
+          adaptiveState = result.state;
+          
+          // If transition occurred, update instructions for this response
+          if (result.transition) {
+            console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
+            const newEffectiveLevel = adaptiveState.effectiveLevel;
+            const newInstructions = buildSocraticTutorInstructions(userName, userAge, memories, newEffectiveLevel);
+            conversationHistory[0] = {
+              role: 'system',
+              content: newInstructions,
+            };
+          }
+        } catch (error) {
+          console.error('[Adaptive] Error updating state:', error);
         }
       }
 
@@ -4226,13 +4308,22 @@ export default function Page() {
         await updateDoc(userDocRef, { name: trimmedName });
       } else {
         const age = parseInt(editValue.trim());
-        if (isNaN(age) || age < 1 || age > 150) {
-          setSaveError('Please enter a valid age (1-150)');
+        if (isNaN(age) || age < 3 || age > 12) {
+          setSaveError('Please enter a valid age (3-12)');
           setIsSaving(false);
           return;
         }
         updatedValue = age;
         await updateDoc(userDocRef, { age });
+        
+        // Update adaptive state with new age
+        try {
+          await updateAdaptiveStateAge(currentUser.uid, age);
+          console.log('[Adaptive] Updated adaptive state with new age:', age);
+        } catch (error) {
+          console.error('[Adaptive] Error updating adaptive state age:', error);
+          // Don't fail the age update if adaptive state update fails
+        }
       }
 
       // Fetch updated user data to show changes immediately
@@ -4457,36 +4548,36 @@ export default function Page() {
       <div style={{
         backgroundColor: '#3b82f6', // blue
         color: '#ffffff',
-        padding: '12px 16px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          padding: '12px 16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <CatLogo size={40} backgroundColor="#3b82f6" />
-          <div>
-            <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
-            <div style={{ fontSize: '12px', opacity: 0.8 }}>
-              {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+              <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+              </div>
             </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           {/* Toggle Buttons */}
-          <button
+        <button
             onClick={() => setShowChat(false)}
-            style={{
-              padding: '6px 12px',
+          style={{
+                  padding: '6px 12px',
               fontSize: '14px',
               fontWeight: 600,
               color: showChat ? '#ffffff' : '#3b82f6',
               backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
               border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
+                  borderRadius: '6px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
           >
             Avatar
           </button>
@@ -4505,8 +4596,8 @@ export default function Page() {
             }}
           >
             Chat
-          </button>
-        </div>
+        </button>
+            </div>
       </div>
 
       {/* Middle Section - Toggles between Avatar and Chat */}
@@ -4674,13 +4765,13 @@ export default function Page() {
                     animation: 'thinking 1.4s infinite 0.4s',
                   }}></span>
                 </span>
-              </div>
-            </div>
+        </div>
+      </div>
           )}
         </div>
         </div>
       )}
-      
+
       {/* Controls Section - Always visible at bottom */}
       <div style={{
         backgroundColor: '#f9fafb',
@@ -5014,9 +5105,9 @@ export default function Page() {
               : useSTTMode 
                 ? 'Connect' 
                 : 'Connect Realtime'}
-        </button>
+      </button>
         </div>
-        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+      <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
         <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
         <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}

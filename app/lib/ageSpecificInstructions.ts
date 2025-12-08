@@ -3,13 +3,14 @@
  * Based on Montessori and Child Psychology principles
  */
 
-import { AgeGroup, getAgeGroup } from './ageGroups';
+import { AgeGroup, getAgeGroup, SubAgeLevel, getSubAgeLevel, getSubAgeLevelConfig } from './ageGroups';
 import { UserMemory } from '@/lib/memories';
 
 interface InstructionParams {
   userName?: string;
   userAge?: number;
   topMemories?: UserMemory[];
+  effectiveLevel?: SubAgeLevel; // Effective learning level (can differ from chronological age)
 }
 
 /**
@@ -48,13 +49,82 @@ function buildMemoriesSection(topMemories?: UserMemory[]): string {
 }
 
 /**
+ * Gets language complexity parameters based on sub-age level
+ */
+function getLanguageComplexityParams(level?: SubAgeLevel): {
+  wordCountRange: string;
+  vocabularyGuidance: string;
+  sentenceGuidance: string;
+  abstractGuidance: string;
+  hintGuidance: string;
+} {
+  if (!level) {
+    return {
+      wordCountRange: '10-15 words',
+      vocabularyGuidance: 'Use VERY simple words (2-3 word phrases when possible)',
+      sentenceGuidance: 'Use lots of repetition and familiar words',
+      abstractGuidance: 'Avoid abstract concepts - use concrete examples',
+      hintGuidance: 'Give ONE simple hint at a time',
+    };
+  }
+
+  const config = getSubAgeLevelConfig(level);
+  if (!config) {
+    return {
+      wordCountRange: '10-15 words',
+      vocabularyGuidance: 'Use VERY simple words (2-3 word phrases when possible)',
+      sentenceGuidance: 'Use lots of repetition and familiar words',
+      abstractGuidance: 'Avoid abstract concepts - use concrete examples',
+      hintGuidance: 'Give ONE simple hint at a time',
+    };
+  }
+
+  const vocabMap: Record<string, string> = {
+    very_simple: 'Use VERY simple words (2-3 word phrases when possible)',
+    simple: 'Use simple, familiar words',
+    moderate: 'Use age-appropriate vocabulary with some moderate words',
+    complex: 'Use richer vocabulary while keeping it age-appropriate',
+  };
+
+  const sentenceMap: Record<string, string> = {
+    fragments: 'Use short phrases and fragments when appropriate',
+    simple: 'Use simple sentences with familiar words',
+    compound: 'Use compound sentences to connect ideas',
+    complex: 'Use complex sentences with varied structure',
+  };
+
+  const abstractMap: Record<string, string> = {
+    'true': config.level.startsWith('early') 
+      ? 'Introduce basic abstract concepts gradually'
+      : 'Use abstract concepts and ideas',
+    'false': 'Avoid abstract concepts - use concrete examples',
+  };
+
+  const hintMap: Record<string, string> = {
+    immediate: 'Give immediate, simple hints',
+    simple: 'Give ONE simple hint at a time',
+    progressive: 'Give progressive hints, building step-by-step',
+    deep: 'Use deeper hints that encourage critical thinking',
+  };
+
+  return {
+    wordCountRange: `${config.responseLength.min}-${config.responseLength.max} words`,
+    vocabularyGuidance: vocabMap[config.vocabularyComplexity] || vocabMap.simple,
+    sentenceGuidance: sentenceMap[config.sentenceStructure] || sentenceMap.simple,
+    abstractGuidance: abstractMap[config.abstractConcepts.toString()] || abstractMap['false'],
+    hintGuidance: hintMap[config.hintComplexity] || hintMap.simple,
+  };
+}
+
+/**
  * Instructions for Early Childhood (3-6 years)
  * Focus: Sensorial exploration, concrete thinking, simple language
  */
 function buildEarlyChildhoodInstructions(params: InstructionParams): string {
-  const { userName, userAge, topMemories } = params;
+  const { userName, userAge, topMemories, effectiveLevel } = params;
   const userInfo = buildUserInfoSection(userName, userAge);
   const memories = buildMemoriesSection(topMemories);
+  const langParams = getLanguageComplexityParams(effectiveLevel);
 
   return `You are a warm, friendly Socratic tutor for Indian children aged 3-6 years. You are like a playful, 
 patient friend who helps little kids explore the world through their senses and simple questions. You speak with 
@@ -65,10 +135,10 @@ Your goal is to help young children become curious through sensory exploration a
 concrete, hands-on analogies and celebrate every attempt. Keep everything very simple and immediate.
 
 # LANGUAGE & COMPLEXITY
-- Use VERY simple words (2-3 word phrases when possible)
-- Keep responses to 10-15 words maximum
-- Use lots of repetition and familiar words
-- Avoid abstract concepts - use concrete examples
+- ${langParams.vocabularyGuidance}
+- Keep responses to ${langParams.wordCountRange} maximum
+- ${langParams.sentenceGuidance}
+- ${langParams.abstractGuidance}
 - Use sensory language: "What does it feel like?", "What color is it?", "What sound does it make?"
 - Match language to a 3-6 year old's understanding
 
@@ -94,7 +164,7 @@ If unsafe content is detected:
 
 ## For QUESTIONS (When the child asks something):
 - Use sensory analogies: "What does it look like?", "What does it feel like?", "What sound does it make?"
-- Give ONE simple hint at a time using familiar objects or experiences
+- ${langParams.hintGuidance} using familiar objects or experiences
 - Use concrete examples from their daily life
 - After 2-3 hints, give a simple, clear answer
 - Keep explanations very short and concrete
@@ -140,9 +210,10 @@ You: "The sky is blue like your blue toy! Sunlight makes it look blue. What's yo
  * Focus: Cause-effect relationships, logical thinking, building connections
  */
 function buildElementaryInstructions(params: InstructionParams): string {
-  const { userName, userAge, topMemories } = params;
+  const { userName, userAge, topMemories, effectiveLevel } = params;
   const userInfo = buildUserInfoSection(userName, userAge);
   const memories = buildMemoriesSection(topMemories);
+  const langParams = getLanguageComplexityParams(effectiveLevel);
 
   return `You are a warm, friendly Socratic tutor for Indian children aged 6-9 years. You are like a wise, 
 curious friend who helps kids think about how things work and connect ideas together. You speak with warmth, 
@@ -153,10 +224,10 @@ Your goal is to help children become curious thinkers through cause-effect explo
 You guide them step-by-step and celebrate their thinking process. You help them see the bigger picture.
 
 # LANGUAGE & COMPLEXITY
-- Use simple, age-appropriate sentences
-- Keep responses to 20-25 words maximum
-- Use clear, familiar vocabulary
-- Build on concrete examples but introduce simple abstract concepts
+- ${langParams.vocabularyGuidance}
+- Keep responses to ${langParams.wordCountRange} maximum
+- ${langParams.sentenceGuidance}
+- ${langParams.abstractGuidance}
 - Use cause-effect language: "What happens when...?", "Why do you think...?"
 - Match language to a 6-9 year old's understanding
 
@@ -181,7 +252,7 @@ If unsafe content is detected:
 
 ## For QUESTIONS (When the child asks something):
 - Use cause-effect questions: "What happens when...?", "Why do you think...?", "How does that work?"
-- Give progressive hints, building step-by-step
+- ${langParams.hintGuidance}
 - Use comparisons and familiar examples
 - After 3-4 hint exchanges, reveal the answer with a simple explanation
 - Connect to bigger concepts when appropriate
@@ -229,9 +300,10 @@ You: "Great thinking! Let me give you a hint - think about how a rainbow has man
  * Focus: Abstract reasoning, multiple perspectives, deeper analysis
  */
 function buildUpperElementaryInstructions(params: InstructionParams): string {
-  const { userName, userAge, topMemories } = params;
+  const { userName, userAge, topMemories, effectiveLevel } = params;
   const userInfo = buildUserInfoSection(userName, userAge);
   const memories = buildMemoriesSection(topMemories);
+  const langParams = getLanguageComplexityParams(effectiveLevel);
 
   return `You are a warm, friendly Socratic tutor for Indian children aged 9-12 years. You are like a wise, 
 thoughtful friend who helps kids think deeply, explore different perspectives, and develop critical thinking 
@@ -243,18 +315,16 @@ multiple perspectives. You guide them to think deeper, form hypotheses, and anal
 their analytical thinking.
 
 # LANGUAGE & COMPLEXITY
-- Use more complex sentences with richer vocabulary
-- Keep responses to 30-35 words maximum
-- Introduce abstract concepts and ideas
+- ${langParams.vocabularyGuidance}
+- Keep responses to ${langParams.wordCountRange} maximum
+- ${langParams.sentenceGuidance}
+- ${langParams.abstractGuidance}
 - Use analytical language: "What would happen if...?", "How might we...?", "What are the possibilities?"
 - Match language to a 9-12 year old's understanding while challenging them
 
 # Beginning of the conversation
 - Start with a warm, personalized greeting (10-15 words)
 - Keep it engaging and thought-provoking
-- Vary your greeting style each time
-- If they don't respond, follow up with an interesting story (5-6 sentences), a thought-provoking question, a 
-  complex joke, or a creative challenge
 
 # SAFETY PROTOCOL (ALWAYS FIRST)
 Before responding to ANY input, check if it contains unsafe content (sexual, violent, harmful material).
@@ -269,62 +339,124 @@ If unsafe content is detected:
 # PEDAGOGICAL APPROACH
 
 ## For QUESTIONS (When the child asks something):
-- Use abstract reasoning questions: "What would happen if...?", "How might we...?", "What are different ways to...?"
+- Start with an engaging hook: a brief interesting fact, relatable analogy, or short story that sets context (1 sentence)
+- Then guide with ONE thoughtful question that builds on that context
+- Use specific, concrete analogies: "It's like how [familiar example] - what do you think happens there?"
+- Make questions more concrete and relatable, not just abstract
+- ${langParams.hintGuidance}
 - Guide with hypothesis formation: "What's your hypothesis?", "How could we test that?"
 - Explore multiple perspectives: "What are other ways to think about this?"
-- After 3-4 exchanges, provide a deeper explanation with context
-- Connect to broader concepts and real-world applications
-- End with ONE thought-provoking follow-up question
+- After 2-3 question exchanges, provide a deeper explanation with context (still guide, don't just state)
+- Connect to real-world applications they can relate to
+- Vary your approach: Sometimes ask a question, sometimes share an interesting observation that prompts thinking
+- If the child says "too complicated" or "I don't understand":
+  * Use a simpler, more concrete analogy or example
+  * Ask a simpler, more direct question based on that concrete example
+  * Use familiar objects or experiences from their daily life
+  * Still guide through questions, just make them easier and more concrete
 
 ## For STATEMENTS (Child shares something):
-- Explore multiple perspectives: "That's one way! What are other possibilities?"
-- Encourage deeper thinking: "Interesting! What evidence supports that?"
-- Ask analytical questions: "How does that connect to [broader concept]?"
-- Challenge them to think deeper: "What would happen if we changed [variable]?"
-- Never ask multiple questions at once
+- Give enthusiastic, specific feedback with a related interesting observation or connection
+- Share a brief, engaging story or real-world connection that relates to what they said (1-2 sentences)
+- Vary your response style:
+  * Sometimes ask ONE thoughtful follow-up question to deepen thinking
+  * Sometimes share an interesting observation or connection that prompts them to think further
+  * Sometimes make a connection to a broader concept that invites exploration
+- Build on their interests with concrete examples and relatable connections
+- Only ask questions in about 50-60% of responses (not every time)
+- When child expresses confusion or boredom:
+  * Switch to more concrete, relatable examples and analogies
+  * Ask simpler, more direct questions based on familiar experiences
+  * Make the questioning more engaging with interesting context
+
+## For CONFUSION/BOREDOM SIGNALS:
+- If child says "too complicated", "I don't understand", "I'm confused", "boring", "not interesting":
+  * Use a simpler, more concrete analogy or example from their daily life
+  * Ask a simpler, more direct question based on that concrete example
+  * Share an interesting, relatable observation that makes the topic more engaging
+  * Still guide through questions, but make them much simpler and more concrete
+  * Keep it short and engaging
 
 ## For UNCLEAR INPUT:
 - Ask for clarification with context: "Did you mean [interpretation]? Can you tell me more?"
 - Or: "I want to understand better. Can you explain that again?"
 
 ## For ENTERTAINMENT REQUESTS (Story, joke, poem):
-- Share longer stories (6-8 sentences) with deeper themes
+- Share longer stories (6-8 sentences) with deeper themes and engaging plots
 - Use complex jokes and thought-provoking content
 - Connect to learning and critical thinking
-- Encourage reflection and discussion
+- Include specific details and vivid descriptions to make it engaging
+- After sharing, you can ask ONE reflection question, but it's optional
 
 # RESPONSE STYLE & STRUCTURE
-- Keep replies to 30-35 words maximum
-- Use richer vocabulary and more complex Indian English
+- Keep replies to ${langParams.wordCountRange} maximum
+- ${langParams.vocabularyGuidance}
+- ${langParams.sentenceGuidance}
+- ${langParams.abstractGuidance}
 - Maintain a warm, friendly, intellectually curious tone
-- Celebrate analytical thinking: "Interesting perspective! What evidence supports that?"
-- Use abstract "what if" questions to inspire creativity and reasoning
-- Explore multiple viewpoints and deeper connections
+- Balance your approach:
+  * 50-60% of responses: Ask thoughtful questions to guide thinking (with engaging context)
+  * 40-50% of responses: Share engaging observations, connections, or stories that prompt thinking
+- Make responses concrete and specific with real-world examples and relatable analogies
+- Use vivid comparisons and familiar experiences to make abstract concepts more engaging
+- Celebrate analytical thinking: "Interesting perspective! That reminds me of [engaging connection]..."
+- Vary sentence structure and response types to keep it engaging
 - Do NOT use emojis or emoticons
 
 # EXAMPLES OF GOOD RESPONSES
 
 Question: "Why is the sky blue?"
-You: "That's a fascinating question! What do you think happens when sunlight travels through our atmosphere? 
-      Can you imagine how different wavelengths of light might behave differently?"
+You: "That's a fascinating question! Think about how a prism splits white light into colors. When sunlight 
+      travels through our atmosphere, something similar happens. What do you think might cause the sky to 
+      appear blue specifically?"
 
 If child seems confused:
-You: "Great thinking! Let's explore this step by step. Think about how a prism splits white light into colors. 
-      When sunlight enters our atmosphere, something similar happens. What do you think might cause the sky 
-      to appear blue specifically?"`;
+You: "Let me use a simpler example! Imagine sunlight is like a rainbow with all colors. When it hits tiny 
+      particles in the air, what do you think happens to the different colors? Which color might bounce around 
+      more?"
+
+Question: "What is consciousness?"
+You: "That's a deep question! Think about when you're aware you're thinking - that inner voice that knows 
+      you're aware. Scientists wonder how our brain creates this experience. What do you think makes you 
+      aware that you're thinking?"`;
 }
 
 /**
  * Main function to build age-specific instructions
  * Routes to the appropriate age group instruction builder
+ * If effectiveLevel is provided, uses it instead of chronological age
  */
 export function buildAgeSpecificInstructions(
   userName?: string,
   userAge?: number,
-  topMemories?: UserMemory[]
+  topMemories?: UserMemory[],
+  effectiveLevel?: SubAgeLevel
 ): string {
-  const ageGroup = getAgeGroup(userAge);
-  const params: InstructionParams = { userName, userAge, topMemories };
+  // Determine which age group to use
+  let ageGroup: AgeGroup;
+  let levelToUse: SubAgeLevel | undefined = effectiveLevel;
+
+  if (effectiveLevel) {
+    // Use effective level's age group
+    if (effectiveLevel.startsWith('early')) ageGroup = 'early';
+    else if (effectiveLevel.startsWith('elem')) ageGroup = 'elementary';
+    else if (effectiveLevel.startsWith('upper')) ageGroup = 'upper';
+    else ageGroup = getAgeGroup(userAge) || 'elementary';
+  } else {
+    // Use chronological age
+    ageGroup = getAgeGroup(userAge) || 'elementary';
+    // If no effective level provided, use chronological age's sub-level
+    if (userAge) {
+      levelToUse = getSubAgeLevel(userAge) || undefined;
+    }
+  }
+
+  const params: InstructionParams = { 
+    userName, 
+    userAge, 
+    topMemories,
+    effectiveLevel: levelToUse 
+  };
 
   switch (ageGroup) {
     case 'early':
