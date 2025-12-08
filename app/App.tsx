@@ -1351,9 +1351,9 @@ export async function setupSTTMode(
             googleCloudWs.send(int16Data.buffer);
             audioChunkCount++;
             // Log every 100 chunks (~12 seconds at 16kHz) to confirm audio is flowing
-            if (audioChunkCount % 100 === 0) {
-              console.log(`[STT] Sent ${audioChunkCount} audio chunks to Google Cloud`);
-            }
+            // if (audioChunkCount % 100 === 0) {
+            //   console.log(`[STT] Sent ${audioChunkCount} audio chunks to Google Cloud`);
+            // }
           } catch (err) {
             console.error('[STT] Error sending audio to Google Cloud:', err);
           }
@@ -2399,7 +2399,7 @@ export async function setupSTTMode(
                   // Update avatar: TTS is now speaking (Deepgram streaming)
                   // It's safe to set this on each chunk; color doesn't change per chunk.
                   if (onAvatarStateUpdate) {
-                    console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
+                    // console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
                     onAvatarStateUpdate('speaking', true);
                   }
 
