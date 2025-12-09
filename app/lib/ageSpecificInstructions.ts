@@ -51,7 +51,7 @@ function buildMemoriesSection(topMemories?: UserMemory[]): string {
 /**
  * Gets language complexity parameters based on sub-age level
  */
-function getLanguageComplexityParams(level?: SubAgeLevel): {
+export function getLanguageComplexityParams(level?: SubAgeLevel): {
   wordCountRange: string;
   vocabularyGuidance: string;
   sentenceGuidance: string;

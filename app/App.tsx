@@ -9,8 +9,12 @@ import { verifyAdminCode } from '@/lib/admin';import { doc, updateDoc, getDoc } 
 import { db } from '@/lib/firebase';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 import CatLogo from '@/app/components/CatLogo';
-import { buildAgeSpecificInstructions } from './lib/ageSpecificInstructions';
-import { loadAdaptiveState, initializeAdaptiveState, analyzeAndUpdateState, AdaptiveState, updateAdaptiveStateAge } from './lib/adaptiveState';
+import { buildAgeSpecificInstructions, getLanguageComplexityParams } from './lib/ageSpecificInstructions';
+import { loadAdaptiveState, initializeAdaptiveState, analyzeAndUpdateState, AdaptiveState, updateAdaptiveStateAge, initializeModeState, updateModeState, logModeStateAfterUpdate } from './lib/adaptiveState';
+import { ResponseMode, UserIntent, ModeState } from './lib/responseMode';
+import { lightPreClassify, selectMode } from './lib/modeSelector';
+import { buildModePrompt } from './lib/modePrompts';
+import { parseIntentFromResponse, stripIntentTag } from './lib/responseEnforcer';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -738,6 +742,10 @@ export async function setupSTTMode(
     
     const effectiveLevel = adaptiveState?.effectiveLevel;
     const instructions = buildSocraticTutorInstructions(userName, userAge, memories, effectiveLevel);
+
+    // Initialize mode state for response mode state machine (in-memory, not persisted)
+    let modeState: ModeState = initializeModeState();
+    console.log('[ModeState] Initialized with starting mode:', modeState.currentMode);
 
     // Conversation session tracking
     let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1563,8 +1571,8 @@ export async function setupSTTMode(
         console.error('[STT] Google Cloud WebSocket error:', error);
       };
       
-      googleCloudWs.onclose = () => {
-        console.log('[STT] Google Cloud WebSocket closed');
+      googleCloudWs.onclose = (event) => {
+        console.log('[STT] Google Cloud WebSocket closed', event.code, event.reason || '(no reason)');
       };
       
       // Wait for WebSocket to open and flush buffered audio
@@ -1774,6 +1782,32 @@ export async function setupSTTMode(
       onChunk: (chunk: string) => void,
       isInitialGreeting: boolean = false
     ): Promise<string> => {
+      // === MODE STATE MACHINE: Pre-classification and mode selection ===
+      let selectedMode: ResponseMode = modeState.currentMode;
+      let preClass = lightPreClassify(userMessage || '');
+      
+      if (!isInitialGreeting && userMessage && effectiveLevel) {
+        // Select mode based on pre-classification and current state
+        selectedMode = selectMode(preClass, modeState, effectiveLevel);
+        
+        // Log mode selection
+        console.log(`[ModeState] Turn ${modeState.turnCount + 1} | Pre-class: ${preClass.intent} | Selected: ${selectedMode} | Signals: confusion=${preClass.signals.confusion}, boredom=${preClass.signals.boredom}`);
+        
+        // Build mode-specific prompt and update system message
+        const modePrompt = buildModePrompt({
+          mode: selectedMode,
+          effectiveLevel,
+          userName,
+          userAge,
+          topMemories: memories,
+        });
+        conversationHistory[0] = {
+          role: 'system',
+          content: modePrompt,
+        };
+      }
+      // === END MODE STATE MACHINE PRE-PROCESSING ===
+
       // Add user message to conversation history
       if (userMessage) {
         conversationHistory.push({ role: 'user', content: userMessage });
@@ -1851,10 +1885,28 @@ export async function setupSTTMode(
 
                   if (data.done) {
                     // Stream complete
-                    conversationHistory.push({ role: 'assistant', content: fullResponse });
+                    // === MODE STATE MACHINE: Post-processing ===
+                    let cleanResponse = fullResponse;
+                    let detectedIntent: UserIntent | null = null;
+                    
+                    if (!isInitialGreeting && effectiveLevel) {
+                      // Parse intent from the LLM's response
+                      detectedIntent = parseIntentFromResponse(fullResponse);
+                      
+                      // Strip intent tag from response for display/TTS
+                      cleanResponse = stripIntentTag(fullResponse);
+                      
+                      // Update mode state based on selected mode and detected intent
+                      modeState = updateModeState(modeState, selectedMode, preClass, detectedIntent);
+                      logModeStateAfterUpdate(modeState);
+                    }
+                    // === END MODE STATE MACHINE POST-PROCESSING ===
+                    
+                    // Store clean response (without intent tag) in conversation history
+                    conversationHistory.push({ role: 'assistant', content: cleanResponse });
                     
                     // Detect mood from assistant response and update avatar
-                    const detectedMood = detectMoodFromText(fullResponse);
+                    const detectedMood = detectMoodFromText(cleanResponse);
                     if (onAvatarStateUpdate) {
                       onAvatarStateUpdate('processing', false, detectedMood);
                     }
@@ -1885,7 +1937,7 @@ export async function setupSTTMode(
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
                     }
-                    return fullResponse;
+                    return cleanResponse;
                   }
                 } catch (e) {
                   // Skip invalid JSON or continue processing
@@ -1899,12 +1951,22 @@ export async function setupSTTMode(
 
           // If we get here, stream ended without done flag
           if (fullResponse) {
-            conversationHistory.push({ role: 'assistant', content: fullResponse });
+            // === MODE STATE MACHINE: Post-processing (fallback path) ===
+            let cleanResponseFallback = fullResponse;
+            if (!isInitialGreeting && effectiveLevel) {
+              const detectedIntentFallback = parseIntentFromResponse(fullResponse);
+              cleanResponseFallback = stripIntentTag(fullResponse);
+              modeState = updateModeState(modeState, selectedMode, preClass, detectedIntentFallback);
+              logModeStateAfterUpdate(modeState);
+            }
+            // === END MODE STATE MACHINE POST-PROCESSING ===
+            
+            conversationHistory.push({ role: 'assistant', content: cleanResponseFallback });
             // Update UI (but skip for initial greeting - it will be updated after removing the prompt)
             if (onConversationUpdate && !isInitialGreeting) {
               onConversationUpdate([...conversationHistory]);
             }
-            return fullResponse;
+            return cleanResponseFallback;
           }
 
           throw new Error('Stream ended without complete response');
@@ -1935,6 +1997,32 @@ export async function setupSTTMode(
     };
     
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      // === MODE STATE MACHINE: Pre-classification and mode selection ===
+      let selectedModeNonStream: ResponseMode = modeState.currentMode;
+      let preClassNonStream = lightPreClassify(userMessage || '');
+      
+      if (!isInitialGreeting && userMessage && effectiveLevel) {
+        // Select mode based on pre-classification and current state
+        selectedModeNonStream = selectMode(preClassNonStream, modeState, effectiveLevel);
+        
+        // Log mode selection
+        console.log(`[ModeState] Turn ${modeState.turnCount + 1} | Pre-class: ${preClassNonStream.intent} | Selected: ${selectedModeNonStream} | Signals: confusion=${preClassNonStream.signals.confusion}, boredom=${preClassNonStream.signals.boredom}`);
+        
+        // Build mode-specific prompt and update system message
+        const modePromptNonStream = buildModePrompt({
+          mode: selectedModeNonStream,
+          effectiveLevel,
+          userName,
+          userAge,
+          topMemories: memories,
+        });
+        conversationHistory[0] = {
+          role: 'system',
+          content: modePromptNonStream,
+        };
+      }
+      // === END MODE STATE MACHINE PRE-PROCESSING ===
+
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
       if (userMessage) {
@@ -1942,27 +2030,6 @@ export async function setupSTTMode(
         // Update UI (but skip the initial greeting user message for cleaner display)
         if (onConversationUpdate && !isInitialGreeting) {
           onConversationUpdate([...conversationHistory]);
-        }
-      }
-      
-      // Update adaptive state based on conversation (before getting response)
-      if (adaptiveState && uid && !isInitialGreeting) {
-        try {
-          const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
-          adaptiveState = result.state;
-          
-          // If transition occurred, update instructions for this response
-          if (result.transition) {
-            console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
-            const newEffectiveLevel = adaptiveState.effectiveLevel;
-            const newInstructions = buildSocraticTutorInstructions(userName, userAge, memories, newEffectiveLevel);
-            conversationHistory[0] = {
-              role: 'system',
-              content: newInstructions,
-            };
-          }
-        } catch (error) {
-          console.error('[Adaptive] Error updating state:', error);
         }
       }
 
@@ -2001,11 +2068,45 @@ export async function setupSTTMode(
           }
 
           const data = await response.json();
-          const assistantMessage = data.response || data.message || '';
-          conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          let assistantMessage = data.response || data.message || '';
+          
+          // === MODE STATE MACHINE: Post-processing ===
+          let cleanAssistantMessage = assistantMessage;
+          let detectedIntentNonStream: UserIntent | null = null;
+          
+          if (!isInitialGreeting && effectiveLevel) {
+            // Parse intent from the LLM's response
+            detectedIntentNonStream = parseIntentFromResponse(assistantMessage);
+            
+            // Strip intent tag from response for display/TTS
+            cleanAssistantMessage = stripIntentTag(assistantMessage);
+            
+            // Update mode state based on selected mode and detected intent
+            modeState = updateModeState(modeState, selectedModeNonStream, preClassNonStream, detectedIntentNonStream);
+            logModeStateAfterUpdate(modeState);
+          }
+          // === END MODE STATE MACHINE POST-PROCESSING ===
+          
+          // Store clean response (without intent tag) in conversation history
+          conversationHistory.push({ role: 'assistant', content: cleanAssistantMessage });
+          
+          // Update adaptive state based on conversation (after mode state update)
+          if (adaptiveState && uid && !isInitialGreeting) {
+            try {
+              const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
+              adaptiveState = result.state;
+              
+              // If transition occurred, log it (system message will be rebuilt on next turn)
+              if (result.transition) {
+                console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
+              }
+            } catch (error) {
+              console.error('[Adaptive] Error updating state:', error);
+            }
+          }
           
           // Detect mood from assistant response and update avatar
-          const detectedMood = detectMoodFromText(assistantMessage);
+          const detectedMood = detectMoodFromText(cleanAssistantMessage);
           if (onAvatarStateUpdate) {
             onAvatarStateUpdate('processing', false, detectedMood);
           }
@@ -2014,7 +2115,7 @@ export async function setupSTTMode(
           if (onConversationUpdate) {
             onConversationUpdate([...conversationHistory]);
           }
-          return assistantMessage;
+          return cleanAssistantMessage;
         } catch (error: any) {
           if (timeoutId) clearTimeout(timeoutId);
           lastError = error;

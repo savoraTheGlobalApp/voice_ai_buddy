@@ -8,6 +8,7 @@ import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { SubAgeLevel, getSubAgeLevel, getNextLevel, getPreviousLevel, getAgeGroupFromSubLevel, getAllSubLevels } from './ageGroups';
 import { CapabilityMetrics, CapabilityScore, analyzeRecentConversation, calculateCapabilityScore } from './capabilityMetrics';
 import { ConversationMessage } from '@/lib/conversations';
+import { ResponseMode, ModeState, UserIntent, PreClassification } from './responseMode';
 
 export interface TransitionEvent {
   from: SubAgeLevel;
@@ -487,5 +488,110 @@ export async function updateAdaptiveStateAge(uid: string, newAge: number): Promi
     console.error('[AdaptiveState] Error updating age:', error);
     throw error;
   }
+}
+
+// ============================================================================
+// MODE STATE MANAGEMENT (In-memory, not persisted to Firestore)
+// ============================================================================
+
+/**
+ * Initialize mode state at the start of a session
+ * Starting mode is 'engage' for warm, friendly greeting
+ */
+export function initializeModeState(): ModeState {
+  const initialState: ModeState = {
+    currentMode: 'engage',
+    lastModes: [],
+    questionStreak: 0,
+    confusionStreak: 0,
+    engagementStreak: 0,
+    turnCount: 0,
+  };
+  
+  console.log('[ModeState] Initialized:', JSON.stringify(initialState));
+  return initialState;
+}
+
+/**
+ * Update mode state after a turn
+ */
+export function updateModeState(
+  currentState: ModeState,
+  selectedMode: ResponseMode,
+  preClass: PreClassification,
+  detectedIntent: UserIntent | null
+): ModeState {
+  // Use detected intent if available, otherwise use pre-classification
+  const effectiveIntent = detectedIntent || preClass.intent;
+  
+  // Update lastModes (keep last 5)
+  const newLastModes = [selectedMode, ...currentState.lastModes].slice(0, 5);
+  
+  // Update streaks based on signals and mode
+  let questionStreak = currentState.questionStreak;
+  let confusionStreak = currentState.confusionStreak;
+  let engagementStreak = currentState.engagementStreak;
+  
+  // Question streak: increment if we asked a question-heavy mode
+  if (['probe', 'hint', 'clarify'].includes(selectedMode)) {
+    questionStreak++;
+  } else {
+    questionStreak = 0;
+  }
+  
+  // Confusion streak: based on user signals
+  if (preClass.signals.confusion || effectiveIntent === 'confusion') {
+    confusionStreak++;
+  } else {
+    confusionStreak = 0;
+  }
+  
+  // Engagement streak: based on user engagement
+  if (preClass.signals.engagement || preClass.signals.effort || preClass.signals.explaining) {
+    engagementStreak++;
+  } else if (preClass.signals.boredom || effectiveIntent === 'boredom') {
+    engagementStreak = 0;
+  }
+  // If neutral, don't change engagement streak
+  
+  const newState: ModeState = {
+    currentMode: selectedMode,
+    lastModes: newLastModes,
+    questionStreak,
+    confusionStreak,
+    engagementStreak,
+    turnCount: currentState.turnCount + 1,
+  };
+  
+  return newState;
+}
+
+/**
+ * Log mode interaction for debugging
+ */
+export function logModeInteraction(
+  modeState: ModeState,
+  preClass: PreClassification,
+  selectedMode: ResponseMode,
+  detectedIntent: UserIntent | null
+): void {
+  console.log(
+    `[ModeState] Turn ${modeState.turnCount + 1} | Pre-class: ${preClass.intent} (conf: ${preClass.confidence}) | Selected: ${selectedMode} | Detected: ${detectedIntent || 'none'}`
+  );
+  console.log(
+    `[ModeState] Signals: confusion=${preClass.signals.confusion}, boredom=${preClass.signals.boredom}, effort=${preClass.signals.effort}, engagement=${preClass.signals.engagement}, explaining=${preClass.signals.explaining}`
+  );
+  console.log(
+    `[ModeState] State: { current: ${modeState.currentMode}, lastModes: [${modeState.lastModes.slice(0, 3).join(', ')}], qStreak: ${modeState.questionStreak}, confStreak: ${modeState.confusionStreak}, engStreak: ${modeState.engagementStreak} }`
+  );
+}
+
+/**
+ * Log mode state after update
+ */
+export function logModeStateAfterUpdate(modeState: ModeState): void {
+  console.log(
+    `[ModeState] Updated: { current: ${modeState.currentMode}, turn: ${modeState.turnCount}, qStreak: ${modeState.questionStreak}, confStreak: ${modeState.confusionStreak}, engStreak: ${modeState.engagementStreak} }`
+  );
 }
 
