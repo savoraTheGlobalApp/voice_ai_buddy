@@ -19,7 +19,7 @@ const MIN_INTERRUPTION_INTERVAL_MS = 3500; // in ms
 function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
   let userInfoSection = '';
   let memoriesSection = '';
-  
+
   if (userName && userAge) {
     userInfoSection = `# USER INFORMATION
 - The child's name is ${userName} and they are ${userAge} years old.
@@ -189,9 +189,9 @@ type AvatarMood = 'neutral' | 'encouraging' | 'concerned' | 'celebratory';
 // Function to detect mood from assistant response text
 function detectMoodFromText(text: string): AvatarMood {
   if (!text) return 'neutral';
-  
+
   const lowerText = text.toLowerCase();
-  
+
   // Celebratory: exclamation marks, positive words, emojis
   if (
     (lowerText.includes('!') && (lowerText.match(/!/g) || []).length >= 2) ||
@@ -205,7 +205,7 @@ function detectMoodFromText(text: string): AvatarMood {
   ) {
     return 'celebratory';
   }
-  
+
   // Encouraging: positive reinforcement words
   if (
     lowerText.includes('good job') ||
@@ -218,7 +218,7 @@ function detectMoodFromText(text: string): AvatarMood {
   ) {
     return 'encouraging';
   }
-  
+
   // Concerned: words indicating difficulty or worry
   if (
     lowerText.includes('difficult') ||
@@ -231,7 +231,7 @@ function detectMoodFromText(text: string): AvatarMood {
   ) {
     return 'concerned';
   }
-  
+
   // Default to neutral
   return 'neutral';
 }
@@ -254,13 +254,13 @@ function crispifyMemoryText(text: string, userName?: string): string {
   }
   // Simplify common connectors to key: value style
   t = t.replace(/\s+is\s+/gi, ': ')
-       .replace(/\s+has\s+/gi, ': ')
-       .replace(/\s+are\s+/gi, ': ')
-       .replace(/\s+likes\s+/gi, ': ')
-       .replace(/\s+loves\s+/gi, ': ')
-       .replace(/\s+enjoys\s+/gi, ': ')
-       .replace(/^my\s+/i, '')
-       .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
+    .replace(/\s+has\s+/gi, ': ')
+    .replace(/\s+are\s+/gi, ': ')
+    .replace(/\s+likes\s+/gi, ': ')
+    .replace(/\s+loves\s+/gi, ': ')
+    .replace(/\s+enjoys\s+/gi, ': ')
+    .replace(/^my\s+/i, '')
+    .replace(/^i\s+(am|have|like|love|enjoy)\s+/i, '');
   return t.trim();
 }
 
@@ -280,7 +280,7 @@ export async function setupRealtimeMode(
     if (uid) {
       memories = await fetchTopMemories(uid);
     }
-  } catch {}
+  } catch { }
   const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
   const agent = new RealtimeAgent({
@@ -305,17 +305,17 @@ export async function setupRealtimeMode(
       content: instructions,
     },
   ];
-    // Conversation session tracking
-    let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    let lastSavedMessageIndex = 0;
-    if (uid) {
-      try {
-        await startConversationSession(uid, conversationSessionId, 'realtime');
-        console.log('[conv] Realtime session started:', conversationSessionId);
-      } catch (e) {
-        console.error('[conv] Failed to start realtime conversation session', e);
-      }
+  // Conversation session tracking
+  let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let lastSavedMessageIndex = 0;
+  if (uid) {
+    try {
+      await startConversationSession(uid, conversationSessionId, 'realtime');
+      console.log('[conv] Realtime session started:', conversationSessionId);
+    } catch (e) {
+      console.error('[conv] Failed to start realtime conversation session', e);
     }
+  }
 
   // Automatically connects your microphone and audio output in the browser via WebRTC.
   try {
@@ -338,13 +338,13 @@ export async function setupRealtimeMode(
     // Initialize Web Speech API for STT to transcribe user speech (free, parallel to Realtime API)
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     let recognition: any = null;
-    
+
     if (SpeechRecognition) {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = false;
       recognition.lang = 'en-US';
-      
+
       // Handle user speech transcription
       let userMsgCounter = 0;
       const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
@@ -367,7 +367,7 @@ export async function setupRealtimeMode(
           const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
           try {
             await addMemoriesWithLimit(uid, memories);
-          } catch (saveErr) {}
+          } catch (saveErr) { }
 
           // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
           try {
@@ -386,35 +386,35 @@ export async function setupRealtimeMode(
           } catch (e) {
             console.error('[conv] Realtime append failed', e);
           }
-        } catch (e) {}
+        } catch (e) { }
       };
 
       recognition.onresult = (event: any) => {
         const transcript = event.results[event.results.length - 1][0].transcript.trim();
         if (!transcript) return;
-        
+
         console.log('[STT] User said:', transcript);
-        
+
         // Add to conversation history
         conversationHistory.push({ role: 'user', content: transcript });
         userMsgCounter += 1;
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
           maybeExtractMemories();
         }
-        
+
         // Update UI
         if (onConversationUpdate) {
           onConversationUpdate([...conversationHistory]);
         }
       };
-      
+
       recognition.onerror = (event: any) => {
-        if (event.error !== 'no-speech' && event.error !== 'aborted' && 
-            event.error !== 'audio-capture' && event.error !== 'not-allowed') {
+        if (event.error !== 'no-speech' && event.error !== 'aborted' &&
+          event.error !== 'audio-capture' && event.error !== 'not-allowed') {
           console.error('[STT] Recognition error:', event.error);
         }
       };
-      
+
       recognition.onend = () => {
         // Restart recognition if session is still active
         if (currentSession && currentSession.session === session) {
@@ -431,7 +431,7 @@ export async function setupRealtimeMode(
     session.transport.on('connected', () => {
       console.log('[realtime] connected');
       if (session.transport.muted) session.transport.mute(false);
-      
+
       // Start Web Speech API recognition for user transcription
       if (recognition) {
         try {
@@ -441,7 +441,7 @@ export async function setupRealtimeMode(
           console.warn('[STT] Could not start recognition:', e);
         }
       }
-      
+
       // Trigger the agent to start speaking automatically
       // The agent will respond with a greeting based on the instructions
       // Wait a moment for the session to be fully ready, then trigger
@@ -459,12 +459,85 @@ export async function setupRealtimeMode(
       }, 1500); // Wait 1.5 seconds for session to be fully ready
     });
     session.transport.on('disconnected', () => console.log('[realtime] disconnected'));
+
+    // --- AVATAR STATE MANAGEMENT ---
+    let isFirstAudioChunk = true;
+    let stopSpeakingTimer: NodeJS.Timeout | null = null;
+
+
+    // 1. Processing State: When user finishes speaking (transcription done)
+    session.transport.on('conversation.item.input_audio_transcription.completed', (evt: any) => {
+      // User finished speaking, logic processing starts
+      if (onAvatarStateUpdate) {
+        console.log('[realtime] User finished speaking -> Processing');
+        onAvatarStateUpdate('processing', false);
+      }
+    });
+
+    // Also trigger processing state when user stops speaking (earlier trigger)
+    session.transport.on('input_audio_buffer.speech_stopped', () => {
+      if (onAvatarStateUpdate) {
+        console.log('[realtime] User speech stopped -> Processing (Early Trigger)');
+        onAvatarStateUpdate('processing', false);
+      }
+    });
+
+
+    // 2. Speaking State: When audio starts streaming
+    // Try multiple events to ensure valid trigger
+    const onAudioStart = () => {
+      // Cancel any pending stop timer if audio resumes
+      if (stopSpeakingTimer) {
+        clearTimeout(stopSpeakingTimer);
+        stopSpeakingTimer = null;
+      }
+
+      // Always assert speaking state when audio is flowing
+      // The overhead is low, and checks in App state will prevent unnecessary re-renders if value hasn't changed
+      if (onAvatarStateUpdate) {
+        // console.log('[realtime] Audio flowing -> Assert Speaking');
+        onAvatarStateUpdate('speaking', true);
+      }
+
+      // Extend the "speaking" window every time we get a chunk
+      // This is the primary mechanism to keep mouth moving
+      stopSpeakingTimer = setTimeout(() => {
+        if (onAvatarStateUpdate) {
+          console.log('[realtime] Silence timeout -> Listening');
+          onAvatarStateUpdate('listening', false);
+        }
+      }, 1200); // Keep alive for 1.2s after last chunk
+    };
+
+    session.transport.on('response.audio.delta', onAudioStart);
+    // Fallback: content_part.added often precedes audio
+    session.transport.on('response.content_part.added', (evt: any) => {
+      if (evt.part && evt.part.type === 'audio') onAudioStart();
+    });
+    // Fallback: response.output_item.added
+    session.transport.on('response.output_item.added', (evt: any) => {
+      if (evt.item && evt.item.type === 'message' && evt.item.role === 'assistant') onAudioStart();
+    });
+
+
+    // Reset flag for next turn
+    session.transport.on('turn_started', () => {
+      console.log('[realtime] turn_started');
+      isFirstAudioChunk = true;
+    });
+
+    // Also reset on turn_done just in case
+    session.transport.on('turn_done', () => {
+      console.log('[realtime] turn_done');
+      isFirstAudioChunk = true;
+    });
+
     session.transport.on('error', (e: any) => {
-      
+
       if (!e) {
         return;
       }
-      
+
       // Check if it's an empty object by stringifying
       try {
         const errorStr = JSON.stringify(e);
@@ -474,39 +547,37 @@ export async function setupRealtimeMode(
       } catch {
         // If stringify fails, continue to check properties
       }
-      
-      const hasMessage = (e?.error?.message && typeof e.error.message === 'string' && e.error.message.trim().length > 0) || 
-                         (e?.message && typeof e.message === 'string' && e.message.trim().length > 0);
-      const hasCode = (e?.code !== undefined && e?.code !== null && e?.code !== '') || 
-                      (e?.error?.code !== undefined && e?.error?.code !== null && e?.error?.code !== '');
+
+      const hasMessage = (e?.error?.message && typeof e.error.message === 'string' && e.error.message.trim().length > 0) ||
+        (e?.message && typeof e.message === 'string' && e.message.trim().length > 0);
+      const hasCode = (e?.code !== undefined && e?.code !== null && e?.code !== '') ||
+        (e?.error?.code !== undefined && e?.error?.code !== null && e?.error?.code !== '');
       const isStringError = typeof e === 'string' && e.trim().length > 0;
-      
+
       // Only log if we have a clear, meaningful error
       if (hasMessage || hasCode || isStringError) {
         console.error('[realtime] error', e);
       }
     });
-    session.transport.on('turn_started', () => {
-      console.log('[realtime] turn_started');
-    });
     // Track which messages we've already logged to avoid duplicates
+
     let lastLoggedHistoryLength = 0;
-    
+
     session.transport.on('turn_done', () => {
       console.log('[realtime] turn_done');
-      
+
       // Access conversation history directly from session.history
       try {
         const history = (session as any).history;
-        
+
         if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
           // Get new messages since last check
           const newMessages = history.slice(lastLoggedHistoryLength);
-          
+
           newMessages.forEach((message: any) => {
             // Extract assistant transcript from the message
             let assistantText: string | null = null;
-            
+
             // Check different possible structures
             if (message.role === 'assistant') {
               // Extract transcript from message.content array
@@ -520,34 +591,34 @@ export async function setupRealtimeMode(
                   }
                 }
               }
-              
+
               // Fallback: Check for transcript property directly on message
               if (!assistantText && message.transcript && typeof message.transcript === 'string') {
                 assistantText = message.transcript.trim();
               }
-              
+
               // Fallback: Try to get text from content if it's a string
               if (!assistantText && message.content && typeof message.content === 'string') {
                 assistantText = message.content.trim();
               }
-              
+
               // Fallback: Check for text property directly
               if (!assistantText && message.text && typeof message.text === 'string') {
                 assistantText = message.text.trim();
               }
-              
+
               // Add to conversation history and update UI if we found assistant text
               if (assistantText && assistantText.length > 2) {
                 console.log('[realtime] ASSISTANT SAID:', assistantText);
-                
+
                 // Check if we already have this message to avoid duplicates
                 const existingMessage = conversationHistory.find(
                   msg => msg.role === 'assistant' && msg.content === assistantText
                 );
-                
+
                 if (!existingMessage) {
                   conversationHistory.push({ role: 'assistant', content: assistantText });
-                  
+
                   // Update chat UI
                   if (onConversationUpdate) {
                     onConversationUpdate([...conversationHistory]);
@@ -556,7 +627,7 @@ export async function setupRealtimeMode(
               }
             }
           });
-          
+
           // Update last logged length
           lastLoggedHistoryLength = history.length;
         }
@@ -566,22 +637,39 @@ export async function setupRealtimeMode(
     });
     session.transport.on('audio_done', () => {
       console.log('[realtime] audio_done');
-      
+
+      // Debounce the stop speaking event to prevent flickering if there's a small gap in audio
+      // or if events fire out of order
+      if (stopSpeakingTimer) clearTimeout(stopSpeakingTimer);
+
+      // Update avatar: speaking finished (return to listening)
+      // Use a longer debounce to ensure we are truly done
+      if (stopSpeakingTimer) clearTimeout(stopSpeakingTimer);
+
+      stopSpeakingTimer = setTimeout(() => {
+        if (onAvatarStateUpdate) {
+          console.log('[realtime] Audio finished (watchdog) -> Listening');
+          onAvatarStateUpdate('listening', false);
+        }
+      }, 1200); // 1.2s silence required to consider speaking done
+
+
+
       // When audio is done (assistant finished speaking), check history immediately
       // This might capture the transcript faster than waiting for turn_done
       try {
         const history = (session as any).history;
-        
+
         if (history && Array.isArray(history) && history.length > lastLoggedHistoryLength) {
           // Get the most recent assistant message
           const recentMessages = history.slice(lastLoggedHistoryLength);
-          
+
           let foundNewAssistantMessage = false;
-          
+
           recentMessages.forEach((message: any) => {
             if (message.role === 'assistant') {
               let assistantText: string | null = null;
-              
+
               // Extract transcript from message.content array
               // Based on console logs, the structure is: message.content[0].transcript where type is 'output_audio'
               if (message.content && Array.isArray(message.content)) {
@@ -593,34 +681,34 @@ export async function setupRealtimeMode(
                   }
                 }
               }
-              
+
               // Fallback: Check for transcript property directly on message
               if (!assistantText && message.transcript && typeof message.transcript === 'string') {
                 assistantText = message.transcript.trim();
               }
-              
+
               // Fallback: Try to get text from content if it's a string
               if (!assistantText && typeof message.content === 'string') {
                 assistantText = message.content.trim();
               }
-              
+
               // Fallback: Check for text property directly
               if (!assistantText && message.text && typeof message.text === 'string') {
                 assistantText = message.text.trim();
               }
-              
+
               if (assistantText && assistantText.length > 2) {
                 console.log('[realtime] ASSISTANT SAID:', assistantText);
-                
+
                 // Add to conversation history and update UI
                 const existingMessage = conversationHistory.find(
                   msg => msg.role === 'assistant' && msg.content === assistantText
                 );
-                
+
                 if (!existingMessage) {
                   conversationHistory.push({ role: 'assistant', content: assistantText });
                   foundNewAssistantMessage = true;
-                  
+
                   // Update chat UI
                   if (onConversationUpdate) {
                     onConversationUpdate([...conversationHistory]);
@@ -629,7 +717,7 @@ export async function setupRealtimeMode(
               }
             }
           });
-          
+
           // Update counter after processing all messages to prevent duplicates
           if (foundNewAssistantMessage) {
             lastLoggedHistoryLength = history.length;
@@ -642,18 +730,18 @@ export async function setupRealtimeMode(
 
 
     // Close any previous session to avoid multiple active connections
-    try { currentSession?.session.close(); } catch {}
+    try { currentSession?.session.close(); } catch { }
 
     // Connect first, then apply session config via the transport
     await session.connect({ apiKey: token });
-    
+
     // Update session config - explicitly enable transcription for output audio
     session.transport.updateSessionConfig({
       audio: {
-        input: { 
+        input: {
           turnDetection: { type: 'semantic_vad', createResponse: true },
         },
-        output: { 
+        output: {
           voice: 'nova',
           // Explicitly enable transcription for assistant audio output
           transcription: {
@@ -666,10 +754,10 @@ export async function setupRealtimeMode(
     // Also send session.update event to ensure transcription is enabled
     // This is sometimes needed in addition to updateSessionConfig
     try {
-    session.transport.sendEvent({
-      type: 'session.update',
-      session: {
-        type: 'realtime',
+      session.transport.sendEvent({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
           audio: {
             output: {
               transcription: {
@@ -677,8 +765,8 @@ export async function setupRealtimeMode(
               },
             },
           },
-      },
-    } as any);
+        },
+      });
       console.log('[realtime] Transcription enabled via session.update event');
     } catch (e) {
       console.warn('[realtime] Could not send session.update event:', e);
@@ -689,7 +777,7 @@ export async function setupRealtimeMode(
       session,
       conversationHistory,
     };
-    
+
     // Store recognition reference for cleanup
     if (recognition) {
       (currentSession as any).recognition = recognition;
@@ -712,18 +800,25 @@ export async function setupSTTMode(
   uid?: string,
 ) {
   // Close any existing sessions
+  console.log('[setupSTTMode] Starting... forcing listening state check');
+  if (onAvatarStateUpdate) {
+    onAvatarStateUpdate('listening', false);
+  } else {
+    console.error('[setupSTTMode] onAvatarStateUpdate IS NULL!');
+  }
+
   try {
     if (currentSession) {
-        // Stop recognition if it exists
-        if (currentSession.recognition) {
-          try {
-            currentSession.recognition.stop();
-            currentSession.recognition.abort();
-          } catch (e) {
-            // Ignore errors
-          }
+      // Stop recognition if it exists
+      if (currentSession.recognition) {
+        try {
+          currentSession.recognition.stop();
+          currentSession.recognition.abort();
+        } catch (e) {
+          // Ignore errors
         }
-        currentSession.session.close();
+      }
+      currentSession.session.close();
       currentSession = null;
     }
     if (currentSTTSession) {
@@ -742,8 +837,8 @@ export async function setupSTTMode(
       // Clean up Deepgram TTS WebSocket if used
       if (currentSTTSession.deepgramTtsWs) {
         try {
-          if (currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN || 
-              currentSTTSession.deepgramTtsWs.readyState === WebSocket.CONNECTING) {
+          if (currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN ||
+            currentSTTSession.deepgramTtsWs.readyState === WebSocket.CONNECTING) {
             currentSTTSession.deepgramTtsWs.close();
           }
           console.log('[Deepgram TTS] WebSocket closed on session end');
@@ -778,12 +873,12 @@ export async function setupSTTMode(
         try {
           currentSTTSession.processingOscillator.stop();
           currentSTTSession.processingOscillator.disconnect();
-        } catch (e) {}
+        } catch (e) { }
       }
       if (currentSTTSession.processingGain) {
         try {
           currentSTTSession.processingGain.disconnect();
-        } catch (e) {}
+        } catch (e) { }
       }
       if (currentSTTSession.processingAudio) {
         currentSTTSession.processingAudio.pause();
@@ -807,7 +902,7 @@ export async function setupSTTMode(
       if (uid) {
         memories = await fetchTopMemories(uid);
       }
-    } catch {}
+    } catch { }
     const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
 
     // Conversation session tracking
@@ -821,7 +916,7 @@ export async function setupSTTMode(
         console.error('[conv] Failed to start STT conversation session', e);
       }
     }
-    
+
     // Initialize conversation history
     const conversationHistory: Array<{ role: string; content: string }> = [
       {
@@ -848,21 +943,21 @@ export async function setupSTTMode(
     // Get STT provider from admin settings (localStorage) or backend as fallback
     let sttProvider: string | null = null;
     let hasAdminSettings = false;
-    
-      try {
-        const stored = localStorage.getItem('adminSettings');
-        if (stored) {
-          const settings = JSON.parse(stored);
-          if (settings.sttProvider) {
-            sttProvider = settings.sttProvider.toLowerCase(); // Normalize to lowercase for consistency
-            hasAdminSettings = true;
-            console.log('[STT] Provider from admin settings:', sttProvider);
-          }
+
+    try {
+      const stored = localStorage.getItem('adminSettings');
+      if (stored) {
+        const settings = JSON.parse(stored);
+        if (settings.sttProvider) {
+          sttProvider = settings.sttProvider.toLowerCase(); // Normalize to lowercase for consistency
+          hasAdminSettings = true;
+          console.log('[STT] Provider from admin settings:', sttProvider);
         }
-      } catch (e) {
-        console.warn('[STT] Error reading admin settings, trying backend...', e);
       }
-    
+    } catch (e) {
+      console.warn('[STT] Error reading admin settings, trying backend...', e);
+    }
+
     // Fallback to backend only if admin settings don't exist
     if (!hasAdminSettings || !sttProvider) {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -880,12 +975,12 @@ export async function setupSTTMode(
         sttProvider = 'webspeech'; // Final fallback
       }
     }
-    
+
     // Ensure we have a valid provider
     if (!sttProvider) {
       sttProvider = 'webspeech';
     }
-    
+
     let recognition: any = null;
     let deepgramWs: WebSocket | null = null;
     let audioProcessor: AudioWorkletNode | ScriptProcessorNode | null = null;
@@ -895,12 +990,12 @@ export async function setupSTTMode(
     if (sttProvider === 'deepgramnova3') {
       // Use Deepgram Nova-3 streaming STT
       console.log('[STT] Using Deepgram Nova-3 for STT');
-      
+
       // Create audio context for processing
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: 48000, // Deepgram expects 48kHz
       });
-      
+
       // Resume AudioContext if suspended
       if (audioContext.state === 'suspended') {
         try {
@@ -917,11 +1012,11 @@ export async function setupSTTMode(
       const bufferSize = 2048; // ~43ms at 48kHz (power of 2, good for real-time)
       const source = audioContext.createMediaStreamSource(mediaStream);
       const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-      
+
       // Buffer to store audio chunks until WebSocket is ready (declare outside processor)
       const audioBuffer: ArrayBuffer[] = [];
       const MAX_BUFFER_SIZE = 10; // Keep only last 10 chunks
-      
+
       let audioChunkCount = 0;
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
@@ -932,7 +1027,7 @@ export async function setupSTTMode(
           const s = Math.max(-1, Math.min(1, inputData[i]));
           int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        
+
         // If WebSocket is open, send immediately
         if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
           try {
@@ -952,7 +1047,7 @@ export async function setupSTTMode(
           }
         }
       };
-      
+
       source.connect(processor);
       // Connect processor to a dummy destination to ensure it processes audio
       // Using a GainNode with gain 0 to avoid feedback but keep processor active
@@ -961,14 +1056,14 @@ export async function setupSTTMode(
       processor.connect(dummyGain);
       dummyGain.connect(audioContext.destination);
       audioProcessor = processor;
-      
+
       console.log('[STT] Audio processor set up, buffer size:', bufferSize, 'samples');
-      
+
       // Connect to Deepgram WebSocket via backend
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       const wsUrl = backendUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/api/stt/deepgram';
       deepgramWs = new WebSocket(wsUrl);
-      
+
       // Handle Deepgram transcripts
       deepgramWs.onmessage = async (event) => {
         try {
@@ -976,12 +1071,12 @@ export async function setupSTTMode(
           if (data.type === 'transcript' && data.text) {
             const transcript = data.text.trim();
             if (!transcript) return;
-            
+
             console.log('[STT] User said:', transcript);
-            
+
             // Capture timestamp immediately when transcript arrives (before any processing)
             const transcriptArrivalTime = Date.now();
-            
+
             // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
             // ignore this transcript to prevent duplicate processing
             if (currentSTTSession) {
@@ -997,7 +1092,12 @@ export async function setupSTTMode(
               // Update timestamp when we process a transcript (after passing the rapid interruption check)
               currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
             }
-            
+
+            // Update avatar to processing state (Orange eyes)
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('processing', false);
+            }
+
             // Generate new global Response ID for this user message → TTT → TTS cycle
             // Create transcript object with ID that will flow through the entire pipeline
             if (!currentSTTSession) {
@@ -1007,18 +1107,18 @@ export async function setupSTTMode(
               currentSTTSession.globalResponseId = 0;
             }
             const globalId = ++currentSTTSession.globalResponseId;
-            
+
             // Create transcript object with ID
             const transcriptObj: TranscriptObject = {
               text: transcript,
               id: globalId
             };
-            
+
             console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
-            
+
             // Stop current TTS playback if user interrupts (for all TTS providers)
             stopCurrentTTS();
-            
+
             // Get TTS provider to determine feedback method (synchronous check first)
             let ttsProvider: string | null = null;
             try {
@@ -1032,13 +1132,13 @@ export async function setupSTTMode(
             } catch (e) {
               // Will fallback below
             }
-            
+
             // For Deepgram TTS: Show visual "Thinking..." indicator instead of processing audio
             // Do this immediately if we have the provider from localStorage
             if (ttsProvider === 'deepgram' && onThinkingUpdate) {
               onThinkingUpdate(true);
             }
-            
+
             // If provider not found in localStorage, fetch from backend (async)
             // But don't wait - we'll check again before playing audio
             if (!ttsProvider) {
@@ -1063,7 +1163,7 @@ export async function setupSTTMode(
               // Default to gtts while fetching
               ttsProvider = 'gtts';
             }
-            
+
             // Start playing processing audio
             // Only for non-Deepgram TTS providers (to maintain backward compatibility)
             if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
@@ -1078,7 +1178,7 @@ export async function setupSTTMode(
                 console.warn('[STT] Error playing processing audio:', e);
               }
             }
-            
+
             // Get AI response - use streaming for Deepgram TTS, non-streaming for others
             if (ttsProvider === 'deepgram') {
               // Use streaming chat response for Deepgram TTS (low latency)
@@ -1086,11 +1186,11 @@ export async function setupSTTMode(
                 // Get or ensure Deepgram TTS WebSocket is ready
                 const deepgramTtsWs = currentSTTSession?.deepgramTtsWs;
                 const deepgramTtsAudioContext = currentSTTSession?.deepgramTtsAudioContext;
-                
+
                 if (!deepgramTtsWs || deepgramTtsWs.readyState !== WebSocket.OPEN) {
                   // If WebSocket not ready, fallback to non-streaming
                   console.warn('[STT] Deepgram TTS WebSocket not ready, falling back to non-streaming');
-            const assistantMessage = await getChatResponse(transcriptObj.text);
+                  const assistantMessage = await getChatResponse(transcriptObj.text);
                   if (onThinkingUpdate) {
                     onThinkingUpdate(false);
                   }
@@ -1101,12 +1201,12 @@ export async function setupSTTMode(
                 // Store transcript ID in closure for this TTS session
                 // This ID will be attached to all audio chunks from this response
                 const transcriptId = transcriptObj.id;
-                
+
                 // Store ID in session for TTS WebSocket handler to use
                 if (currentSTTSession) {
                   currentSTTSession.currentTtsResponseId = transcriptId;
                 }
-                
+
                 // Buffer for accumulating text chunks before sending to TTS
                 let textBuffer = '';
                 const SEND_EVERY = 60; // Same as in textToSpeech function
@@ -1115,7 +1215,7 @@ export async function setupSTTMode(
                 // Function to send text chunks to Deepgram TTS WebSocket
                 const sendTextChunk = (chunk: string) => {
                   textBuffer += chunk;
-                  
+
                   // Send first chunk early for low latency
                   if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
                     const toSend = textBuffer;
@@ -1138,13 +1238,13 @@ export async function setupSTTMode(
 
                 // Use shared queue for sequential audio playback (prevents overlap)
                 let playbackFinished = false;
-                
+
                 if (!deepgramTtsAudioContext) {
                   throw new Error('Deepgram TTS AudioContext not available');
                 }
 
                 const audioContext = deepgramTtsAudioContext;
-                
+
                 // Ensure shared queue exists
                 if (!currentSTTSession) {
                   throw new Error('STT session not available');
@@ -1155,7 +1255,7 @@ export async function setupSTTMode(
                 if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 }
-                
+
                 // Resume AudioContext if suspended
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
@@ -1166,7 +1266,7 @@ export async function setupSTTMode(
 
                 // Get streaming chat response (this will call sendTextChunk as chunks arrive)
                 const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
-                
+
                 // Send remaining buffer and flush signal after streaming completes
                 if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
                   deepgramTtsWs.send(JSON.stringify({
@@ -1191,13 +1291,15 @@ export async function setupSTTMode(
                   return new Promise<void>((resolve) => {
                     // Check if queue is empty and playback finished
                     const checkComplete = () => {
-                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
                       const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
-                      
-                      return playbackFinished && queueEmpty && notProcessing;
+
+                      // Removed playbackFinished from check as it wasn't being updated correctly
+                      // queueEmpty && notProcessing is sufficient to know client-side playback is done
+                      return queueEmpty && notProcessing;
                     };
-                    
+
                     // If already finished, resolve immediately
                     if (checkComplete()) {
                       resolve();
@@ -1221,7 +1323,12 @@ export async function setupSTTMode(
                 };
 
                 await waitForPlayback();
-                
+
+                // Update avatar to listening state (Yellow eyes) when speaking is done
+                if (onAvatarStateUpdate) {
+                  onAvatarStateUpdate('listening', false);
+                }
+
                 // Note: No cleanup needed - shared handler is persistent and doesn't need to be restored
 
               } catch (error: any) {
@@ -1243,29 +1350,29 @@ export async function setupSTTMode(
             } else {
               // Use non-streaming for other TTS providers
               const assistantMessage = await getChatResponse(transcript);
-              
+
               // Hide thinking indicator if using Deepgram TTS
               if (ttsProvider === 'deepgram' && onThinkingUpdate) {
                 onThinkingUpdate(false);
               }
-            
-            // Convert to speech
-            await textToSpeech(assistantMessage);
+
+              // Convert to speech
+              await textToSpeech(assistantMessage);
             }
           }
         } catch (e) {
           console.error('[STT] Error processing Deepgram transcript:', e);
         }
       };
-      
+
       deepgramWs.onerror = (error) => {
         console.error('[STT] Deepgram WebSocket error:', error);
       };
-      
+
       deepgramWs.onclose = () => {
         console.log('[STT] Deepgram WebSocket closed');
       };
-      
+
       // Wait for WebSocket to open and flush buffered audio
       await new Promise<void>((resolve, reject) => {
         if (deepgramWs) {
@@ -1297,17 +1404,17 @@ export async function setupSTTMode(
           reject(new Error('WebSocket not initialized'));
         }
       });
-      
+
     } else if (sttProvider === 'googlecloud') {
       // Use Google Cloud Speech-to-Text streaming STT
       console.log('[STT] Using Google Cloud STT');
-      
+
       // Create audio context for processing
       // Google Cloud Speech expects 16kHz LINEAR16 PCM (as per reference code)
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: 16000, // Google Cloud expects 16kHz
       });
-      
+
       // Resume AudioContext if suspended
       if (audioContext.state === 'suspended') {
         try {
@@ -1323,14 +1430,14 @@ export async function setupSTTMode(
       const bufferSize = 2048; // ~128ms at 16kHz (power of 2, good for real-time)
       const source = audioContext.createMediaStreamSource(mediaStream);
       const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-      
+
       // Buffer to store audio chunks until WebSocket is ready
       const audioBuffer: ArrayBuffer[] = [];
       const MAX_BUFFER_SIZE = 10; // Keep only last 10 chunks
-      
+
       let googleCloudWs: WebSocket | null = null;
       let audioChunkCount = 0;
-      
+
       // onaudioprocess fires continuously (every ~128ms at 16kHz with 2048 buffer)
       // This ensures continuous audio streaming to Google Cloud, including silence
       // Google Cloud requires continuous audio to prevent timeout
@@ -1343,7 +1450,7 @@ export async function setupSTTMode(
           const s = Math.max(-1, Math.min(1, inputData[i]));
           int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-        
+
         // Send audio chunks continuously (including silence) to keep Google Cloud stream alive
         // This matches the reference code behavior - continuous microphone capture
         if (googleCloudWs && googleCloudWs.readyState === WebSocket.OPEN) {
@@ -1364,7 +1471,7 @@ export async function setupSTTMode(
           }
         }
       };
-      
+
       source.connect(processor);
       // Connect processor to a dummy destination to ensure it processes audio
       const dummyGain = audioContext.createGain();
@@ -1372,14 +1479,146 @@ export async function setupSTTMode(
       processor.connect(dummyGain);
       dummyGain.connect(audioContext.destination);
       audioProcessor = processor;
-      
+
       console.log('[STT] Audio processor set up for Google Cloud, buffer size:', bufferSize, 'samples');
-      
+
       // Connect to Google Cloud STT WebSocket via backend
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       const wsUrl = backendUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/api/stt/googlecloud';
       googleCloudWs = new WebSocket(wsUrl);
-      
+
+      // Initialize Deepgram TTS WebSocket if selected (to enable streaming TTS with Google Cloud STT)
+      let ttsProvider = 'gtts';
+      try {
+        const stored = localStorage.getItem('adminSettings');
+        if (stored) {
+          const settings = JSON.parse(stored);
+          if (settings.ttsProvider) {
+            ttsProvider = settings.ttsProvider.toLowerCase();
+          }
+        }
+      } catch (e) { }
+
+      if (ttsProvider === 'deepgram') {
+        console.log('[STT] Initializing Deepgram TTS for Google Cloud STT mode');
+        const bkUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        const ttsWsUrl = bkUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/api/tts/deepgram';
+
+        const deepgramTtsWs = new WebSocket(ttsWsUrl);
+        deepgramTtsWs.binaryType = 'arraybuffer';
+
+        const deepgramTtsAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+          sampleRate: 48000
+        });
+
+        if (currentSTTSession) {
+          currentSTTSession.deepgramTtsWs = deepgramTtsWs;
+          currentSTTSession.deepgramTtsAudioContext = deepgramTtsAudioContext;
+          currentSTTSession.deepgramTtsNextPlayTime = deepgramTtsAudioContext.currentTime;
+          currentSTTSession.deepgramTtsAudioQueue = [];
+          currentSTTSession.deepgramTtsIsProcessingQueue = false;
+          currentSTTSession.deepgramTtsActiveSources = new Set();
+        }
+
+        deepgramTtsWs.onopen = async () => {
+          console.log('[Deepgram TTS] WebSocket connected (Google Cloud mode)');
+          if (deepgramTtsAudioContext.state === 'suspended') {
+            await deepgramTtsAudioContext.resume();
+          }
+        };
+
+        // Shared Audio Queue Processor
+        const processAudioQueueShared = async () => {
+          if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) return;
+          if (currentSTTSession.deepgramTtsIsProcessingQueue) return;
+
+          const queue = currentSTTSession.deepgramTtsAudioQueue;
+          if (queue.length === 0) {
+            currentSTTSession.deepgramTtsIsProcessingQueue = false;
+            return;
+          }
+
+          currentSTTSession.deepgramTtsIsProcessingQueue = true;
+
+          try {
+            const ac = currentSTTSession.deepgramTtsAudioContext;
+            if (!ac) { currentSTTSession.deepgramTtsIsProcessingQueue = false; return; }
+            if (ac.state === 'suspended') await ac.resume();
+
+            const globalId = currentSTTSession.globalResponseId || 0;
+            const chunkObj = queue.shift();
+
+            if (!chunkObj || chunkObj.id !== globalId) {
+              // Stale chunk
+              currentSTTSession.deepgramTtsIsProcessingQueue = false;
+              if (currentSTTSession.deepgramTtsAudioQueue) currentSTTSession.deepgramTtsAudioQueue.length = 0;
+              return;
+            }
+
+            const audioBuffer = ac.createBuffer(1, chunkObj.data.length, 48000);
+            audioBuffer.getChannelData(0).set(chunkObj.data);
+
+            const source = ac.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(ac.destination);
+
+            if (!currentSTTSession.deepgramTtsActiveSources) currentSTTSession.deepgramTtsActiveSources = new Set();
+            currentSTTSession.deepgramTtsActiveSources.add(source);
+
+            const currentTime = ac.currentTime;
+            if (!currentSTTSession.deepgramTtsNextPlayTime) currentSTTSession.deepgramTtsNextPlayTime = currentTime;
+            const playTime = Math.max(currentTime, currentSTTSession.deepgramTtsNextPlayTime);
+
+            source.start(playTime);
+
+            // Update Avatar State
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('speaking', true);
+            }
+
+            currentSTTSession.deepgramTtsNextPlayTime = playTime + audioBuffer.duration;
+
+            source.onended = () => {
+              if (currentSTTSession?.deepgramTtsActiveSources) currentSTTSession.deepgramTtsActiveSources.delete(source);
+              if (currentSTTSession) currentSTTSession.deepgramTtsIsProcessingQueue = false;
+              if (queue.length > 0) processAudioQueueShared();
+            };
+          } catch (e) {
+            console.error('[Deepgram TTS] processing error', e);
+            if (currentSTTSession) currentSTTSession.deepgramTtsIsProcessingQueue = false;
+            if (queue.length > 0) processAudioQueueShared();
+          }
+        };
+
+        deepgramTtsWs.onmessage = async (event) => {
+          if (!currentSTTSession) return;
+          try {
+            if (event.data instanceof ArrayBuffer) {
+              const int16Array = new Int16Array(event.data);
+              const float32Array = new Float32Array(int16Array.length);
+              for (let i = 0; i < int16Array.length; i++) float32Array[i] = int16Array[i] / 32768.0;
+
+              const chunkId = currentSTTSession.currentTtsResponseId;
+              const globalId = currentSTTSession.globalResponseId || 0;
+
+              if (chunkId === undefined || chunkId !== globalId) return;
+
+              const chunkObj = {
+                data: float32Array,
+                id: chunkId
+              };
+
+              if (currentSTTSession.deepgramTtsAudioQueue) {
+                currentSTTSession.deepgramTtsAudioQueue.push(chunkObj);
+                if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
+                  processAudioQueueShared();
+                }
+              }
+            }
+          } catch (e) { console.error('Deepgram TTS message error', e); }
+        };
+      }
+
       // Handle Google Cloud transcripts (same logic as Deepgram)
       googleCloudWs.onmessage = async (event) => {
         try {
@@ -1387,12 +1626,12 @@ export async function setupSTTMode(
           if (data.type === 'transcript' && data.text) {
             const transcript = data.text.trim();
             if (!transcript) return;
-            
+
             console.log('[STT] User said:', transcript);
-            
+
             // Capture timestamp immediately when transcript arrives (before any processing)
             const transcriptArrivalTime = Date.now();
-            
+
             // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
             // ignore this transcript to prevent duplicate processing
             if (currentSTTSession) {
@@ -1408,7 +1647,12 @@ export async function setupSTTMode(
               // Update timestamp when we process a transcript (after passing the rapid interruption check)
               currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
             }
-            
+
+            // Update avatar to processing state (Orange eyes)
+            if (onAvatarStateUpdate) {
+              onAvatarStateUpdate('processing', false);
+            }
+
             // Generate new global Response ID for this user message → TTT → TTS cycle
             if (!currentSTTSession) {
               return;
@@ -1417,18 +1661,18 @@ export async function setupSTTMode(
               currentSTTSession.globalResponseId = 0;
             }
             const globalId = ++currentSTTSession.globalResponseId;
-            
+
             // Create transcript object with ID
             const transcriptObj: TranscriptObject = {
               text: transcript,
               id: globalId
             };
-            
+
             console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
-            
+
             // Stop current TTS playback if user interrupts
             stopCurrentTTS();
-            
+
             // Get TTS provider to determine feedback method
             let ttsProvider: string | null = null;
             try {
@@ -1442,12 +1686,12 @@ export async function setupSTTMode(
             } catch (e) {
               // Will fallback below
             }
-            
+
             // For Deepgram TTS: Show visual "Thinking..." indicator
             if (ttsProvider === 'deepgram' && onThinkingUpdate) {
               onThinkingUpdate(true);
             }
-            
+
             // If provider not found in localStorage, fetch from backend
             if (!ttsProvider) {
               const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -1469,7 +1713,7 @@ export async function setupSTTMode(
                 });
               ttsProvider = 'gtts';
             }
-            
+
             // Start playing processing audio for non-Deepgram TTS providers
             if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
               try {
@@ -1483,14 +1727,14 @@ export async function setupSTTMode(
                 console.warn('[STT] Error playing processing audio:', e);
               }
             }
-            
+
             // Get AI response - use streaming for Deepgram TTS, non-streaming for others
             if (ttsProvider === 'deepgram') {
               // Use streaming chat response for Deepgram TTS (low latency)
               try {
                 const deepgramTtsWs = currentSTTSession?.deepgramTtsWs;
                 const deepgramTtsAudioContext = currentSTTSession?.deepgramTtsAudioContext;
-                
+
                 if (!deepgramTtsWs || deepgramTtsWs.readyState !== WebSocket.OPEN) {
                   console.warn('[STT] Deepgram TTS WebSocket not ready, falling back to non-streaming');
                   const assistantMessage = await getChatResponse(transcriptObj.text);
@@ -1505,14 +1749,14 @@ export async function setupSTTMode(
                 if (currentSTTSession) {
                   currentSTTSession.currentTtsResponseId = transcriptId;
                 }
-                
+
                 let textBuffer = '';
                 const SEND_EVERY = 60;
                 const MIN_FIRST_CHUNK = 20;
 
                 const sendTextChunk = (chunk: string) => {
                   textBuffer += chunk;
-                  
+
                   if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
                     const toSend = textBuffer;
                     textBuffer = '';
@@ -1531,13 +1775,13 @@ export async function setupSTTMode(
                 };
 
                 let playbackFinished = false;
-                
+
                 if (!deepgramTtsAudioContext) {
                   throw new Error('Deepgram TTS AudioContext not available');
                 }
 
                 const audioContext = deepgramTtsAudioContext;
-                
+
                 if (!currentSTTSession) {
                   throw new Error('STT session not available');
                 }
@@ -1547,13 +1791,13 @@ export async function setupSTTMode(
                 if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                 }
-                
+
                 if (audioContext.state === 'suspended') {
                   await audioContext.resume();
                 }
 
                 const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
-                
+
                 if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
                   deepgramTtsWs.send(JSON.stringify({
                     type: 'speak',
@@ -1572,12 +1816,13 @@ export async function setupSTTMode(
                 const waitForPlayback = () => {
                   return new Promise<void>((resolve) => {
                     const checkComplete = () => {
-                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
                       const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
-                      return playbackFinished && queueEmpty && notProcessing;
+                      // Removed playbackFinished check
+                      return queueEmpty && notProcessing;
                     };
-                    
+
                     if (checkComplete()) {
                       resolve();
                       return;
@@ -1599,6 +1844,11 @@ export async function setupSTTMode(
 
                 await waitForPlayback();
 
+                // Update avatar to listening state (Yellow eyes) when speaking is done
+                if (onAvatarStateUpdate) {
+                  onAvatarStateUpdate('listening', false);
+                }
+
               } catch (error: any) {
                 console.error('[STT] Error in streaming chat response:', error);
                 try {
@@ -1617,11 +1867,11 @@ export async function setupSTTMode(
             } else {
               // Use non-streaming for other TTS providers
               const assistantMessage = await getChatResponse(transcript);
-              
+
               if (ttsProvider === 'deepgram' && onThinkingUpdate) {
                 onThinkingUpdate(false);
               }
-            
+
               await textToSpeech(assistantMessage);
             }
           }
@@ -1629,15 +1879,15 @@ export async function setupSTTMode(
           console.error('[STT] Error processing Google Cloud transcript:', e);
         }
       };
-      
+
       googleCloudWs.onerror = (error) => {
         console.error('[STT] Google Cloud WebSocket error:', error);
       };
-      
+
       googleCloudWs.onclose = () => {
         console.log('[STT] Google Cloud WebSocket closed');
       };
-      
+
       // Wait for WebSocket to open and flush buffered audio
       await new Promise<void>((resolve, reject) => {
         if (googleCloudWs) {
@@ -1669,33 +1919,33 @@ export async function setupSTTMode(
           reject(new Error('WebSocket not initialized'));
         }
       });
-      
+
       // Store WebSocket reference (reuse deepgramWs variable name for consistency in session)
       deepgramWs = googleCloudWs;
-      
+
     } else {
       // Use Web Speech API (default)
       console.log('[STT] Using Web Speech API for STT');
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
-    }
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        throw new Error('Speech Recognition API is not supported in this browser. Please use Chrome or Edge.');
+      }
 
       recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
 
       // Create audio context for playback (Web Speech API mode)
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    
-    // Resume AudioContext if suspended (required for Android Chrome)
-    if (audioContext.state === 'suspended') {
-      try {
-        await audioContext.resume();
-        console.log('[STT] AudioContext resumed');
-      } catch (e) {
-        console.warn('[STT] Could not resume AudioContext on init:', e);
+
+      // Resume AudioContext if suspended (required for Android Chrome)
+      if (audioContext.state === 'suspended') {
+        try {
+          await audioContext.resume();
+          console.log('[STT] AudioContext resumed');
+        } catch (e) {
+          console.warn('[STT] Could not resume AudioContext on init:', e);
         }
       }
     }
@@ -1707,32 +1957,32 @@ export async function setupSTTMode(
     processingAudio.loop = true;
     processingAudio.volume = 0.4; // Set volume for better feedback
     processingAudio.preload = 'auto'; // Preload the audio for faster playback
-    
+
     // Track if processing audio is currently playing
     let isProcessingAudioPlaying = false;
-    
+
     // Set up error handling for processing audio
     processingAudio.onerror = (e) => {
       console.error('[STT] Processing audio error:', e);
       isProcessingAudioPlaying = false;
     };
-    
+
     processingAudio.oncanplaythrough = () => {
       console.log('[STT] Processing audio ready to play');
     };
-    
+
     processingAudio.onplay = () => {
       isProcessingAudioPlaying = true;
     };
-    
+
     processingAudio.onpause = () => {
       isProcessingAudioPlaying = false;
     };
-    
+
     processingAudio.onended = () => {
       isProcessingAudioPlaying = false;
     };
-    
+
     // Preload the audio by loading it immediately
     try {
       processingAudio.load();
@@ -1740,7 +1990,7 @@ export async function setupSTTMode(
     } catch (e) {
       console.warn('[STT] Could not preload processing audio:', e);
     }
-    
+
     // Set output device if available
     if (typeof (processingAudio as any).setSinkId === 'function' && outputDeviceId) {
       try {
@@ -1780,10 +2030,10 @@ export async function setupSTTMode(
     } catch (e) {
       // Will check backend below
     }
-    
+
     // If not in localStorage, fetch from backend (async, but don't wait - will initialize later if needed)
     if (!ttsProvider) {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
       fetch(`${backendUrl}/api/config`)
         .then(resp => {
           if (resp.ok) {
@@ -1803,7 +2053,7 @@ export async function setupSTTMode(
             currentSTTSession.deepgramTtsAudioQueue = [];
             currentSTTSession.deepgramTtsIsProcessingQueue = false;
             currentSTTSession.deepgramTtsActiveSources = new Set();
-            
+
             // Resume AudioContext if suspended
             if (deepgramAudioContext.state === 'suspended') {
               deepgramAudioContext.resume().catch((e) => {
@@ -1826,7 +2076,7 @@ export async function setupSTTMode(
       currentSTTSession.deepgramTtsAudioQueue = [];
       currentSTTSession.deepgramTtsIsProcessingQueue = false;
       currentSTTSession.deepgramTtsActiveSources = new Set();
-      
+
       // Resume AudioContext if suspended
       if (deepgramAudioContext.state === 'suspended') {
         deepgramAudioContext.resume().catch((e) => {
@@ -1838,7 +2088,7 @@ export async function setupSTTMode(
 
     // Function to send text to chat API and get response with retry logic
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-    
+
     // Streaming chat response function (only for Deepgram TTS)
     const getChatResponseStream = async (
       userMessage: string,
@@ -1909,7 +2159,7 @@ export async function setupSTTMode(
               if (line.startsWith('data: ')) {
                 try {
                   const data = JSON.parse(line.slice(6));
-                  
+
                   if (data.error) {
                     throw new Error(data.error);
                   }
@@ -1923,13 +2173,22 @@ export async function setupSTTMode(
                   if (data.done) {
                     // Stream complete
                     conversationHistory.push({ role: 'assistant', content: fullResponse });
-                    
+
+                    // Detect mood from assistant response and update avatar
                     // Detect mood from assistant response and update avatar
                     const detectedMood = detectMoodFromText(fullResponse);
-                    if (onAvatarStateUpdate) {
-                      onAvatarStateUpdate('processing', false, detectedMood);
+                    // REMOVED: Do NOT set 'processing' state here.
+                    // It overwrites the 'speaking' state if TTS has already started streaming.
+                    // The 'processing' state is already set when STT transcript is received.
+                    // The 'listening' state will be set when TTS finishes.
+                    if (onAvatarStateUpdate && detectedMood !== 'neutral') {
+                      // Only update mood if needed, but we can't update mood without state in current signature easily 
+                      // and passing current state is risky.
+                      // For now, let's skip this update to prevent breaking the speaking animation.
+                      // The mood can be passed during the 'speaking' updates if we improved the architecture,
+                      // but for now stability of 'speaking' state is more important.
                     }
-                    
+
                     // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
@@ -1961,7 +2220,7 @@ export async function setupSTTMode(
         } catch (error: any) {
           if (timeoutId) clearTimeout(timeoutId);
           lastError = error;
-          
+
           // Retry on network errors, timeout, or abort
           const isRetryable = (
             error.name === 'TypeError' ||
@@ -1982,7 +2241,7 @@ export async function setupSTTMode(
 
       throw lastError || new Error('Chat API error: All retry attempts failed');
     };
-    
+
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
@@ -2002,7 +2261,7 @@ export async function setupSTTMode(
           // Create timeout controller for compatibility
           const controller = new AbortController();
           timeoutId = setTimeout(() => controller.abort(), 35000);
-          
+
           const response = await fetch(`${backendUrl}/api/chat`, {
             method: 'POST',
             headers: {
@@ -2014,7 +2273,7 @@ export async function setupSTTMode(
             }),
             signal: controller.signal,
           });
-          
+
           if (timeoutId) clearTimeout(timeoutId);
 
           if (!response.ok) {
@@ -2031,13 +2290,13 @@ export async function setupSTTMode(
           const data = await response.json();
           const assistantMessage = data.response || data.message || '';
           conversationHistory.push({ role: 'assistant', content: assistantMessage });
-          
+
           // Detect mood from assistant response and update avatar
           const detectedMood = detectMoodFromText(assistantMessage);
           if (onAvatarStateUpdate) {
             onAvatarStateUpdate('processing', false, detectedMood);
           }
-          
+
           // Update UI
           if (onConversationUpdate) {
             onConversationUpdate([...conversationHistory]);
@@ -2048,14 +2307,14 @@ export async function setupSTTMode(
           lastError = error;
           // Retry on network errors, timeout, or abort (which indicates timeout)
           const isRetryable = (
-            error.name === 'TypeError' || 
-            error.name === 'TimeoutError' || 
+            error.name === 'TypeError' ||
+            error.name === 'TimeoutError' ||
             error.name === 'AbortError' ||
             error.message?.includes('Network') ||
             error.message?.includes('fetch') ||
             (error.message && error.message.includes('Network error'))
           );
-          
+
           if (isRetryable && attempt < 2) {
             await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
             continue;
@@ -2071,9 +2330,9 @@ export async function setupSTTMode(
     // Function to stop current TTS playback (for interruption handling)
     const stopCurrentTTS = () => {
       if (!currentSTTSession) return;
-      
+
       console.log('[TTS] Stopping current TTS playback due to user interruption');
-      
+
       // Stop Deepgram TTS playback
       // Stop all active audio sources
       if (currentSTTSession.deepgramTtsActiveSources) {
@@ -2087,24 +2346,24 @@ export async function setupSTTMode(
         });
         currentSTTSession.deepgramTtsActiveSources.clear();
       }
-      
+
       // Clear audio queue
       if (currentSTTSession.deepgramTtsAudioQueue) {
         currentSTTSession.deepgramTtsAudioQueue.length = 0;
       }
-      
+
       // Reset processing flag to allow new processing to start immediately
       currentSTTSession.deepgramTtsIsProcessingQueue = false;
-      
+
       // Reset next play time to allow immediate playback of new response
       currentSTTSession.deepgramTtsNextPlayTime = 0;
-      
+
       // Note: Global Response ID increment is handled by the caller (when transcript arrives)
       // This ensures ID increments only once per user message, not every time stopCurrentTTS() is called
-      
+
       // Send flush signal to Deepgram TTS to stop current generation
-      if (currentSTTSession.deepgramTtsWs && 
-          currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
+      if (currentSTTSession.deepgramTtsWs &&
+        currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
         try {
           currentSTTSession.deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
           console.log('[TTS] Sent flush signal to stop current TTS generation');
@@ -2112,7 +2371,7 @@ export async function setupSTTMode(
           console.warn('[TTS] Error sending flush signal:', e);
         }
       }
-      
+
       // Stop other TTS providers (gTTS, OpenAI, Edge TTS) - stop HTMLAudioElement playback
       if (currentSTTSession.currentTTSAudioElement) {
         try {
@@ -2152,7 +2411,7 @@ export async function setupSTTMode(
             console.warn('[TTS] Error stopping processing gain:', e);
           }
         }
-        
+
         // Stop HTMLAudioElement processing audio immediately
         // Don't clear src - just pause and reset (prevents state issues and cache problems)
         if (currentSTTSession.processingAudio) {
@@ -2165,14 +2424,14 @@ export async function setupSTTMode(
           } catch (e) {
             console.warn('[TTS] Error stopping processing audio:', e);
           }
-          }
         }
-        
+      }
+
       // Hide thinking indicator when TTS starts (for Deepgram TTS)
       if (onThinkingUpdate) {
         onThinkingUpdate(false);
       }
-      
+
       // Resume AudioContext if suspended (required for Android Chrome)
       if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
         try {
@@ -2181,12 +2440,12 @@ export async function setupSTTMode(
           console.warn('[TTS] Could not resume AudioContext:', e);
         }
       }
-      
+
       try {
         // Get TTS provider from admin settings (localStorage) or backend as fallback
         let ttsProvider: string | null = null;
         let hasAdminSettings = false;
-        
+
         try {
           const stored = localStorage.getItem('adminSettings');
           if (stored) {
@@ -2200,10 +2459,10 @@ export async function setupSTTMode(
         } catch (e) {
           console.warn('[TTS] Error reading admin settings, using backend default...', e);
         }
-        
+
         // Fallback to backend config if admin settings not available
         if (!hasAdminSettings || !ttsProvider) {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
           try {
             const resp = await fetch(`${backendUrl}/api/config`);
             if (resp.ok) {
@@ -2218,12 +2477,12 @@ export async function setupSTTMode(
             ttsProvider = 'gtts'; // Final fallback
           }
         }
-        
+
         // Ensure we have a valid provider
         if (!ttsProvider) {
           ttsProvider = 'gtts';
         }
-        
+
         // Handle Deepgram TTS (WebSocket streaming, low latency)
         if (ttsProvider === 'deepgram') {
           return new Promise<void>((resolve, reject) => {
@@ -2240,24 +2499,24 @@ export async function setupSTTMode(
                 console.log('[Deepgram TTS] Generated Response ID for direct call:', ttsId);
               }
             }
-            
+
             // Get or create persistent WebSocket connection
             let deepgramWs: WebSocket | null = null;
             let audioContext: AudioContext | null = null;
-            
+
             // Check if we have an existing connection in the session
             if (currentSTTSession?.deepgramTtsWs && currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
               deepgramWs = currentSTTSession.deepgramTtsWs;
               audioContext = currentSTTSession.deepgramTtsAudioContext || null;
               console.log('[Deepgram TTS] Reusing existing WebSocket connection');
-              
+
               // Ensure AudioContext is running
               if (audioContext && audioContext.state === 'suspended') {
                 audioContext.resume().catch((e) => {
                   console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
                 });
               }
-              
+
               // Ensure nextPlayTime is initialized for first playback
               if (currentSTTSession && (!currentSTTSession.deepgramTtsNextPlayTime || currentSTTSession.deepgramTtsNextPlayTime === 0)) {
                 if (audioContext) {
@@ -2270,24 +2529,24 @@ export async function setupSTTMode(
               // Create new connection
               const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
               const wsUrl = backendUrl.replace(/^http/, 'ws') + '/api/tts/deepgram';
-              
+
               // Create AudioContext for PCM playback (48kHz, mono, 16-bit linear PCM)
               audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
                 sampleRate: 48000
               });
-              
+
               // Resume AudioContext if suspended
               if (audioContext.state === 'suspended') {
                 audioContext.resume().catch((e) => {
                   console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
                 });
               }
-              
+
               // Connect to Deepgram TTS WebSocket
               // Set binaryType to 'arraybuffer' to receive PCM audio as ArrayBuffer
               deepgramWs = new WebSocket(wsUrl);
               deepgramWs.binaryType = 'arraybuffer';
-              
+
               // Store in session for reuse
               if (currentSTTSession) {
                 currentSTTSession.deepgramTtsWs = deepgramWs;
@@ -2299,7 +2558,7 @@ export async function setupSTTMode(
                 currentSTTSession.deepgramTtsIsProcessingQueue = false; // Initialize processing flag
                 currentSTTSession.deepgramTtsActiveSources = new Set(); // Initialize active sources tracking
               }
-              
+
               // Wait a bit after WebSocket opens to ensure connection is stable
               deepgramWs.onopen = async () => {
                 console.log('[Deepgram TTS] WebSocket connected (new connection)');
@@ -2314,7 +2573,7 @@ export async function setupSTTMode(
                   await audioContext.resume();
                 }
               };
-              
+
               // Set up shared message handler that checks Response ID dynamically
               // This avoids handler conflicts when multiple responses are in flight
               // Define processAudioQueue outside to avoid closure issues - it always checks current Response ID
@@ -2322,27 +2581,27 @@ export async function setupSTTMode(
                 if (!currentSTTSession || !currentSTTSession.deepgramTtsAudioQueue) {
                   return;
                 }
-                
+
                 // Prevent concurrent processing
                 if (currentSTTSession.deepgramTtsIsProcessingQueue) {
                   return;
                 }
-                
+
                 const queue = currentSTTSession.deepgramTtsAudioQueue;
                 if (queue.length === 0) {
                   currentSTTSession.deepgramTtsIsProcessingQueue = false;
                   return;
                 }
-                
+
                 currentSTTSession.deepgramTtsIsProcessingQueue = true;
-                
+
                 try {
                   const audioContext = currentSTTSession.deepgramTtsAudioContext;
                   if (!audioContext) {
                     currentSTTSession.deepgramTtsIsProcessingQueue = false;
                     return;
                   }
-                  
+
                   if (audioContext.state === 'suspended') {
                     await audioContext.resume();
                   }
@@ -2359,7 +2618,7 @@ export async function setupSTTMode(
                   // CRITICAL: Validate chunk ID against global ID right before playback
                   // This ensures we don't play stale chunks from interrupted responses
                   if (chunkObj.id !== globalId) {
-                    console.log('[Deepgram TTS] Discarding stale chunk before playback - ID mismatch:', 
+                    console.log('[Deepgram TTS] Discarding stale chunk before playback - ID mismatch:',
                       'chunk ID:', chunkObj.id, 'global ID:', globalId);
                     currentSTTSession.deepgramTtsIsProcessingQueue = false;
                     // Clear remaining stale chunks - they belong to old/interrupted response
@@ -2395,7 +2654,7 @@ export async function setupSTTMode(
                   const nextPlayTime = currentSTTSession.deepgramTtsNextPlayTime;
                   const playTime = Math.max(currentTime, nextPlayTime);
                   source.start(playTime);
-                  
+
                   // Update avatar: TTS is now speaking (Deepgram streaming)
                   // It's safe to set this on each chunk; color doesn't change per chunk.
                   if (onAvatarStateUpdate) {
@@ -2412,12 +2671,12 @@ export async function setupSTTMode(
                     if (currentSTTSession && currentSTTSession.deepgramTtsActiveSources) {
                       currentSTTSession.deepgramTtsActiveSources.delete(source);
                     }
-                    
+
                     // Mark processing as done
                     if (currentSTTSession) {
                       currentSTTSession.deepgramTtsIsProcessingQueue = false;
                     }
-                    
+
                     // Process next chunk if available
                     // Response ID validation happens at the start of processAudioQueueShared()
                     // It will check if Response ID changed and stop if needed
@@ -2437,10 +2696,10 @@ export async function setupSTTMode(
                   }
                 }
               };
-              
+
               deepgramWs.onmessage = async (event) => {
                 if (!currentSTTSession) return;
-                
+
                 try {
                   if (event.data instanceof ArrayBuffer) {
                     // Convert ArrayBuffer to Float32Array (PCM audio)
@@ -2453,15 +2712,15 @@ export async function setupSTTMode(
                     // Get the current TTS response ID that was stored when text was sent
                     const chunkId = currentSTTSession.currentTtsResponseId;
                     const globalId = currentSTTSession.globalResponseId || 0;
-                    
+
                     // CRITICAL: Validate ID before adding to queue
                     // If chunk ID doesn't match global ID, this chunk is stale (user interrupted)
                     if (chunkId === undefined || chunkId !== globalId) {
-                      console.log('[Deepgram TTS] Discarding stale audio chunk - ID mismatch:', 
+                      console.log('[Deepgram TTS] Discarding stale audio chunk - ID mismatch:',
                         'chunk ID:', chunkId, 'global ID:', globalId);
                       return; // Discard stale chunk
                     }
-                    
+
                     // Create audio chunk object with ID
                     const chunkObj: AudioChunkObject = {
                       data: float32Array,
@@ -2471,7 +2730,7 @@ export async function setupSTTMode(
                     // Add to shared queue - ID already validated
                     if (currentSTTSession.deepgramTtsAudioQueue) {
                       currentSTTSession.deepgramTtsAudioQueue.push(chunkObj);
-                      
+
                       // Start processing queue if not already processing
                       if (!currentSTTSession.deepgramTtsIsProcessingQueue) {
                         processAudioQueueShared();
@@ -2496,7 +2755,7 @@ export async function setupSTTMode(
                   console.error('[Deepgram TTS] Error processing message:', e);
                 }
               };
-              
+
               // Handle reconnection on close
               deepgramWs.onclose = (event) => {
                 console.log('[Deepgram TTS] WebSocket closed', event.code, event.reason);
@@ -2505,7 +2764,7 @@ export async function setupSTTMode(
                   currentSTTSession.deepgramTtsWs = null;
                 }
               };
-              
+
               deepgramWs.onerror = (error) => {
                 console.error('[Deepgram TTS] WebSocket error:', error);
                 // Clear from session on error
@@ -2514,12 +2773,12 @@ export async function setupSTTMode(
                 }
               };
             }
-            
+
             // Ensure AudioContext is available
             if (!audioContext && currentSTTSession?.deepgramTtsAudioContext) {
               audioContext = currentSTTSession.deepgramTtsAudioContext;
             }
-            
+
             if (!audioContext) {
               audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
                 sampleRate: 48000
@@ -2528,38 +2787,38 @@ export async function setupSTTMode(
                 currentSTTSession.deepgramTtsAudioContext = audioContext;
               }
             }
-            
+
             // Resume AudioContext if suspended
             if (audioContext.state === 'suspended') {
               audioContext.resume().catch((e) => {
                 console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
               });
             }
-            
+
             // Wait for WebSocket to be ready (if new connection)
             const sendTextWhenReady = async () => {
               if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
                 // Small delay to ensure connection is fully stable before sending data
                 // This prevents distortion on first playback
                 await new Promise(resolve => setTimeout(resolve, 150));
-                
+
                 // Ensure AudioContext is running before sending
                 if (audioContext && audioContext.state === 'suspended') {
                   await audioContext.resume();
                 }
-                
+
                 // Send text to Deepgram with smaller chunks for low latency
                 // Reduced from 180 to 50-80 chars to start TTS faster
                 const SEND_EVERY = 60; // characters per chunk (optimized for low latency)
                 const MIN_FIRST_CHUNK = 20; // Send first chunk even smaller for immediate start
                 let buffer = '';
                 let isFirstChunk = true;
-                
+
                 const sendChunk = (force: boolean = false) => {
-                  const shouldSend = force || 
+                  const shouldSend = force ||
                     (isFirstChunk && buffer.length >= MIN_FIRST_CHUNK) ||
                     (!isFirstChunk && buffer.length >= SEND_EVERY);
-                  
+
                   if (shouldSend && buffer.length > 0) {
                     if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
                       deepgramWs.send(JSON.stringify({
@@ -2572,7 +2831,7 @@ export async function setupSTTMode(
                     isFirstChunk = false;
                   }
                 };
-                
+
                 // Process text character by character for immediate streaming
                 for (let i = 0; i < text.length; i++) {
                   buffer += text[i];
@@ -2583,7 +2842,7 @@ export async function setupSTTMode(
                     sendChunk();
                   }
                 }
-                
+
                 // Send remaining buffer and flush
                 sendChunk(true); // Force send remaining
                 if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
@@ -2605,7 +2864,7 @@ export async function setupSTTMode(
                 reject(new Error('Deepgram TTS WebSocket is not available'));
               }
             };
-            
+
             // Send text immediately if connection is ready, otherwise wait
             if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
               sendTextWhenReady().then(() => resolve()).catch(reject);
@@ -2628,10 +2887,10 @@ export async function setupSTTMode(
               reject(new Error('Failed to create Deepgram TTS WebSocket'));
               return;
             }
-            
+
             // Use shared queue for sequential audio playback (prevents overlap)
             let playbackFinished = false;
-            
+
             // Ensure shared queue exists
             if (!currentSTTSession) {
               reject(new Error('STT session not available'));
@@ -2643,17 +2902,17 @@ export async function setupSTTMode(
             if (currentSTTSession.deepgramTtsIsProcessingQueue === undefined) {
               currentSTTSession.deepgramTtsIsProcessingQueue = false;
             }
-            
+
             // Resume AudioContext if suspended
             if (audioContext && audioContext.state === 'suspended') {
               audioContext.resume().catch((e) => {
                 console.warn('[Deepgram TTS] Could not resume AudioContext:', e);
               });
             }
-            
+
             // Note: Message handler is set up once when WebSocket is created (shared handler)
             // The shared handler validates IDs at queue insertion and playback time
-            
+
             const cleanup = () => {
               // Don't close WebSocket - keep it open for reuse
               // Don't close AudioContext - it's shared across requests
@@ -2664,7 +2923,7 @@ export async function setupSTTMode(
                 onAvatarStateUpdate('idle', false);
               }
             };
-            
+
             // Set up message handler (only if not already set up for new connections)
             if (!deepgramWs.onmessage) {
               deepgramWs.onmessage = async (event) => {
@@ -2678,10 +2937,10 @@ export async function setupSTTMode(
                       console.log('[Deepgram TTS] Playback finished signal received');
                       playbackFinished = true;
                       // Check if queue is empty and not processing
-                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
                       const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
-                      
+
                       if (queueEmpty && notProcessing) {
                         // All audio played, cleanup and resolve
                         cleanup();
@@ -2689,12 +2948,12 @@ export async function setupSTTMode(
                       } else {
                         // Still processing queue, wait for it to finish
                         const checkComplete = () => {
-                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                            currentSTTSession.deepgramTtsAudioQueue.length === 0;
                           const notProc = !currentSTTSession?.deepgramTtsIsProcessingQueue;
                           return qEmpty && notProc;
                         };
-                        
+
                         const waitInterval = setInterval(() => {
                           if (checkComplete()) {
                             clearInterval(waitInterval);
@@ -2702,7 +2961,7 @@ export async function setupSTTMode(
                             resolve();
                           }
                         }, 50);
-                        
+
                         // Timeout after 5 seconds
                         setTimeout(() => {
                           clearInterval(waitInterval);
@@ -2732,10 +2991,10 @@ export async function setupSTTMode(
                     if (data.type === 'playback_finished') {
                       playbackFinished = true;
                       // Check if queue is empty and not processing
-                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                      const queueEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
                       const notProcessing = !currentSTTSession?.deepgramTtsIsProcessingQueue;
-                      
+
                       if (queueEmpty && notProcessing) {
                         // All audio played, cleanup and resolve
                         cleanup();
@@ -2744,12 +3003,12 @@ export async function setupSTTMode(
                       } else {
                         // Still processing queue, wait for it to finish
                         const checkComplete = () => {
-                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue || 
-                                        currentSTTSession.deepgramTtsAudioQueue.length === 0;
+                          const qEmpty = !currentSTTSession?.deepgramTtsAudioQueue ||
+                            currentSTTSession.deepgramTtsAudioQueue.length === 0;
                           const notProc = !currentSTTSession?.deepgramTtsIsProcessingQueue;
                           return qEmpty && notProc;
                         };
-                        
+
                         const waitInterval = setInterval(() => {
                           if (checkComplete()) {
                             clearInterval(waitInterval);
@@ -2758,7 +3017,7 @@ export async function setupSTTMode(
                             resolve();
                           }
                         }, 50);
-                        
+
                         // Timeout after 5 seconds
                         setTimeout(() => {
                           clearInterval(waitInterval);
@@ -2775,7 +3034,7 @@ export async function setupSTTMode(
               };
               deepgramWs.addEventListener('message', tempHandler);
             }
-            
+
             // Set up error handler (only for new connections)
             if (!deepgramWs.onerror) {
               deepgramWs.onerror = (error) => {
@@ -2783,7 +3042,7 @@ export async function setupSTTMode(
                 // Don't reject - connection might recover
               };
             }
-            
+
             // Timeout safety (30 seconds for longer responses)
             setTimeout(() => {
               if (!playbackFinished) {
@@ -2794,49 +3053,49 @@ export async function setupSTTMode(
             }, 30000);
           });
         }
-        
+
         // Handle Web Speech API (browser-native, no backend call needed)
         if (ttsProvider === 'webspeech') {
           console.log('[TTS PATH] Using Web Speech API TTS');
           if (!('speechSynthesis' in window)) {
             throw new Error('Web Speech API is not supported in this browser');
           }
-          
+
           // Cancel any current speech and wait a moment to ensure it's fully cancelled
           // This prevents duplicate speech when called multiple times quickly
           window.speechSynthesis.cancel();
           // Small delay to ensure cancellation is processed before speaking
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           const utterance = new SpeechSynthesisUtterance(text);
           utterance.rate = 1.0;
           utterance.pitch = 1.0;
           utterance.volume = 1.0;
-          
+
           // Helper function to get voices (handles async loading)
           const getVoices = (): SpeechSynthesisVoice[] => {
             return window.speechSynthesis.getVoices();
           };
-          
+
           // Try to find a good voice (prefer Google or Microsoft voices)
           let voices = getVoices();
-          
+
           // If no voices available, wait for voiceschanged event (browsers load voices asynchronously)
           if (voices.length === 0) {
             return new Promise<void>((resolve, reject) => {
               const onVoicesChanged = () => {
                 window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
                 voices = getVoices();
-                const preferredVoice = voices.find(v => 
-                  v.name.includes('Google') || 
+                const preferredVoice = voices.find(v =>
+                  v.name.includes('Google') ||
                   v.name.includes('Microsoft') ||
                   v.name.includes('Samantha')
                 ) || voices[0];
-                
+
                 if (preferredVoice) {
                   utterance.voice = preferredVoice;
                 }
-                
+
                 // Set up speech completion handlers
                 utterance.onstart = () => {
                   console.log('[TTS SPEAKING] WebSpeech (voiceschanged path) onstart');
@@ -2864,26 +3123,26 @@ export async function setupSTTMode(
                     reject(new Error(`Web Speech API error: ${e.error}`));
                   }
                 };
-                
+
                 window.speechSynthesis.speak(utterance);
               };
-              
+
               window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged);
-              
+
               // Fallback timeout in case voiceschanged never fires
               setTimeout(() => {
                 window.speechSynthesis.removeEventListener('voiceschanged', onVoicesChanged);
                 voices = getVoices();
-                const preferredVoice = voices.find(v => 
-                  v.name.includes('Google') || 
+                const preferredVoice = voices.find(v =>
+                  v.name.includes('Google') ||
                   v.name.includes('Microsoft') ||
                   v.name.includes('Samantha')
                 ) || voices[0];
-                
+
                 if (preferredVoice) {
                   utterance.voice = preferredVoice;
                 }
-                
+
                 utterance.onend = () => {
                   resolve();
                 };
@@ -2895,23 +3154,23 @@ export async function setupSTTMode(
                     reject(new Error(`Web Speech API error: ${e.error}`));
                   }
                 };
-                
+
                 window.speechSynthesis.speak(utterance);
               }, 1000);
             });
           }
-          
+
           // Voices are available, use them directly
-          const preferredVoice = voices.find(v => 
-            v.name.includes('Google') || 
+          const preferredVoice = voices.find(v =>
+            v.name.includes('Google') ||
             v.name.includes('Microsoft') ||
             v.name.includes('Samantha')
           ) || voices[0];
-          
+
           if (preferredVoice) {
             utterance.voice = preferredVoice;
           }
-          
+
           // Return a promise that resolves when speech completes
           return new Promise<void>((resolve, reject) => {
             utterance.onstart = () => {
@@ -2940,11 +3199,11 @@ export async function setupSTTMode(
                 reject(new Error(`Web Speech API error: ${e.error}`));
               }
             };
-            
+
             window.speechSynthesis.speak(utterance);
           });
         }
-        
+
         // For other providers (gtts, openai), use backend API
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
         console.log('[TTS PATH] Using backend /api/tts TTS provider:', ttsProvider);
@@ -2965,7 +3224,7 @@ export async function setupSTTMode(
         }
 
         const audioBlob = await response.blob();
-        
+
         // CRITICAL: Validate blob before creating URL to prevent ERR_FILE_NOT_FOUND
         if (!audioBlob || audioBlob.size === 0) {
           console.error('[TTS] Invalid audio blob received:', {
@@ -2975,15 +3234,15 @@ export async function setupSTTMode(
           });
           throw new Error('Invalid or empty audio blob received from server');
         }
-        
+
         // Validate blob type
         if (!audioBlob.type || !audioBlob.type.startsWith('audio/')) {
           console.warn('[TTS] Unexpected blob type:', audioBlob.type, '- expected audio/*');
           // Still proceed, but log warning
         }
-        
+
         const audioUrl = URL.createObjectURL(audioBlob);
-        
+
         if (audioEl) {
           // Stop any currently playing audio first (critical for Android)
           try {
@@ -2999,32 +3258,32 @@ export async function setupSTTMode(
           } catch (e) {
             console.warn('[TTS] Error clearing previous audio:', e);
           }
-          
+
           // Small delay to ensure previous audio is fully stopped (Android requirement)
           await new Promise(resolve => setTimeout(resolve, 50));
-          
+
           // CRITICAL: Validate audioUrl before setting src
           if (!audioUrl || audioUrl === '' || audioUrl === 'undefined') {
             console.error('[TTS] Invalid audioUrl, cannot play:', audioUrl);
             throw new Error('Invalid audio URL');
           }
-          
+
           // Set up new audio source
           audioEl.src = audioUrl;
           audioEl.preload = 'auto';
-          
+
           // CRITICAL: Verify src was set correctly
           if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href) {
             console.error('[TTS] Audio src not set correctly:', audioEl.src);
             throw new Error('Audio source not set correctly');
           }
-          
+
           // Wait for audio to be ready before playing (critical for Android Chrome)
           await new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
               reject(new Error('Audio loading timeout'));
             }, 10000); // 10 second timeout
-            
+
             const onCanPlayThrough = () => {
               clearTimeout(timeout);
               audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
@@ -3032,12 +3291,12 @@ export async function setupSTTMode(
               // Small delay for Android Chrome to process audio setup
               setTimeout(() => resolve(), 50);
             };
-            
+
             const onError = (e: Event) => {
               clearTimeout(timeout);
               audioEl?.removeEventListener('canplaythrough', onCanPlayThrough);
               audioEl?.removeEventListener('error', onError);
-              
+
               // Log detailed error information
               if (audioEl) {
                 const errorInfo = {
@@ -3052,10 +3311,10 @@ export async function setupSTTMode(
                 };
                 console.error('[TTS] Audio loading error in promise:', errorInfo);
               }
-              
+
               reject(new Error('Audio loading error'));
             };
-            
+
             if (audioEl.readyState >= 3) {
               // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
               clearTimeout(timeout);
@@ -3067,7 +3326,7 @@ export async function setupSTTMode(
               audioEl.load(); // Explicitly load the audio
             }
           });
-          
+
           // Ensure AudioContext is resumed before playing (Android Chrome requirement)
           if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
             try {
@@ -3076,7 +3335,7 @@ export async function setupSTTMode(
               console.warn('[TTS] Could not resume AudioContext before play:', e);
             }
           }
-          
+
           // Set up event handlers to prevent interruptions (Android audio focus handling)
           let isPlaying = false;
           let pauseResumeAttempts = 0;
@@ -3084,31 +3343,31 @@ export async function setupSTTMode(
           let pauseResumeTimeout: ReturnType<typeof setTimeout> | null = null;
           let lastPauseTime = 0;
           const PAUSE_DEBOUNCE_MS = 500; // Debounce pause/resume to prevent beep sounds
-          
+
           const handlePause = async () => {
             const now = Date.now();
-            
+
             // CRITICAL: Don't handle pause if audio has ended - this prevents beeps after playback
             if (!audioEl || audioEl.ended) {
               return;
             }
-            
+
             // Debounce: ignore pauses that happen too quickly after the last one
             if (now - lastPauseTime < PAUSE_DEBOUNCE_MS) {
               return;
             }
             lastPauseTime = now;
-            
+
             // Clear any pending resume attempts
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
-            
+
             // Only resume if we were actually playing and it wasn't intentional
             if (audioEl && !audioEl.ended && isPlaying && pauseResumeAttempts < maxResumeAttempts) {
               pauseResumeAttempts++;
-              
+
               // Debounced resume - wait a bit before attempting to resume
               pauseResumeTimeout = setTimeout(async () => {
                 try {
@@ -3117,7 +3376,7 @@ export async function setupSTTMode(
                     pauseResumeTimeout = null;
                     return;
                   }
-                  
+
                   if (audioEl && !audioEl.ended && audioEl.paused && isPlaying) {
                     // Ensure AudioContext is resumed
                     if (currentSTTSession?.audioContext && currentSTTSession.audioContext.state === 'suspended') {
@@ -3127,10 +3386,10 @@ export async function setupSTTMode(
                         console.warn('[TTS] Could not resume AudioContext:', e);
                       }
                     }
-                    
+
                     // Small delay before resuming to let Android settle
                     await new Promise(resolve => setTimeout(resolve, 100));
-                    
+
                     if (audioEl && !audioEl.ended && audioEl.paused) {
                       await audioEl.play();
                       isPlaying = true;
@@ -3144,7 +3403,7 @@ export async function setupSTTMode(
               }, PAUSE_DEBOUNCE_MS);
             }
           };
-          
+
           const handlePlay = () => {
             isPlaying = true;
             pauseResumeAttempts = 0; // Reset attempts on successful play
@@ -3160,7 +3419,7 @@ export async function setupSTTMode(
               onAvatarStateUpdate('speaking', true);
             }
           };
-          
+
           const handleEnded = () => {
             isPlaying = false;
             // Clear any pending resume attempts
@@ -3197,7 +3456,7 @@ export async function setupSTTMode(
               }
             }, 500); // Increased delay to ensure browser is completely done with the blob
           };
-          
+
           // Add event listeners for audio playback
           audioEl.addEventListener('pause', handlePause);
           audioEl.addEventListener('play', handlePlay);
@@ -3205,13 +3464,13 @@ export async function setupSTTMode(
           audioEl.addEventListener('error', (e) => {
             const errorCode = audioEl.error?.code;
             const errorMessage = audioEl.error?.message;
-            
+
             // Ignore errors when src is empty or matches page URL (intentional disconnect/cleanup)
             if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || audioEl.src === window.location.origin + '/') {
               // This is likely an intentional disconnect, don't log as error
               return;
             }
-            
+
             // Error code 2 (MEDIA_ERR_NETWORK) can be non-critical if audio still plays
             // It often happens due to blob URL timing issues but doesn't prevent playback
             if (errorCode === 2) {
@@ -3224,7 +3483,7 @@ export async function setupSTTMode(
               // Don't revoke blob URL for network errors - might still be needed
               return;
             }
-            
+
             // Error code 4 (MEDIA_ERR_SRC_NOT_SUPPORTED/Format error) on blob URLs
             // Often happens during disconnect/cleanup when blob URL is revoked or cleared
             // This is usually non-critical and shouldn't be shown to users
@@ -3240,19 +3499,19 @@ export async function setupSTTMode(
               // Don't log as error - this is expected during cleanup
               return;
             }
-            
+
             // Log other errors as critical (only real errors that need attention)
             console.error('[TTS] Audio error:', {
               code: errorCode,
               message: errorMessage,
               src: audioEl.src
             });
-            
+
             // Reset avatar to idle on error
             if (onAvatarStateUpdate) {
               onAvatarStateUpdate('idle', false);
             }
-            
+
             // CRITICAL: Clean up on error to prevent memory leaks
             // Only revoke if it's a permanent error
             if (audioEl.error) {
@@ -3270,13 +3529,13 @@ export async function setupSTTMode(
               }
             }
           });
-          
+
           // CRITICAL: Final validation before playing - ensure src is valid
           if (!audioEl.src || audioEl.src === '' || audioEl.src === window.location.href || !audioEl.src.startsWith('blob:') && !audioEl.src.startsWith('http')) {
             console.error('[TTS] Cannot play - invalid src:', audioEl.src);
             throw new Error('Invalid audio source - cannot play');
           }
-          
+
           // Play the audio
           try {
             isPlaying = true;
@@ -3318,7 +3577,7 @@ export async function setupSTTMode(
               throw playError;
             }
           }
-          
+
           // Note: Cleanup is now handled by handleEnded event listener above
         }
       } catch (e) {
@@ -3355,7 +3614,7 @@ export async function setupSTTMode(
         const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
         try {
           await addMemoriesWithLimit(uid, memories);
-        } catch (saveErr) {}
+        } catch (saveErr) { }
 
         // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
         try {
@@ -3374,7 +3633,7 @@ export async function setupSTTMode(
         } catch (e) {
           console.error('[conv] STT append failed', e);
         }
-      } catch (e) {}
+      } catch (e) { }
     };
 
     // Promise to wait for recognition to be ready (for greeting)
@@ -3386,395 +3645,395 @@ export async function setupSTTMode(
 
     // Only set up Web Speech API handlers if using Web Speech API
     if (recognition) {
-    recognition.onresult = async (event: any) => {
-      const transcript = event.results[event.results.length - 1][0].transcript.trim();
-      if (!transcript) {
-        return;
-      }
-
-      console.log('[STT] User said:', transcript);
-      
-      // Capture timestamp immediately when transcript arrives (before any processing)
-      const transcriptArrivalTime = Date.now();
-      
-      // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
-      // ignore this transcript to prevent duplicate processing
-      if (currentSTTSession) {
-        if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
-          const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
-          if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
-            console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
-            // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
-            // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
-            return; // Don't process this transcript, let the previous one continue
-          }
-        }
-        // Update timestamp when we process a transcript (after passing the rapid interruption check)
-        currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
-      }
-      
-      // Update avatar: user finished speaking, now processing
-      if (onAvatarStateUpdate) {
-        onAvatarStateUpdate('processing', false);
-      }
-      
-      // Generate new global Response ID for this user message → TTT → TTS cycle
-      // Create transcript object with ID that will flow through the entire pipeline
-      if (!currentSTTSession) {
-        return;
-      }
-      if (currentSTTSession.globalResponseId === undefined) {
-        currentSTTSession.globalResponseId = 0;
-      }
-      const globalId = ++currentSTTSession.globalResponseId;
-      
-      // Create transcript object with ID
-      const transcriptObj: TranscriptObject = {
-        text: transcript,
-        id: globalId
-      };
-      
-      console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
-      
-      // Stop current TTS playback if user interrupts (for all TTS providers)
-      // Note: Response ID was already incremented above, so stopCurrentTTS() won't increment it again
-      stopCurrentTTS();
-
-      // Get TTS provider to determine feedback method
-      let ttsProvider: string | null = null;
-      try {
-        const stored = localStorage.getItem('adminSettings');
-        if (stored) {
-          const settings = JSON.parse(stored);
-          if (settings.ttsProvider) {
-            ttsProvider = settings.ttsProvider.toLowerCase();
-          }
-        }
-      } catch (e) {
-        // Fallback to backend config
-      }
-      
-      if (!ttsProvider) {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-        try {
-          const resp = await fetch(`${backendUrl}/api/config`);
-          if (resp.ok) {
-            const config = await resp.json();
-            ttsProvider = config.tts_provider || 'gtts';
-          } else {
-            ttsProvider = 'gtts';
-          }
-        } catch (e) {
-          ttsProvider = 'gtts';
-        }
-      }
-
-      // For Deepgram TTS: Show visual "Thinking..." indicator instead of processing audio
-      if (ttsProvider === 'deepgram' && onThinkingUpdate) {
-        onThinkingUpdate(true);
-      }
-
-      // Start playing processing audio to give user feedback that voice was detected
-      // Only for non-Deepgram TTS providers (to maintain backward compatibility)
-      if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
-        try {
-          // Check if processing audio is already playing to prevent conflicts
-          const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
-          if (isAlreadyPlaying) {
-            // Still ensure it's looping and at correct volume
-            const audio = currentSTTSession.processingAudio;
-            audio.loop = true;
-            audio.volume = 0.4;
-            return; // Don't try to play again if already playing
-          }
-          
-          // Ensure AudioContext is resumed (helps with Android)
-          if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
-            await currentSTTSession.audioContext.resume();
-          }
-          
-          // Stop any existing Web Audio API oscillator (if any)
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) {}
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) {}
-          }
-          
-          // Ensure processing audio is ready and play it
-          const audio = currentSTTSession.processingAudio;
-          
-          // Reset and ensure audio is ready
-          audio.loop = true;
-          audio.volume = 0.4;
-          
-          // If src was cleared or empty, restore it with cache-busting
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            const cacheBuster = Date.now();
-            audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
-            audio.load();
-            // Wait for audio to be ready
-            await new Promise<void>((resolve, reject) => {
-              const timeout = setTimeout(() => {
-                reject(new Error('Processing audio loading timeout'));
-              }, 3000);
-              
-              const onCanPlay = () => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                resolve();
-              };
-              
-              const onError = (e: Event) => {
-                clearTimeout(timeout);
-                audio.removeEventListener('canplaythrough', onCanPlay);
-                audio.removeEventListener('error', onError);
-                reject(new Error('Processing audio loading error'));
-              };
-              
-              if (audio.readyState >= 3) {
-                // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
-                clearTimeout(timeout);
-                resolve();
-              } else {
-                audio.addEventListener('canplaythrough', onCanPlay, { once: true });
-                audio.addEventListener('error', onError, { once: true });
-              }
-            });
-          }
-          
-          // CRITICAL: Validate src before playing
-          if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
-            throw new Error('Invalid processing audio source');
-          }
-          
-          // Reset to start and play
-          audio.currentTime = 0;
-          
-          // Small delay to ensure audio context is ready (helps with Android)
-          await new Promise(resolve => setTimeout(resolve, 50));
-          
-          // Final validation before play
-          if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
-            console.error('[STT] Processing audio src invalid before play:', audio.src);
-            throw new Error('Processing audio source became invalid');
-          }
-          
-          await audio.play();
-          console.log('[STT] Started processing audio (processing.mp3)');
-        } catch (e) {
-          console.error('[STT] Could not play processing audio:', e);
-        }
-      }
-
-      try {
-        // Increment counter BEFORE getting response (user message is added inside getChatResponse)
-        userMsgCounter += 1;
-        
-        // Get chat response
-        const response = await getChatResponse(transcript);
-        console.log('[TTT] Assistant response:', response);
-
-        // Check if we should extract memories after user message is processed
-        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          maybeExtractMemories();
+      recognition.onresult = async (event: any) => {
+        const transcript = event.results[event.results.length - 1][0].transcript.trim();
+        if (!transcript) {
+          return;
         }
 
-        // Hide thinking indicator if using Deepgram TTS
-        if (ttsProvider === 'deepgram' && onThinkingUpdate) {
-          onThinkingUpdate(false);
-        }
+        console.log('[STT] User said:', transcript);
 
-        // For Deepgram TTS: Set the transcript's ID before calling textToSpeech
-        // This ensures audio chunks use the same ID as the transcript for validation
-        if (ttsProvider === 'deepgram' && currentSTTSession) {
-          currentSTTSession.currentTtsResponseId = transcriptObj.id;
-          console.log('[Web Speech API] Set TTS Response ID to transcript ID:', transcriptObj.id);
-        }
+        // Capture timestamp immediately when transcript arrives (before any processing)
+        const transcriptArrivalTime = Date.now();
 
-        // Convert to speech (this will stop the processing audio)
-        await textToSpeech(response);
-      } catch (e) {
-        console.error('[STT/TTT/TTS] Error:', e);
-        // Hide thinking indicator on error
-        if (onThinkingUpdate) {
-          onThinkingUpdate(false);
-        }
-        // Reset avatar to idle on error
-        if (onAvatarStateUpdate) {
-          onAvatarStateUpdate('idle', false);
-        }
-        // Stop processing audio on error as well
+        // Check for rapid interruption - if user interrupts within MIN_INTERRUPTION_INTERVAL_MS,
+        // ignore this transcript to prevent duplicate processing
         if (currentSTTSession) {
-          // Stop Web Audio API oscillator if any
-          if (currentSTTSession.processingOscillator) {
-            try {
-              currentSTTSession.processingOscillator.stop();
-              currentSTTSession.processingOscillator.disconnect();
-              currentSTTSession.processingOscillator = null;
-            } catch (e) {}
-          }
-          if (currentSTTSession.processingGain) {
-            try {
-              currentSTTSession.processingGain.disconnect();
-              currentSTTSession.processingGain = null;
-            } catch (e) {}
-          }
-          // Stop HTMLAudioElement
-          if (currentSTTSession.processingAudio) {
-            currentSTTSession.processingAudio.pause();
-            currentSTTSession.processingAudio.currentTime = 0;
-          }
-        }
-      }
-    };
-
-    recognition.onerror = (event: any) => {
-      // Only log meaningful errors - ignore common non-critical errors
-      if (event.error !== 'no-speech' && 
-          event.error !== 'aborted' && 
-          event.error !== 'audio-capture' &&
-          event.error !== 'not-allowed') {
-        console.error('[STT] Recognition error:', event.error);
-      }
-      // Silently handle common expected errors
-    };
-
-    recognition.onstart = () => {
-      // CRITICAL: Stop processing audio when recognition starts (idle listening)
-      // This prevents processing audio from playing during continuous recognition cycles
-      if (currentSTTSession?.processingAudio) {
-        try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
-          }
-        } catch (e) {
-          console.warn('[STT] Error stopping processing audio on recognition start:', e);
-        }
-      }
-      
-      // Update avatar: mic is now listening for user speech
-      if (onAvatarStateUpdate) {
-        onAvatarStateUpdate('listening', false);
-      }
-      
-      // Resolve promise when recognition is ready (for greeting)
-      if (recognitionReadyResolver) {
-        recognitionReadyResolver();
-        recognitionReadyResolver = null;
-        console.log('[STT] Recognition is ready');
-      }
-    };
-
-    // Detect if we're on Android to handle beep issue
-    const isAndroid = /Android/i.test(navigator.userAgent);
-    let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
-    let lastRecognitionEndTime = 0;
-    let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
-    
-    recognition.onend = () => {
-      // CRITICAL: Ensure processing audio is stopped when recognition ends
-      // This prevents it from playing during the restart cycle
-      if (currentSTTSession?.processingAudio) {
-        try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
-          }
-        } catch (e) {
-          console.warn('[STT] Error stopping processing audio on recognition end:', e);
-        }
-      }
-      
-      // CRITICAL: Check if recognition is actually stopped before restarting
-      // Sometimes onend fires but recognition is still active (especially on Android)
-      // This prevents unnecessary restarts that cause beeps
-      if (isRecognitionRestarting) {
-        return;
-      }
-      
-      // Clear any pending restart
-      if (recognitionRestartTimeout) {
-        clearTimeout(recognitionRestartTimeout);
-        recognitionRestartTimeout = null;
-      }
-      
-      // Restart recognition if session is still active
-      if (currentSTTSession && currentSTTSession.recognition === recognition) {
-        const now = Date.now();
-        const timeSinceLastEnd = now - lastRecognitionEndTime;
-        lastRecognitionEndTime = now;
-        
-        // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
-        // Even with continuous=true, calling start() again reactivates the mic and causes beep
-        // Add delay on Android to reduce beep frequency
-        const restartDelay = isAndroid ? 100 : 0;
-        
-        // If recognition ended very quickly, add a small delay to prevent rapid cycling
-        const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
-        
-        isRecognitionRestarting = true;
-        recognitionRestartTimeout = setTimeout(() => {
-          recognitionRestartTimeout = null;
-          isRecognitionRestarting = false;
-          
-          // Clear timeout reference from session
-          if (currentSTTSession) {
-            (currentSTTSession as any).recognitionRestartTimeout = null;
-          }
-          
-          // Double-check session is still active before restarting
-          if (currentSTTSession && currentSTTSession.recognition === recognition) {
-            try {
-              recognition.start();
-            } catch (e: any) {
-              // If error is "already started", that's actually good - means it's still running
-              if (e && !(e.message?.includes('already') || e.message?.includes('started'))) {
-                console.warn('[STT] Error restarting recognition:', e);
-              }
+          if (currentSTTSession.lastTranscriptTimestamp !== undefined) {
+            const timeSinceLastTranscript = transcriptArrivalTime - currentSTTSession.lastTranscriptTimestamp;
+            if (timeSinceLastTranscript < MIN_INTERRUPTION_INTERVAL_MS) {
+              console.log(`[STT] Ignoring rapid interruption (${timeSinceLastTranscript}ms < ${MIN_INTERRUPTION_INTERVAL_MS}ms), continuing with previous response`);
+              // Don't update timestamp when ignoring - keep the last processed transcript's timestamp
+              // so the next transcript compares against the last actually processed one (u1), not the ignored one (u2)
+              return; // Don't process this transcript, let the previous one continue
             }
           }
-        }, actualDelay);
-        
-        // Store timeout reference in session for cleanup
-        if (currentSTTSession) {
-          (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
+          // Update timestamp when we process a transcript (after passing the rapid interruption check)
+          currentSTTSession.lastTranscriptTimestamp = transcriptArrivalTime;
         }
-      }
-    };
 
-    recognition.onnomatch = () => {
-      // CRITICAL: Stop processing audio when no match (no user speech detected)
-      // This prevents processing audio from playing during idle periods
-      if (currentSTTSession?.processingAudio) {
+        // Update avatar: user finished speaking, now processing
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('processing', false);
+        }
+
+        // Generate new global Response ID for this user message → TTT → TTS cycle
+        // Create transcript object with ID that will flow through the entire pipeline
+        if (!currentSTTSession) {
+          return;
+        }
+        if (currentSTTSession.globalResponseId === undefined) {
+          currentSTTSession.globalResponseId = 0;
+        }
+        const globalId = ++currentSTTSession.globalResponseId;
+
+        // Create transcript object with ID
+        const transcriptObj: TranscriptObject = {
+          text: transcript,
+          id: globalId
+        };
+
+        console.log('[STT] Generated Global Response ID:', globalId, 'for transcript:', transcript);
+
+        // Stop current TTS playback if user interrupts (for all TTS providers)
+        // Note: Response ID was already incremented above, so stopCurrentTTS() won't increment it again
+        stopCurrentTTS();
+
+        // Get TTS provider to determine feedback method
+        let ttsProvider: string | null = null;
         try {
-          const audio = currentSTTSession.processingAudio;
-          if (!audio.paused) {
-            audio.pause();
-            audio.currentTime = 0;
+          const stored = localStorage.getItem('adminSettings');
+          if (stored) {
+            const settings = JSON.parse(stored);
+            if (settings.ttsProvider) {
+              ttsProvider = settings.ttsProvider.toLowerCase();
+            }
           }
         } catch (e) {
-          console.warn('[STT] Error stopping processing audio on no match:', e);
+          // Fallback to backend config
         }
-      }
-    };
+
+        if (!ttsProvider) {
+          const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+          try {
+            const resp = await fetch(`${backendUrl}/api/config`);
+            if (resp.ok) {
+              const config = await resp.json();
+              ttsProvider = config.tts_provider || 'gtts';
+            } else {
+              ttsProvider = 'gtts';
+            }
+          } catch (e) {
+            ttsProvider = 'gtts';
+          }
+        }
+
+        // For Deepgram TTS: Show visual "Thinking..." indicator instead of processing audio
+        if (ttsProvider === 'deepgram' && onThinkingUpdate) {
+          onThinkingUpdate(true);
+        }
+
+        // Start playing processing audio to give user feedback that voice was detected
+        // Only for non-Deepgram TTS providers (to maintain backward compatibility)
+        if (ttsProvider !== 'deepgram' && currentSTTSession?.processingAudio) {
+          try {
+            // Check if processing audio is already playing to prevent conflicts
+            const isAlreadyPlaying = currentSTTSession.isProcessingAudioPlaying?.() || false;
+            if (isAlreadyPlaying) {
+              // Still ensure it's looping and at correct volume
+              const audio = currentSTTSession.processingAudio;
+              audio.loop = true;
+              audio.volume = 0.4;
+              return; // Don't try to play again if already playing
+            }
+
+            // Ensure AudioContext is resumed (helps with Android)
+            if (currentSTTSession.audioContext && currentSTTSession.audioContext.state === 'suspended') {
+              await currentSTTSession.audioContext.resume();
+            }
+
+            // Stop any existing Web Audio API oscillator (if any)
+            if (currentSTTSession.processingOscillator) {
+              try {
+                currentSTTSession.processingOscillator.stop();
+                currentSTTSession.processingOscillator.disconnect();
+                currentSTTSession.processingOscillator = null;
+              } catch (e) { }
+            }
+            if (currentSTTSession.processingGain) {
+              try {
+                currentSTTSession.processingGain.disconnect();
+                currentSTTSession.processingGain = null;
+              } catch (e) { }
+            }
+
+            // Ensure processing audio is ready and play it
+            const audio = currentSTTSession.processingAudio;
+
+            // Reset and ensure audio is ready
+            audio.loop = true;
+            audio.volume = 0.4;
+
+            // If src was cleared or empty, restore it with cache-busting
+            if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
+              const cacheBuster = Date.now();
+              audio.src = `/audio/processing.mp3?v=${cacheBuster}`;
+              audio.load();
+              // Wait for audio to be ready
+              await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  reject(new Error('Processing audio loading timeout'));
+                }, 3000);
+
+                const onCanPlay = () => {
+                  clearTimeout(timeout);
+                  audio.removeEventListener('canplaythrough', onCanPlay);
+                  audio.removeEventListener('error', onError);
+                  resolve();
+                };
+
+                const onError = (e: Event) => {
+                  clearTimeout(timeout);
+                  audio.removeEventListener('canplaythrough', onCanPlay);
+                  audio.removeEventListener('error', onError);
+                  reject(new Error('Processing audio loading error'));
+                };
+
+                if (audio.readyState >= 3) {
+                  // HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA
+                  clearTimeout(timeout);
+                  resolve();
+                } else {
+                  audio.addEventListener('canplaythrough', onCanPlay, { once: true });
+                  audio.addEventListener('error', onError, { once: true });
+                }
+              });
+            }
+
+            // CRITICAL: Validate src before playing
+            if (!audio.src || audio.src === '' || audio.src === window.location.href || !audio.src.includes('processing.mp3')) {
+              console.error('[STT] Cannot play processing audio - invalid src:', audio.src);
+              throw new Error('Invalid processing audio source');
+            }
+
+            // Reset to start and play
+            audio.currentTime = 0;
+
+            // Small delay to ensure audio context is ready (helps with Android)
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            // Final validation before play
+            if (!audio.src || audio.src === '' || !audio.src.includes('processing.mp3')) {
+              console.error('[STT] Processing audio src invalid before play:', audio.src);
+              throw new Error('Processing audio source became invalid');
+            }
+
+            await audio.play();
+            console.log('[STT] Started processing audio (processing.mp3)');
+          } catch (e) {
+            console.error('[STT] Could not play processing audio:', e);
+          }
+        }
+
+        try {
+          // Increment counter BEFORE getting response (user message is added inside getChatResponse)
+          userMsgCounter += 1;
+
+          // Get chat response
+          const response = await getChatResponse(transcript);
+          console.log('[TTT] Assistant response:', response);
+
+          // Check if we should extract memories after user message is processed
+          if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+            maybeExtractMemories();
+          }
+
+          // Hide thinking indicator if using Deepgram TTS
+          if (ttsProvider === 'deepgram' && onThinkingUpdate) {
+            onThinkingUpdate(false);
+          }
+
+          // For Deepgram TTS: Set the transcript's ID before calling textToSpeech
+          // This ensures audio chunks use the same ID as the transcript for validation
+          if (ttsProvider === 'deepgram' && currentSTTSession) {
+            currentSTTSession.currentTtsResponseId = transcriptObj.id;
+            console.log('[Web Speech API] Set TTS Response ID to transcript ID:', transcriptObj.id);
+          }
+
+          // Convert to speech (this will stop the processing audio)
+          await textToSpeech(response);
+        } catch (e) {
+          console.error('[STT/TTT/TTS] Error:', e);
+          // Hide thinking indicator on error
+          if (onThinkingUpdate) {
+            onThinkingUpdate(false);
+          }
+          // Reset avatar to idle on error
+          if (onAvatarStateUpdate) {
+            onAvatarStateUpdate('idle', false);
+          }
+          // Stop processing audio on error as well
+          if (currentSTTSession) {
+            // Stop Web Audio API oscillator if any
+            if (currentSTTSession.processingOscillator) {
+              try {
+                currentSTTSession.processingOscillator.stop();
+                currentSTTSession.processingOscillator.disconnect();
+                currentSTTSession.processingOscillator = null;
+              } catch (e) { }
+            }
+            if (currentSTTSession.processingGain) {
+              try {
+                currentSTTSession.processingGain.disconnect();
+                currentSTTSession.processingGain = null;
+              } catch (e) { }
+            }
+            // Stop HTMLAudioElement
+            if (currentSTTSession.processingAudio) {
+              currentSTTSession.processingAudio.pause();
+              currentSTTSession.processingAudio.currentTime = 0;
+            }
+          }
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        // Only log meaningful errors - ignore common non-critical errors
+        if (event.error !== 'no-speech' &&
+          event.error !== 'aborted' &&
+          event.error !== 'audio-capture' &&
+          event.error !== 'not-allowed') {
+          console.error('[STT] Recognition error:', event.error);
+        }
+        // Silently handle common expected errors
+      };
+
+      recognition.onstart = () => {
+        // CRITICAL: Stop processing audio when recognition starts (idle listening)
+        // This prevents processing audio from playing during continuous recognition cycles
+        if (currentSTTSession?.processingAudio) {
+          try {
+            const audio = currentSTTSession.processingAudio;
+            if (!audio.paused) {
+              audio.pause();
+              audio.currentTime = 0;
+            }
+          } catch (e) {
+            console.warn('[STT] Error stopping processing audio on recognition start:', e);
+          }
+        }
+
+        // Update avatar: mic is now listening for user speech
+        if (onAvatarStateUpdate) {
+          onAvatarStateUpdate('listening', false);
+        }
+
+        // Resolve promise when recognition is ready (for greeting)
+        if (recognitionReadyResolver) {
+          recognitionReadyResolver();
+          recognitionReadyResolver = null;
+          console.log('[STT] Recognition is ready');
+        }
+      };
+
+      // Detect if we're on Android to handle beep issue
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      let recognitionRestartTimeout: ReturnType<typeof setTimeout> | null = null;
+      let lastRecognitionEndTime = 0;
+      let isRecognitionRestarting = false; // Flag to prevent multiple simultaneous restarts
+
+      recognition.onend = () => {
+        // CRITICAL: Ensure processing audio is stopped when recognition ends
+        // This prevents it from playing during the restart cycle
+        if (currentSTTSession?.processingAudio) {
+          try {
+            const audio = currentSTTSession.processingAudio;
+            if (!audio.paused) {
+              audio.pause();
+              audio.currentTime = 0;
+            }
+          } catch (e) {
+            console.warn('[STT] Error stopping processing audio on recognition end:', e);
+          }
+        }
+
+        // CRITICAL: Check if recognition is actually stopped before restarting
+        // Sometimes onend fires but recognition is still active (especially on Android)
+        // This prevents unnecessary restarts that cause beeps
+        if (isRecognitionRestarting) {
+          return;
+        }
+
+        // Clear any pending restart
+        if (recognitionRestartTimeout) {
+          clearTimeout(recognitionRestartTimeout);
+          recognitionRestartTimeout = null;
+        }
+
+        // Restart recognition if session is still active
+        if (currentSTTSession && currentSTTSession.recognition === recognition) {
+          const now = Date.now();
+          const timeSinceLastEnd = now - lastRecognitionEndTime;
+          lastRecognitionEndTime = now;
+
+          // CRITICAL FIX: On Android, the beep happens when recognition.start() is called
+          // Even with continuous=true, calling start() again reactivates the mic and causes beep
+          // Add delay on Android to reduce beep frequency
+          const restartDelay = isAndroid ? 100 : 0;
+
+          // If recognition ended very quickly, add a small delay to prevent rapid cycling
+          const actualDelay = timeSinceLastEnd < 1000 ? restartDelay + 500 : restartDelay;
+
+          isRecognitionRestarting = true;
+          recognitionRestartTimeout = setTimeout(() => {
+            recognitionRestartTimeout = null;
+            isRecognitionRestarting = false;
+
+            // Clear timeout reference from session
+            if (currentSTTSession) {
+              (currentSTTSession as any).recognitionRestartTimeout = null;
+            }
+
+            // Double-check session is still active before restarting
+            if (currentSTTSession && currentSTTSession.recognition === recognition) {
+              try {
+                recognition.start();
+              } catch (e: any) {
+                // If error is "already started", that's actually good - means it's still running
+                if (e && !(e.message?.includes('already') || e.message?.includes('started'))) {
+                  console.warn('[STT] Error restarting recognition:', e);
+                }
+              }
+            }
+          }, actualDelay);
+
+          // Store timeout reference in session for cleanup
+          if (currentSTTSession) {
+            (currentSTTSession as any).recognitionRestartTimeout = recognitionRestartTimeout;
+          }
+        }
+      };
+
+      recognition.onnomatch = () => {
+        // CRITICAL: Stop processing audio when no match (no user speech detected)
+        // This prevents processing audio from playing during idle periods
+        if (currentSTTSession?.processingAudio) {
+          try {
+            const audio = currentSTTSession.processingAudio;
+            if (!audio.paused) {
+              audio.pause();
+              audio.currentTime = 0;
+            }
+          } catch (e) {
+            console.warn('[STT] Error stopping processing audio on no match:', e);
+          }
+        }
+      };
 
       // Start recognition only for Web Speech API
-    recognition.start();
+      recognition.start();
     }
-    
+
     // Wait for recognition to be ready before generating greeting
     // This ensures AudioContext and all initialization is complete
     try {
@@ -3795,7 +4054,7 @@ export async function setupSTTMode(
       // Continue anyway after a short delay
       await new Promise(resolve => setTimeout(resolve, 500));
     }
-    
+
     // Generate dynamic initial greeting using the AI
     // This makes the greeting personalized and varied each time
     try {
@@ -3812,7 +4071,7 @@ export async function setupSTTMode(
       } catch (e) {
         // Will check backend below
       }
-      
+
       // If not in localStorage, fetch from backend
       if (!ttsProvider) {
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -3828,15 +4087,15 @@ export async function setupSTTMode(
           ttsProvider = 'gtts';
         }
       }
-      
+
       // Send a prompt that will generate a dynamic greeting
       // The AI will use the instructions to greet with the child's name in the first message
       const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
       // Don't add to conversationHistory here - getChatResponseStream will add it
       // This prevents the greeting prompt from appearing twice in the UI
-      
+
       let greeting = '';
-      
+
       // Use streaming chat for Deepgram TTS, non-streaming for others
       if (ttsProvider === 'deepgram') {
         // Use streaming chat response for Deepgram TTS (low latency)
@@ -3853,14 +4112,14 @@ export async function setupSTTMode(
             const setupPromise = textToSpeech(' ').catch(() => {
               // Ignore errors from the setup call - we just need the WebSocket created
             });
-            
+
             // Wait for WebSocket to be created and opened (with timeout)
             let retries = 0;
             while ((!currentSTTSession?.deepgramTtsWs || currentSTTSession.deepgramTtsWs.readyState !== WebSocket.OPEN) && retries < 30) {
               await new Promise(resolve => setTimeout(resolve, 100));
               retries++;
             }
-            
+
             // Once WebSocket is ready, flush any pending audio from the dummy setup call
             // This ensures clean state before sending the greeting
             if (currentSTTSession?.deepgramTtsWs && currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN) {
@@ -3881,7 +4140,7 @@ export async function setupSTTMode(
                 console.warn('[Greeting] Error flushing dummy setup:', e);
               }
             }
-            
+
             if (!currentSTTSession?.deepgramTtsWs || currentSTTSession.deepgramTtsWs.readyState !== WebSocket.OPEN) {
               // If WebSocket still not ready, fallback to non-streaming
               console.warn('[Greeting] Deepgram TTS WebSocket not ready after setup, falling back to non-streaming');
@@ -3906,7 +4165,7 @@ export async function setupSTTMode(
             } else {
               // WebSocket is now ready - use streaming
               console.log('[Greeting] Deepgram TTS WebSocket ready, using streaming chat');
-              
+
               // Generate global Response ID for greeting (so audio chunks are tagged correctly)
               if (currentSTTSession) {
                 if (currentSTTSession.globalResponseId === undefined) {
@@ -3917,58 +4176,58 @@ export async function setupSTTMode(
                 currentSTTSession.currentTtsResponseId = greetingId;
                 console.log('[Greeting] Generated Global Response ID:', greetingId);
               }
-              
+
               const deepgramTtsWs = currentSTTSession.deepgramTtsWs;
-            
-            // Buffer for accumulating text chunks before sending to TTS
-            let textBuffer = '';
-            const SEND_EVERY = 60; // Same as in regular conversations
-            const MIN_FIRST_CHUNK = 20;
 
-            // Function to send text chunks to Deepgram TTS WebSocket
-            const sendTextChunk = (chunk: string) => {
-              textBuffer += chunk;
-              
-              // Send first chunk early for low latency
-              if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
-                const toSend = textBuffer;
-                textBuffer = '';
+              // Buffer for accumulating text chunks before sending to TTS
+              let textBuffer = '';
+              const SEND_EVERY = 60; // Same as in regular conversations
+              const MIN_FIRST_CHUNK = 20;
+
+              // Function to send text chunks to Deepgram TTS WebSocket
+              const sendTextChunk = (chunk: string) => {
+                textBuffer += chunk;
+
+                // Send first chunk early for low latency
+                if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                  const toSend = textBuffer;
+                  textBuffer = '';
+                  deepgramTtsWs.send(JSON.stringify({
+                    type: 'speak',
+                    text: toSend
+                  }));
+                  console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+                } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
+                  const toSend = textBuffer;
+                  textBuffer = '';
+                  deepgramTtsWs.send(JSON.stringify({
+                    type: 'speak',
+                    text: toSend
+                  }));
+                  console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
+                }
+              };
+
+              // Get streaming chat response (this will call sendTextChunk as chunks arrive)
+              greeting = await getChatResponseStream(greetingPrompt, sendTextChunk, true);
+
+              // Send remaining buffer and flush signal after streaming completes
+              if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
                 deepgramTtsWs.send(JSON.stringify({
                   type: 'speak',
-                  text: toSend
+                  text: textBuffer
                 }));
-                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
-              } else if (textBuffer.length >= SEND_EVERY && deepgramTtsWs.readyState === WebSocket.OPEN) {
-                const toSend = textBuffer;
                 textBuffer = '';
-                deepgramTtsWs.send(JSON.stringify({
-                  type: 'speak',
-                  text: toSend
-                }));
-                console.log(`[Greeting Deepgram TTS Stream] Sent chunk (${toSend.length} chars)`);
               }
-            };
-
-            // Get streaming chat response (this will call sendTextChunk as chunks arrive)
-            greeting = await getChatResponseStream(greetingPrompt, sendTextChunk, true);
-            
-            // Send remaining buffer and flush signal after streaming completes
-            if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
-              deepgramTtsWs.send(JSON.stringify({
-                type: 'speak',
-                text: textBuffer
-              }));
-              textBuffer = '';
-            }
-            if (deepgramTtsWs.readyState === WebSocket.OPEN) {
-              deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
-              console.log('[Greeting Deepgram TTS Stream] Sent flush signal after streaming complete');
-            }
+              if (deepgramTtsWs.readyState === WebSocket.OPEN) {
+                deepgramTtsWs.send(JSON.stringify({ type: 'flush' }));
+                console.log('[Greeting Deepgram TTS Stream] Sent flush signal after streaming complete');
+              }
             }
           } else {
             // WebSocket already exists and is OPEN - use streaming directly
             console.log('[Greeting] Deepgram TTS WebSocket already ready, using streaming chat');
-            
+
             // Generate global Response ID for greeting (so audio chunks are tagged correctly)
             if (currentSTTSession) {
               if (currentSTTSession.globalResponseId === undefined) {
@@ -3979,12 +4238,12 @@ export async function setupSTTMode(
               currentSTTSession.currentTtsResponseId = greetingId;
               console.log('[Greeting] Generated Global Response ID:', greetingId);
             }
-            
+
             const deepgramTtsWs = currentSTTSession?.deepgramTtsWs;
             if (!deepgramTtsWs) {
               throw new Error('Deepgram TTS WebSocket not available');
             }
-            
+
             // Buffer for accumulating text chunks before sending to TTS
             let textBuffer = '';
             const SEND_EVERY = 60; // Same as in regular conversations
@@ -3993,7 +4252,7 @@ export async function setupSTTMode(
             // Function to send text chunks to Deepgram TTS WebSocket
             const sendTextChunk = (chunk: string) => {
               textBuffer += chunk;
-              
+
               // Send first chunk early for low latency
               if (textBuffer.length >= MIN_FIRST_CHUNK && deepgramTtsWs.readyState === WebSocket.OPEN) {
                 const toSend = textBuffer;
@@ -4016,7 +4275,7 @@ export async function setupSTTMode(
 
             // Get streaming chat response (this will call sendTextChunk as chunks arrive)
             greeting = await getChatResponseStream(greetingPrompt, sendTextChunk, true);
-            
+
             // Send remaining buffer and flush signal after streaming completes
             if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
               deepgramTtsWs.send(JSON.stringify({
@@ -4056,28 +4315,28 @@ export async function setupSTTMode(
         // Non-Deepgram TTS - use non-streaming chat
         // Add greeting prompt to conversationHistory for the API call
         // (getChatResponseStream adds it automatically, but we need to add it here for non-streaming)
-      conversationHistory.push({ role: 'user', content: greetingPrompt });
-      
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-      const response = await fetch(`${backendUrl}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: conversationHistory,
-        }),
-      });
+        conversationHistory.push({ role: 'user', content: greetingPrompt });
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Chat API error: ${text}`);
-      }
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+        const response = await fetch(`${backendUrl}/api/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: conversationHistory,
+          }),
+        });
 
-      const data = await response.json();
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Chat API error: ${text}`);
+        }
+
+        const data = await response.json();
         greeting = data.response || data.message || '';
       }
-      
+
       // Remove the greeting prompt from history (it was just to trigger the greeting)
       // Keep only the system message and the assistant's greeting
       // Find and remove the user greeting prompt (it might be the last user message or second-to-last if assistant response was already added)
@@ -4087,42 +4346,42 @@ export async function setupSTTMode(
       if (greetingPromptIndex !== -1) {
         conversationHistory.splice(greetingPromptIndex, 1);
       }
-      
+
       // Ensure assistant greeting is in history (it might already be there from getChatResponseStream)
       const hasAssistantGreeting = conversationHistory.some(
         (msg) => msg.role === 'assistant' && msg.content === greeting
       );
       if (!hasAssistantGreeting) {
-      conversationHistory.push({ role: 'assistant', content: greeting });
+        conversationHistory.push({ role: 'assistant', content: greeting });
       }
-      
+
       // Update UI (now without the greeting prompt)
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
-      
+
       // Only speak greeting once (prevent duplicate with Web Speech API)
       // For Deepgram TTS, audio is already being streamed, so we don't need to call textToSpeech
       // For other TTS providers, call textToSpeech as before
       if (currentSTTSession && !currentSTTSession.greetingSpoken) {
         currentSTTSession.greetingSpoken = true;
         if (ttsProvider !== 'deepgram') {
-        await textToSpeech(greeting);
+          await textToSpeech(greeting);
         }
       }
     } catch (e) {
       console.error('[STT/TTT/TTS] Error generating initial greeting:', e);
       // Fallback greeting if AI fails
-      const fallbackGreeting = userName 
+      const fallbackGreeting = userName
         ? `Hi ${userName}! I'm your learning buddy! What would you like to explore today?`
         : "Hi! I'm your learning buddy! What would you like to explore today?";
       conversationHistory.push({ role: 'assistant', content: fallbackGreeting });
-      
+
       // Update UI
       if (onConversationUpdate) {
         onConversationUpdate([...conversationHistory]);
       }
-      
+
       // Only speak greeting once (prevent duplicate with Web Speech API)
       if (currentSTTSession && !currentSTTSession.greetingSpoken) {
         currentSTTSession.greetingSpoken = true;
@@ -4156,7 +4415,7 @@ export async function setupCounter(
       console.warn('[Setup] Error resetting audio volume:', e);
     }
   }
-  
+
   if (useSTTMode) {
     return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
   } else {
@@ -4180,7 +4439,7 @@ export default function Page() {
   const [isTTSPlaying, setIsTTSPlaying] = useState(false);
   const { currentUser, userData, logout } = useAuth();
   const router = useRouter();
-  
+
   // Admin verification state
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -4189,7 +4448,7 @@ export default function Page() {
   const [adminCode, setAdminCode] = useState('');
   const [adminError, setAdminError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
-  
+
   // User settings state
   const [showUserSettingsPage, setShowUserSettingsPage] = useState(false);
   const [showEditPopup, setShowEditPopup] = useState(false);
@@ -4200,7 +4459,7 @@ export default function Page() {
   const [localUserData, setLocalUserData] = useState<{ name?: string; age?: number } | null>(null);
   const [showHelpPage, setShowHelpPage] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  
+
   // Admin settings state
   interface AdminSettings {
     mode: 'realtime' | 'stt-ttt-tts';
@@ -4208,14 +4467,14 @@ export default function Page() {
     tttModel: string;
     ttsProvider: string;
   }
-  
+
   const [adminSettings, setAdminSettings] = useState<AdminSettings>({
     mode: 'stt-ttt-tts',
-    sttProvider: 'webspeech',
+    sttProvider: 'googlecloud',
     tttModel: 'gpt-4o-mini',
-    ttsProvider: 'gtts',
+    ttsProvider: 'deepgram',
   });
-  
+
   // Read toggle state from environment variable and localStorage
   // "ON" = STT/TTT/TTS mode (cost-effective, default), "OFF" = Realtime mode
   const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'ON';
@@ -4250,7 +4509,7 @@ export default function Page() {
       const displayMessages = conversationHistory.filter(msg => msg.role !== 'system');
       setMessages(displayMessages);
     };
-    
+
     return () => {
       onConversationUpdate = null;
     };
@@ -4263,7 +4522,7 @@ export default function Page() {
   // Set up callback to receive avatar state updates
   useEffect(() => {
     onAvatarStateUpdate = (state: AvatarState, isTTS: boolean, mood?: AvatarMood) => {
-      // console.log('[AVATAR STATE]', state, 'isTTS (raw):', isTTS, 'mood:', mood);
+      console.log('*** [AVATAR UPDATE] State:', state, 'TTS:', isTTS, 'Mood:', mood);
       setAvatarState(state);
       // Derive isTTSPlaying from state so mouth always moves when speaking,
       // regardless of any inconsistent boolean flags passed in.
@@ -4322,9 +4581,9 @@ export default function Page() {
 
     try {
       const userDocRef = doc(db, 'users', currentUser.uid);
-      
+
       let updatedValue: string | number;
-      
+
       if (editType === 'name') {
         const trimmedName = editValue.trim();
         if (!trimmedName) {
@@ -4431,7 +4690,7 @@ export default function Page() {
       setIsVerifying(false);
     }
   };
-  
+
   // Load backend configuration
   const loadBackendConfig = async () => {
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
@@ -4446,7 +4705,7 @@ export default function Page() {
             setAdminSettings(settings);
             setUseSTTMode(settings.mode === 'stt-ttt-tts');
             return;
-          } catch {}
+          } catch { }
         }
         // Use backend config as default, mode comes from frontend env var
         const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'ON';
@@ -4467,15 +4726,15 @@ export default function Page() {
       const envMode = process.env.NEXT_PUBLIC_USE_STT_MODE?.toUpperCase() || 'ON';
       const settings: AdminSettings = {
         mode: envMode === 'ON' ? 'stt-ttt-tts' : 'realtime',
-        sttProvider: 'webspeech',
+        sttProvider: 'googlecloud',
         tttModel: 'gpt-4o-mini',
-        ttsProvider: 'gtts',
+        ttsProvider: 'deepgram',
       };
       setAdminSettings(settings);
       setUseSTTMode(envMode === 'ON');
     }
   };
-  
+
   // Load settings from localStorage on mount
   useEffect(() => {
     const loadSettings = async () => {
@@ -4495,7 +4754,7 @@ export default function Page() {
     };
     loadSettings();
   }, []);
-  
+
   // Save admin settings
   const saveAdminSettings = (settings: AdminSettings) => {
     setAdminSettings(settings);
@@ -4526,7 +4785,7 @@ export default function Page() {
     const refresh = async () => {
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {}
+      } catch { }
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const ins = devices.filter((d) => d.kind === 'audioinput');
@@ -4549,8 +4808,8 @@ export default function Page() {
   const displayAge = localUserData?.age ?? userData?.age;
 
   return (
-    <main style={{ 
-      display: 'flex', 
+    <main style={{
+      display: 'flex',
       height: '100vh',
       maxHeight: '100vh',
       padding: 0,
@@ -4563,575 +4822,575 @@ export default function Page() {
       {/* Home Section */}
       {activeSection === 'home' && (
         <>
-      {/* Header - Always visible at top */}
-      <div style={{
-        backgroundColor: '#3b82f6', // blue
-        color: '#ffffff',
-        padding: '12px 16px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <CatLogo size={40} backgroundColor="#3b82f6" />
-          <div>
-            <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
-            <div style={{ fontSize: '12px', opacity: 0.8 }}>
-              {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+          {/* Header - Always visible at top */}
+          <div style={{
+            backgroundColor: '#3b82f6', // blue
+            color: '#ffffff',
+            padding: '12px 16px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <CatLogo size={40} backgroundColor="#3b82f6" />
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+                <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                  {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              {/* Toggle Buttons */}
+              <button
+                onClick={() => setShowChat(false)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: showChat ? '#ffffff' : '#3b82f6',
+                  backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                Avatar
+              </button>
+              <button
+                onClick={() => setShowChat(true)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: showChat ? '#3b82f6' : '#ffffff',
+                  backgroundColor: showChat ? '#ffffff' : 'rgba(255,255,255,0.2)',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                Chat
+              </button>
             </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          {/* Toggle Buttons */}
-          <button
-            onClick={() => setShowChat(false)}
-            style={{
-              padding: '6px 12px',
-              fontSize: '14px',
-              fontWeight: 600,
-              color: showChat ? '#ffffff' : '#3b82f6',
-              backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            Avatar
-          </button>
-          <button
-            onClick={() => setShowChat(true)}
-            style={{
-              padding: '6px 12px',
-              fontSize: '14px',
-              fontWeight: 600,
-              color: showChat ? '#3b82f6' : '#ffffff',
-              backgroundColor: showChat ? '#ffffff' : 'rgba(255,255,255,0.2)',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            Chat
-          </button>
-        </div>
-      </div>
 
-      {/* Middle Section - Toggles between Avatar and Chat */}
-      {!showChat && (
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          backgroundColor: '#fed7aa', // soft orange background
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 0,
-        }}>
-          <RoboticCatAvatar
-            eyeColor={avatarState}
-            isTTSPlaying={isTTSPlaying}
-            mood={avatarMood}
-            size={isMobile ? 344 : 563}
-          />
-        </div>
-      )}
-
-      {/* Chat UI Section - Middle section when active */}
-      {showChat && (
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          minHeight: 0,
-          backgroundColor: '#fef08a', // yellow background
-          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
-        }}>
-
-        {/* Chat Messages Container */}
-        <div 
-          ref={chatContainerRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            padding: '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            minHeight: 0,
-          }}
-        >
-          {messages.length === 0 ? (
+          {/* Middle Section - Toggles between Avatar and Chat */}
+          {!showChat && (
             <div style={{
               flex: 1,
               display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              backgroundColor: '#fed7aa', // soft orange background
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#1a202c',
-              fontSize: '14px',
-              textAlign: 'center',
+              padding: 0,
             }}>
-              {status === 'connected' 
-                ? 'Start chatting with your learning buddy!' 
-                : 'Connect to start the conversation'}
+              <RoboticCatAvatar
+                eyeColor={avatarState}
+                isTTSPlaying={isTTSPlaying}
+                mood={avatarMood}
+                size={isMobile ? 344 : 563}
+              />
             </div>
-          ) : (
-            messages.map((msg, index) => {
-              const isUser = msg.role === 'user';
-              return (
-                <div
-                  key={index}
-                  style={{
-                    display: 'flex',
-                    justifyContent: isUser ? 'flex-end' : 'flex-start',
-                    alignItems: 'flex-end',
-                    gap: '8px',
-                  }}
-                >
-                  {!isUser && (
-                    <CatLogo size={32} backgroundColor="#fef08a" />
-                  )}
-                  <div
-                    style={{
-                      maxWidth: '70%',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      backgroundColor: isUser ? '#023601' : '#3b82f6', // dark lime green for user, blue for assistant
-                      color: isUser ? '#ffffff' : '#ffffff', // white text for both for good contrast
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                      wordWrap: 'break-word',
-                      fontSize: '14px',
-                      lineHeight: '1.4',
-                    }}
-                  >
-                    {msg.content}
-                  </div>
-                  {isUser && (
-                    <div style={{
-                      width: '32px',
-                      height: '32px',
-                      borderRadius: '50%',
-                      backgroundColor: '#f97316', // orange
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '16px',
-                      flexShrink: 0,
-                    }}>
-                      👤
-                    </div>
-                  )}
-                </div>
-              );
-            })
           )}
-          {/* Thinking indicator for Deepgram TTS */}
-          {isThinking && (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-start',
-                alignItems: 'flex-end',
-                gap: '8px',
-              }}
-            >
-              <CatLogo size={32} backgroundColor="#3b82f6" />
+
+          {/* Chat UI Section - Middle section when active */}
+          {showChat && (
+            <div style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              minHeight: 0,
+              backgroundColor: '#fef08a', // yellow background
+              backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'grid\' width=\'100\' height=\'100\' patternUnits=\'userSpaceOnUse\'%3E%3Cpath d=\'M 100 0 L 0 0 0 100\' fill=\'none\' stroke=\'rgba(0,0,0,0.02)\' stroke-width=\'1\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100\' height=\'100\' fill=\'url(%23grid)\' /%3E%3C/svg%3E")',
+            }}>
+
+              {/* Chat Messages Container */}
               <div
+                ref={chatContainerRef}
                 style={{
-                  maxWidth: '70%',
-                  padding: '8px 12px',
-                  borderRadius: '8px',
-                  backgroundColor: '#3b82f6', // blue
-                  color: '#ffffff', // white text for assistant
-                  boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
-                  wordWrap: 'break-word',
-                  fontSize: '14px',
-                  lineHeight: '1.4',
+                  flex: 1,
+                  overflowY: 'auto',
+                  overflowX: 'hidden',
+                  padding: '16px',
                   display: 'flex',
-                  alignItems: 'center',
+                  flexDirection: 'column',
                   gap: '8px',
+                  minHeight: 0,
                 }}
               >
-                <span>Thinking</span>
-                <span style={{
-                  display: 'inline-flex',
-                  gap: '4px',
-                }}>
-                  <span style={{
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: '#666',
-                    animation: 'thinking 1.4s infinite',
-                  }}></span>
-                  <span style={{
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: '#666',
-                    animation: 'thinking 1.4s infinite 0.2s',
-                  }}></span>
-                  <span style={{
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: '#666',
-                    animation: 'thinking 1.4s infinite 0.4s',
-                  }}></span>
-                </span>
+                {messages.length === 0 ? (
+                  <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#1a202c',
+                    fontSize: '14px',
+                    textAlign: 'center',
+                  }}>
+                    {status === 'connected'
+                      ? 'Start chatting with your learning buddy!'
+                      : 'Connect to start the conversation'}
+                  </div>
+                ) : (
+                  messages.map((msg, index) => {
+                    const isUser = msg.role === 'user';
+                    return (
+                      <div
+                        key={index}
+                        style={{
+                          display: 'flex',
+                          justifyContent: isUser ? 'flex-end' : 'flex-start',
+                          alignItems: 'flex-end',
+                          gap: '8px',
+                        }}
+                      >
+                        {!isUser && (
+                          <CatLogo size={32} backgroundColor="#fef08a" />
+                        )}
+                        <div
+                          style={{
+                            maxWidth: '70%',
+                            padding: '8px 12px',
+                            borderRadius: '8px',
+                            backgroundColor: isUser ? '#023601' : '#3b82f6', // dark lime green for user, blue for assistant
+                            color: isUser ? '#ffffff' : '#ffffff', // white text for both for good contrast
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                            wordWrap: 'break-word',
+                            fontSize: '14px',
+                            lineHeight: '1.4',
+                          }}
+                        >
+                          {msg.content}
+                        </div>
+                        {isUser && (
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '50%',
+                            backgroundColor: '#f97316', // orange
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '16px',
+                            flexShrink: 0,
+                          }}>
+                            👤
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+                {/* Thinking indicator for Deepgram TTS */}
+                {isThinking && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'flex-start',
+                      alignItems: 'flex-end',
+                      gap: '8px',
+                    }}
+                  >
+                    <CatLogo size={32} backgroundColor="#3b82f6" />
+                    <div
+                      style={{
+                        maxWidth: '70%',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        backgroundColor: '#3b82f6', // blue
+                        color: '#ffffff', // white text for assistant
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+                        wordWrap: 'break-word',
+                        fontSize: '14px',
+                        lineHeight: '1.4',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                    >
+                      <span>Thinking</span>
+                      <span style={{
+                        display: 'inline-flex',
+                        gap: '4px',
+                      }}>
+                        <span style={{
+                          width: '6px',
+                          height: '6px',
+                          borderRadius: '50%',
+                          backgroundColor: '#666',
+                          animation: 'thinking 1.4s infinite',
+                        }}></span>
+                        <span style={{
+                          width: '6px',
+                          height: '6px',
+                          borderRadius: '50%',
+                          backgroundColor: '#666',
+                          animation: 'thinking 1.4s infinite 0.2s',
+                        }}></span>
+                        <span style={{
+                          width: '6px',
+                          height: '6px',
+                          borderRadius: '50%',
+                          backgroundColor: '#666',
+                          animation: 'thinking 1.4s infinite 0.4s',
+                        }}></span>
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
-        </div>
-        </div>
-      )}
-      
-      {/* Controls Section - Always visible at bottom */}
-      <div style={{
-        backgroundColor: '#f9fafb',
-        padding: '20px',
-        borderTop: '1px solid #e5e7eb',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '12px',
-      }}>
-        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
-          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
-          <select
-            value={selectedInput ?? ''}
-            onChange={(e) => setSelectedInput(e.target.value)}
-            style={{ 
-              fontSize: 12, 
-              padding: '6px 8px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: 'white',
-              color: '#111827',
-              flex: 1,
-              minWidth: 0,
-              maxWidth: '100%',
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-            title="Select microphone input device"
-            aria-label="Microphone input device"
-          >
-            {inputs.map((d) => (
-              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Microphone'}</option>
-            ))}
-          </select>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, marginLeft: isMobile ? 0 : 12, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
-          <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Speaker:</label>
-          <select
-            value={selectedOutput ?? ''}
-            onChange={(e) => setSelectedOutput(e.target.value)}
-            style={{ 
-              fontSize: 12, 
-              padding: '6px 8px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: 'white',
-              color: '#111827',
-              flex: 1,
-              minWidth: 0,
-              maxWidth: '100%',
-              width: '100%',
-              boxSizing: 'border-box',
-            }}
-            title="Select speaker output device"
-            aria-label="Speaker output device"
-          >
-            {outputs.map((d) => (
-              <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Speaker'}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-        <button
-          onClick={async () => {
-            if (status !== 'connected') return;
-            
-            try {
-              // Stop any playing TTS audio immediately
-              if (audioRef.current) {
-                try {
-                  const audioEl = audioRef.current;
-                  // Instantly mute and stop the audio
-                  audioEl.volume = 0; // Mute instantly
-                  audioEl.pause(); // Pause playback
-                  audioEl.currentTime = 0; // Reset position
-                  audioEl.load(); // Clear the buffer - this stops buffered audio from playing
-                  // Remove error listener before clearing src to prevent error logs
-                  // Clone the element to remove all event listeners cleanly
-                  const newAudio = audioEl.cloneNode(false) as HTMLAudioElement;
-                  if (audioEl.parentNode) {
-                    audioEl.parentNode.replaceChild(newAudio, audioEl);
-                  }
-                  // Ensure the new element is also stopped
-                  newAudio.volume = 0; // Mute for disconnect
-                  newAudio.pause();
-                  newAudio.currentTime = 0;
-                  newAudio.src = '';
-                  newAudio.load(); // Clear any remaining buffer
-                  // Reset volume to 1 for next connection (but keep it muted until connected)
-                  // Volume will be set to 1 when connecting
-                  // Update the ref to point to the new element
-                  (audioRef as any).current = newAudio;
-                } catch (e) {
-                  console.warn('[Disconnect] Error stopping audio:', e);
-                  // Fallback: aggressively stop audio
+
+          {/* Controls Section - Always visible at bottom */}
+          <div style={{
+            backgroundColor: '#f9fafb',
+            padding: '20px',
+            borderTop: '1px solid #e5e7eb',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}>
+            <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8, alignItems: isMobile ? 'stretch' : 'center', marginBottom: 8, minWidth: 0 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+                <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Mic:</label>
+                <select
+                  value={selectedInput ?? ''}
+                  onChange={(e) => setSelectedInput(e.target.value)}
+                  style={{
+                    fontSize: 12,
+                    padding: '6px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: 'white',
+                    color: '#111827',
+                    flex: 1,
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                  }}
+                  title="Select microphone input device"
+                  aria-label="Microphone input device"
+                >
+                  {inputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Microphone'}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: isMobile ? 'none' : 1, marginLeft: isMobile ? 0 : 12, minWidth: 0, width: isMobile ? '100%' : 'auto' }}>
+                <label style={{ fontSize: 12, color: '#374151', fontWeight: 500, flexShrink: 0 }}>Speaker:</label>
+                <select
+                  value={selectedOutput ?? ''}
+                  onChange={(e) => setSelectedOutput(e.target.value)}
+                  style={{
+                    fontSize: 12,
+                    padding: '6px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: 'white',
+                    color: '#111827',
+                    flex: 1,
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                  }}
+                  title="Select speaker output device"
+                  aria-label="Speaker output device"
+                >
+                  {outputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId} style={{ color: '#111827' }}>{d.label || 'Speaker'}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={async () => {
+                  if (status !== 'connected') return;
+
                   try {
+                    // Stop any playing TTS audio immediately
                     if (audioRef.current) {
-                      audioRef.current.volume = 0; // Mute for disconnect
-                      audioRef.current.pause();
-                      audioRef.current.currentTime = 0;
-                      audioRef.current.load();
-                      audioRef.current.src = '';
-                      // Volume will be reset to 1 when connecting via setupCounter
+                      try {
+                        const audioEl = audioRef.current;
+                        // Instantly mute and stop the audio
+                        audioEl.volume = 0; // Mute instantly
+                        audioEl.pause(); // Pause playback
+                        audioEl.currentTime = 0; // Reset position
+                        audioEl.load(); // Clear the buffer - this stops buffered audio from playing
+                        // Remove error listener before clearing src to prevent error logs
+                        // Clone the element to remove all event listeners cleanly
+                        const newAudio = audioEl.cloneNode(false) as HTMLAudioElement;
+                        if (audioEl.parentNode) {
+                          audioEl.parentNode.replaceChild(newAudio, audioEl);
+                        }
+                        // Ensure the new element is also stopped
+                        newAudio.volume = 0; // Mute for disconnect
+                        newAudio.pause();
+                        newAudio.currentTime = 0;
+                        newAudio.src = '';
+                        newAudio.load(); // Clear any remaining buffer
+                        // Reset volume to 1 for next connection (but keep it muted until connected)
+                        // Volume will be set to 1 when connecting
+                        // Update the ref to point to the new element
+                        (audioRef as any).current = newAudio;
+                      } catch (e) {
+                        console.warn('[Disconnect] Error stopping audio:', e);
+                        // Fallback: aggressively stop audio
+                        try {
+                          if (audioRef.current) {
+                            audioRef.current.volume = 0; // Mute for disconnect
+                            audioRef.current.pause();
+                            audioRef.current.currentTime = 0;
+                            audioRef.current.load();
+                            audioRef.current.src = '';
+                            // Volume will be reset to 1 when connecting via setupCounter
+                          }
+                        } catch (fallbackError) {
+                          // Ignore fallback errors
+                        }
+                      }
                     }
-                  } catch (fallbackError) {
-                    // Ignore fallback errors
-                  }
-                }
-              }
-              
-              // Clean up realtime session
-                if (currentSession) {
-                  // Stop recognition if it exists
-                  if (currentSession.recognition) {
-                    try {
-                      currentSession.recognition.stop();
-                      currentSession.recognition.abort();
-                    } catch (e) {
-                      // Ignore errors
+
+                    // Clean up realtime session
+                    if (currentSession) {
+                      // Stop recognition if it exists
+                      if (currentSession.recognition) {
+                        try {
+                          currentSession.recognition.stop();
+                          currentSession.recognition.abort();
+                        } catch (e) {
+                          // Ignore errors
+                        }
+                      }
+                      currentSession.session.close();
+                      currentSession = null;
                     }
-                  }
-                  currentSession.session.close();
-                  currentSession = null;
-                }
-              
-              // Clean up STT session
-                if (currentSTTSession) {
-                  if (currentSTTSession.recognition) {
-                  try {
-                    currentSTTSession.recognition.stop();
-                    currentSTTSession.recognition.abort();
-                  } catch (e) {
-                    // Ignore errors
-                  }
-                }
-                // Clean up Deepgram STT WebSocket if used
-                if ((currentSTTSession as any).deepgramWs) {
-                  try {
-                    (currentSTTSession as any).deepgramWs.close();
-                  } catch (e) {
-                    console.warn('[STT] Error closing Deepgram STT WebSocket:', e);
-                  }
-                }
-                // Clean up Deepgram TTS WebSocket if used
-                if (currentSTTSession.deepgramTtsWs) {
-                  try {
-                    if (currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN || 
-                        currentSTTSession.deepgramTtsWs.readyState === WebSocket.CONNECTING) {
-                      currentSTTSession.deepgramTtsWs.close();
+
+                    // Clean up STT session
+                    if (currentSTTSession) {
+                      if (currentSTTSession.recognition) {
+                        try {
+                          currentSTTSession.recognition.stop();
+                          currentSTTSession.recognition.abort();
+                        } catch (e) {
+                          // Ignore errors
+                        }
+                      }
+                      // Clean up Deepgram STT WebSocket if used
+                      if ((currentSTTSession as any).deepgramWs) {
+                        try {
+                          (currentSTTSession as any).deepgramWs.close();
+                        } catch (e) {
+                          console.warn('[STT] Error closing Deepgram STT WebSocket:', e);
+                        }
+                      }
+                      // Clean up Deepgram TTS WebSocket if used
+                      if (currentSTTSession.deepgramTtsWs) {
+                        try {
+                          if (currentSTTSession.deepgramTtsWs.readyState === WebSocket.OPEN ||
+                            currentSTTSession.deepgramTtsWs.readyState === WebSocket.CONNECTING) {
+                            currentSTTSession.deepgramTtsWs.close();
+                          }
+                          console.log('[Deepgram TTS] WebSocket closed on disconnect');
+                        } catch (e) {
+                          console.warn('[TTS] Error closing Deepgram TTS WebSocket:', e);
+                        }
+                      }
+                      // Clean up TTS AudioContext if used
+                      if (currentSTTSession.deepgramTtsAudioContext) {
+                        try {
+                          currentSTTSession.deepgramTtsAudioContext.close();
+                        } catch (e) {
+                          console.warn('[TTS] Error closing Deepgram TTS AudioContext:', e);
+                        }
+                      }
+                      // Clean up audio processor if used
+                      if ((currentSTTSession as any).audioProcessor) {
+                        try {
+                          (currentSTTSession as any).audioProcessor.disconnect();
+                        } catch (e) {
+                          console.warn('[STT] Error disconnecting audio processor:', e);
+                        }
+                      }
+                      if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
+                        currentSTTSession.mediaRecorder.stop();
+                      }
+                      if (currentSTTSession.audioContext) {
+                        await currentSTTSession.audioContext.close();
+                      }
+                      // Stop and clean up processing audio
+                      if (currentSTTSession.processingOscillator) {
+                        try {
+                          currentSTTSession.processingOscillator.stop();
+                          currentSTTSession.processingOscillator.disconnect();
+                        } catch (e) { }
+                      }
+                      if (currentSTTSession.processingGain) {
+                        try {
+                          currentSTTSession.processingGain.disconnect();
+                        } catch (e) { }
+                      }
+                      if (currentSTTSession.processingAudio) {
+                        // Aggressively stop processing audio
+                        try {
+                          currentSTTSession.processingAudio.volume = 0;
+                          currentSTTSession.processingAudio.pause();
+                          currentSTTSession.processingAudio.currentTime = 0;
+                          currentSTTSession.processingAudio.load(); // Clear buffer
+                        } catch (e) {
+                          console.warn('[Disconnect] Error stopping processing audio:', e);
+                        }
+                      }
+                      currentSTTSession = null;
                     }
-                    console.log('[Deepgram TTS] WebSocket closed on disconnect');
-                  } catch (e) {
-                    console.warn('[TTS] Error closing Deepgram TTS WebSocket:', e);
+
+                    // Reset state
+                    setStatus('idle');
+                    setMessages([]);
+                  } catch (error) {
+                    console.error('Error disconnecting:', error);
+                    // Still reset state even if cleanup had errors
+                    setStatus('idle');
+                    setMessages([]);
                   }
-                }
-                // Clean up TTS AudioContext if used
-                if (currentSTTSession.deepgramTtsAudioContext) {
-                  try {
-                    currentSTTSession.deepgramTtsAudioContext.close();
-                  } catch (e) {
-                    console.warn('[TTS] Error closing Deepgram TTS AudioContext:', e);
+                }}
+                disabled={status !== 'connected'}
+                type="button"
+                style={{
+                  padding: '14px 32px',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  color: '#ffffff',
+                  backgroundColor: status === 'connected' ? '#ef4444' : '#9ca3af',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: status === 'connected' ? 'pointer' : 'not-allowed',
+                  boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+                  transition: 'all 0.2s ease-in-out',
+                  minWidth: '180px',
+                  flex: 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (status === 'connected') {
+                    e.currentTarget.style.backgroundColor = '#dc2626';
+                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+                    e.currentTarget.style.transform = 'translateY(-1px)';
                   }
-                }
-                // Clean up audio processor if used
-                if ((currentSTTSession as any).audioProcessor) {
-                  try {
-                    (currentSTTSession as any).audioProcessor.disconnect();
-                  } catch (e) {
-                    console.warn('[STT] Error disconnecting audio processor:', e);
+                }}
+                onMouseLeave={(e) => {
+                  if (status === 'connected') {
+                    e.currentTarget.style.backgroundColor = '#ef4444';
+                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
+                    e.currentTarget.style.transform = 'translateY(0)';
                   }
-                }
-                if (currentSTTSession.mediaRecorder && currentSTTSession.mediaRecorder.state !== 'inactive') {
-                  currentSTTSession.mediaRecorder.stop();
+                }}
+                onMouseDown={(e) => {
+                  if (status === 'connected') {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
                   }
-                  if (currentSTTSession.audioContext) {
-                  await currentSTTSession.audioContext.close();
+                }}
+                onMouseUp={(e) => {
+                  if (status === 'connected') {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
                   }
-                  // Stop and clean up processing audio
-                  if (currentSTTSession.processingOscillator) {
-                    try {
-                      currentSTTSession.processingOscillator.stop();
-                      currentSTTSession.processingOscillator.disconnect();
-                    } catch (e) {}
+                }}
+              >
+                Disconnect
+              </button>
+              <button
+                ref={buttonRef}
+                onClick={() => {
+                  if (status === 'connecting...') return;
+                  setStatus('connecting...');
+                  setupCounter(
+                    buttonRef.current as HTMLButtonElement,
+                    audioRef.current,
+                    selectedInput,
+                    selectedOutput,
+                    useSTTMode,
+                    userData?.name,
+                    userData?.age,
+                    currentUser?.uid || userData?.uid,
+                  )
+                    .then(() => setStatus('connected'))
+                    .catch((e) => {
+                      console.error(e);
+                      setStatus('error - see console');
+                    });
+                }}
+                disabled={status === 'connecting...' || status === 'connected'}
+                type="button"
+                style={{
+                  padding: '14px 32px',
+                  fontSize: 16,
+                  fontWeight: 600,
+                  color: '#ffffff',
+                  backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: status === 'connecting...' || status === 'connected' ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
+                  transition: 'all 0.2s ease-in-out',
+                  minWidth: '180px',
+                  flex: 1,
+                }}
+                onMouseEnter={(e) => {
+                  if (status !== 'connecting...' && status !== 'connected') {
+                    e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#dc2626' : '#2563eb';
+                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
+                    e.currentTarget.style.transform = 'translateY(-1px)';
                   }
-                  if (currentSTTSession.processingGain) {
-                    try {
-                      currentSTTSession.processingGain.disconnect();
-                    } catch (e) {}
+                }}
+                onMouseLeave={(e) => {
+                  if (status !== 'connecting...' && status !== 'connected') {
+                    e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#ef4444' : '#3b82f6';
+                    e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
+                    e.currentTarget.style.transform = 'translateY(0)';
                   }
-                  if (currentSTTSession.processingAudio) {
-                  // Aggressively stop processing audio
-                  try {
-                    currentSTTSession.processingAudio.volume = 0;
-                    currentSTTSession.processingAudio.pause();
-                    currentSTTSession.processingAudio.currentTime = 0;
-                    currentSTTSession.processingAudio.load(); // Clear buffer
-                  } catch (e) {
-                    console.warn('[Disconnect] Error stopping processing audio:', e);
+                }}
+                onMouseDown={(e) => {
+                  if (status !== 'connecting...' && status !== 'connected') {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
                   }
+                }}
+                onMouseUp={(e) => {
+                  if (status !== 'connecting...' && status !== 'connected') {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
                   }
-                  currentSTTSession = null;
-                }
-              
-              // Reset state
-              setStatus('idle');
-              setMessages([]);
-            } catch (error) {
-              console.error('Error disconnecting:', error);
-              // Still reset state even if cleanup had errors
-              setStatus('idle');
-              setMessages([]);
-            }
-          }}
-          disabled={status !== 'connected'}
-          type="button"
-          style={{
-            padding: '14px 32px',
-            fontSize: 16,
-            fontWeight: 600,
-            color: '#ffffff',
-            backgroundColor: status === 'connected' ? '#ef4444' : '#9ca3af',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: status === 'connected' ? 'pointer' : 'not-allowed',
-            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-            transition: 'all 0.2s ease-in-out',
-            minWidth: '180px',
-            flex: 1,
-          }}
-          onMouseEnter={(e) => {
-            if (status === 'connected') {
-              e.currentTarget.style.backgroundColor = '#dc2626';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-              e.currentTarget.style.transform = 'translateY(-1px)';
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (status === 'connected') {
-              e.currentTarget.style.backgroundColor = '#ef4444';
-              e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.transform = 'translateY(0)';
-            }
-          }}
-          onMouseDown={(e) => {
-            if (status === 'connected') {
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
-            }
-          }}
-          onMouseUp={(e) => {
-            if (status === 'connected') {
-              e.currentTarget.style.transform = 'translateY(-1px)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-            }
-          }}
-        >
-          Disconnect
-        </button>
-      <button
-        ref={buttonRef}
-        onClick={() => {
-          if (status === 'connecting...') return;
-          setStatus('connecting...');
-          setupCounter(
-            buttonRef.current as HTMLButtonElement,
-            audioRef.current,
-            selectedInput,
-            selectedOutput,
-            useSTTMode,
-            userData?.name,
-            userData?.age,
-            currentUser?.uid || userData?.uid,
-          )
-            .then(() => setStatus('connected'))
-            .catch((e) => {
-              console.error(e);
-              setStatus('error - see console');
-            });
-        }}
-          disabled={status === 'connecting...' || status === 'connected'}
-        type="button"
-        style={{
-          padding: '14px 32px',
-          fontSize: 16,
-          fontWeight: 600,
-          color: '#ffffff',
-          backgroundColor: status === 'connected' ? '#10b981' : status === 'connecting...' ? '#6b7280' : status === 'error - see console' ? '#ef4444' : '#3b82f6',
-          border: 'none',
-          borderRadius: '8px',
-            cursor: status === 'connecting...' || status === 'connected' ? 'not-allowed' : 'pointer',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)',
-          transition: 'all 0.2s ease-in-out',
-          minWidth: '180px',
-            flex: 1,
-        }}
-        onMouseEnter={(e) => {
-          if (status !== 'connecting...' && status !== 'connected') {
-            e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#dc2626' : '#2563eb';
-            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-            e.currentTarget.style.transform = 'translateY(-1px)';
-          }
-        }}
-        onMouseLeave={(e) => {
-          if (status !== 'connecting...' && status !== 'connected') {
-            e.currentTarget.style.backgroundColor = status === 'error - see console' ? '#ef4444' : '#3b82f6';
-            e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05)';
-            e.currentTarget.style.transform = 'translateY(0)';
-          }
-        }}
-        onMouseDown={(e) => {
-          if (status !== 'connecting...' && status !== 'connected') {
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
-          }
-        }}
-        onMouseUp={(e) => {
-          if (status !== 'connecting...' && status !== 'connected') {
-            e.currentTarget.style.transform = 'translateY(-1px)';
-            e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1), 0 6px 12px rgba(0, 0, 0, 0.08)';
-          }
-        }}
-      >
-        {status === 'connecting...' 
-          ? 'Connecting...' 
-          : status === 'connected' 
-            ? '✓ Connected' 
-            : status === 'error - see console' 
-              ? '⚠ Try Again' 
-              : useSTTMode 
-                ? 'Connect' 
-                : 'Connect Realtime'}
-        </button>
-        </div>
-        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
-        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
-        <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
-          {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
-        </div>
-      </div>
+                }}
+              >
+                {status === 'connecting...'
+                  ? 'Connecting...'
+                  : status === 'connected'
+                    ? '✓ Connected'
+                    : status === 'error - see console'
+                      ? '⚠ Try Again'
+                      : useSTTMode
+                        ? 'Connect'
+                        : 'Connect Realtime'}
+              </button>
+            </div>
+            <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+            <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
+            <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
+              {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
+            </div>
+          </div>
 
         </>
       )}
@@ -5201,7 +5460,7 @@ export default function Page() {
                       <circle cx="12" cy="19" r="1"></circle>
                     </svg>
                   </button>
-                  
+
                   {/* Dropdown menu */}
                   {showMenu && (
                     <div style={{
@@ -5339,7 +5598,7 @@ export default function Page() {
                   }}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
                   </svg>
                   Back
                 </button>
@@ -5500,8 +5759,8 @@ export default function Page() {
                     lineHeight: '1.6',
                   }}>
                     Need more help? Reach out to us at{' '}
-                    <a 
-                      href="mailto:hello@icurious.ai" 
+                    <a
+                      href="mailto:hello@icurious.ai"
                       style={{
                         color: '#3b82f6',
                         textDecoration: 'none',
@@ -5554,7 +5813,7 @@ export default function Page() {
                   }}
                 >
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
                   </svg>
                   Back
                 </button>
@@ -5618,7 +5877,7 @@ export default function Page() {
                       </div>
                     </div>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#9ca3af', flexShrink: 0 }}>
-                      <path d="M9 18l6-6-6-6"/>
+                      <path d="M9 18l6-6-6-6" />
                     </svg>
                   </button>
 
@@ -5664,7 +5923,7 @@ export default function Page() {
                       </div>
                     </div>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#9ca3af', flexShrink: 0 }}>
-                      <path d="M9 18l6-6-6-6"/>
+                      <path d="M9 18l6-6-6-6" />
                     </svg>
                   </button>
                 </div>
@@ -5709,7 +5968,7 @@ export default function Page() {
                       }}>
                         {displayName ? displayName.charAt(0).toUpperCase() : '👤'}
                       </div>
-                      
+
                       {/* Name */}
                       <div style={{
                         textAlign: 'center',
@@ -5804,7 +6063,7 @@ export default function Page() {
                     </p>
                   </div>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                    <path d="M9 18l6-6-6-6"/>
+                    <path d="M9 18l6-6-6-6" />
                   </svg>
                 </button>
               </div>
@@ -5828,13 +6087,13 @@ export default function Page() {
           zIndex: 2000,
           padding: '20px',
         }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) {
-            setShowEditPopup(false);
-            setEditValue('');
-            setSaveError('');
-          }
-        }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowEditPopup(false);
+              setEditValue('');
+              setSaveError('');
+            }
+          }}
         >
           <div style={{
             backgroundColor: 'white',
@@ -5844,7 +6103,7 @@ export default function Page() {
             width: '100%',
             boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
           }}
-          onClick={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{
               fontSize: isMobile ? '20px' : '24px',
@@ -5863,7 +6122,7 @@ export default function Page() {
             }}>
               Enter your new {editType === 'name' ? 'name' : 'age'} below
             </p>
-            
+
             <div style={{ marginBottom: '20px' }}>
               <label
                 htmlFor="editInput"
@@ -5919,7 +6178,7 @@ export default function Page() {
                 </p>
               )}
             </div>
-            
+
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
                 type="button"
@@ -6335,11 +6594,11 @@ export default function Page() {
           zIndex: 2000,
           padding: '20px',
         }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) {
-            setShowLogoutConfirm(false);
-          }
-        }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowLogoutConfirm(false);
+            }
+          }}
         >
           <div style={{
             backgroundColor: 'white',
@@ -6349,7 +6608,7 @@ export default function Page() {
             width: '100%',
             boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
           }}
-          onClick={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{
               fontSize: isMobile ? '20px' : '24px',
@@ -6368,7 +6627,7 @@ export default function Page() {
             }}>
               Are you sure you want to logout? You'll need to sign in again to continue.
             </p>
-            
+
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
                 type="button"
@@ -6438,13 +6697,13 @@ export default function Page() {
           zIndex: 2000,
           padding: '20px',
         }}
-        onClick={(e) => {
-          if (e.target === e.currentTarget) {
-            setShowSettingsModal(false);
-            setAdminCode('');
-            setAdminError('');
-          }
-        }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowSettingsModal(false);
+              setAdminCode('');
+              setAdminError('');
+            }
+          }}
         >
           <div style={{
             backgroundColor: 'white',
@@ -6454,7 +6713,7 @@ export default function Page() {
             width: '100%',
             boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)',
           }}
-          onClick={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{
               fontSize: '24px',
