@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/agents/realtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
@@ -273,6 +273,7 @@ export async function setupRealtimeMode(
   userName?: string,
   userAge?: number,
   uid?: string,
+  onDeviceRefresh?: (preserveSelection?: boolean, updateSelection?: boolean) => Promise<void>,
 ) {
   // Fetch top memories for personalization
   let memories: UserMemory[] = [];
@@ -292,8 +293,19 @@ export async function setupRealtimeMode(
     audio: inputDeviceId ? { deviceId: { exact: inputDeviceId } } : true,
   };
   const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+  
   if (audioEl && typeof (audioEl as any).setSinkId === 'function' && outputDeviceId) {
     try { await (audioEl as any).setSinkId(outputDeviceId); } catch (e) { console.warn('Failed to set sinkId', e); }
+  }
+  
+  // Refresh device list after stream is active (needed for mobile browsers to show device names)
+  // Don't update selection to avoid interfering with audio playback
+  if (onDeviceRefresh) {
+    try {
+      await onDeviceRefresh(true, false); // preserveSelection=true, updateSelection=false
+    } catch (e) {
+      console.warn('Failed to refresh devices after stream creation', e);
+    }
   }
   const transport = new OpenAIRealtimeWebRTC({ mediaStream, audioElement: audioEl ?? undefined });
   const session = new RealtimeSession(agent, { transport });
@@ -710,6 +722,7 @@ export async function setupSTTMode(
   userName?: string,
   userAge?: number,
   uid?: string,
+  onDeviceRefresh?: (preserveSelection?: boolean, updateSelection?: boolean) => Promise<void>,
 ) {
   // Close any existing sessions
   try {
@@ -842,6 +855,16 @@ export async function setupSTTMode(
         await (audioEl as any).setSinkId(outputDeviceId);
       } catch (e) {
         console.warn('Failed to set sinkId', e);
+      }
+    }
+
+    // Refresh device list after stream is active (needed for mobile browsers to show device names)
+    // Don't update selection to avoid interfering with audio playback
+    if (onDeviceRefresh) {
+      try {
+        await onDeviceRefresh(true, false); // preserveSelection=true, updateSelection=false
+      } catch (e) {
+        console.warn('Failed to refresh devices after stream creation', e);
       }
     }
 
@@ -4147,6 +4170,7 @@ export async function setupCounter(
   userName?: string,
   userAge?: number,
   uid?: string,
+  onDeviceRefresh?: (preserveSelection?: boolean, updateSelection?: boolean) => Promise<void>,
 ) {
   // Reset audio volume to 1 when connecting (in case it was muted during disconnect)
   if (audioEl) {
@@ -4158,9 +4182,9 @@ export async function setupCounter(
   }
   
   if (useSTTMode) {
-    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
+    return await setupSTTMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid, onDeviceRefresh);
   } else {
-    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid);
+    return await setupRealtimeMode(element, audioEl, inputDeviceId, outputDeviceId, userName, userAge, uid, onDeviceRefresh);
   }
 }
 
@@ -4521,28 +4545,57 @@ export default function Page() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showMenu]);
 
+  // Device refresh function - can be called after media stream is active (needed for mobile browsers)
+  const refreshDevices = useCallback(async (preserveSelection: boolean = true, updateSelection: boolean = true) => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const ins = devices.filter((d) => d.kind === 'audioinput');
+      const outs = devices.filter((d) => d.kind === 'audiooutput');
+      
+      setInputs(ins);
+      setOutputs(outs);
+      
+      // Only update selection if explicitly requested (default true for backward compatibility)
+      if (updateSelection) {
+        // Preserve current selection if device still exists
+        if (preserveSelection) {
+          setSelectedInput(prev => {
+            if (prev && ins.find(d => d.deviceId === prev)) {
+              return prev; // Keep current selection if it still exists
+            }
+            return ins[0]?.deviceId || null;
+          });
+          setSelectedOutput(prev => {
+            if (prev && outs.find(d => d.deviceId === prev)) {
+              return prev; // Keep current selection if it still exists
+            }
+            return outs[0]?.deviceId || null;
+          });
+        } else {
+          // Don't preserve - set to first available device
+          if (ins[0]) setSelectedInput(ins[0].deviceId || null);
+          if (outs[0]) setSelectedOutput(outs[0].deviceId || null);
+        }
+      }
+      // If updateSelection is false, we only update the device lists, not the selections
+      // This prevents interfering with ongoing audio playback
+    } catch (e) {
+      console.warn('enumerateDevices failed', e);
+    }
+  }, []);
+
   useEffect(() => {
     // enumerate devices when permissions are available
     const refresh = async () => {
       try {
         await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {}
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const ins = devices.filter((d) => d.kind === 'audioinput');
-        const outs = devices.filter((d) => d.kind === 'audiooutput');
-        setInputs(ins);
-        setOutputs(outs);
-        if (!selectedInput && ins[0]) setSelectedInput(ins[0].deviceId || null);
-        if (!selectedOutput && outs[0]) setSelectedOutput(outs[0].deviceId || null);
-      } catch (e) {
-        console.warn('enumerateDevices failed', e);
-      }
+      await refreshDevices(false);
     };
     refresh();
     navigator.mediaDevices?.addEventListener?.('devicechange', refresh);
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh);
-  }, []);
+  }, [refreshDevices]);
 
   // Helper variables to use localUserData if available, otherwise fall back to userData
   const displayName = localUserData?.name ?? userData?.name;
@@ -5065,8 +5118,14 @@ export default function Page() {
             userData?.name,
             userData?.age,
             currentUser?.uid || userData?.uid,
+            refreshDevices,
           )
-            .then(() => setStatus('connected'))
+            .then(() => {
+              setStatus('connected');
+              // Refresh devices again after connection is complete to ensure mobile browsers show device names
+              // Don't update selection to avoid interfering with ongoing audio playback
+              refreshDevices(true, false).catch(e => console.warn('Failed to refresh devices after connection', e));
+            })
             .catch((e) => {
               console.error(e);
               setStatus('error - see console');
