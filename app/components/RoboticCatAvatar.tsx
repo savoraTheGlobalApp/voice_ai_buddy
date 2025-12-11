@@ -18,6 +18,7 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
   mood = 'neutral',
   size = 200,
 }) => {
+  console.log('[RoboticCatAvatar] Rendered with state:', eyeColor, 'isTTSPlaying:', isTTSPlaying, 'mood:', mood);
   // Color mapping for eyes by avatar state (yellow/orange family)
   const eyeColors: Record<AvatarState, string> = {
     idle: '#facc15',        // yellow
@@ -30,48 +31,8 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
   const currentEyeColor = eyeColors[eyeColor];
 
-  // Mouth animation: cycle through opening and closing when TTS is playing, default is smile
-  const [mouthShape, setMouthShape] = useState<'closed' | 'open' | 'mid'>('closed');
+  // Code for mouth animation has been moved to CSS for smoother performance
 
-  useEffect(() => {
-    if (!isTTSPlaying) {
-      // Default to subtle smile when idle
-      setMouthShape('closed');
-      return;
-    }
-
-    // Cycle through mouth shapes: closed -> open -> mid -> closed for natural talking motion
-    const interval = setInterval(() => {
-      setMouthShape((prev) => {
-        if (prev === 'closed') return 'open';
-        if (prev === 'open') return 'mid';
-        return 'closed';
-      });
-    }, 120); // Cycle every 120ms for natural talking motion
-
-    return () => clearInterval(interval);
-  }, [isTTSPlaying]);
-
-  // Mouth shapes: closed (smile), open (oval), mid (semi-open)
-  const mouthConfig = {
-    closed: { 
-      // Subtle smile (default/idle)
-      path: 'M 85,140 Q 100,145 115,140',
-      fill: 'none',
-    },
-    open: { 
-      // Open mouth (oval shape)
-      path: 'M 90,135 Q 100,150 110,135 Q 100,155 90,135',
-      fill: '#1a202c',
-    },
-    mid: { 
-      // Semi-open (smaller oval)
-      path: 'M 88,137 Q 100,148 112,137 Q 100,152 88,137',
-      fill: '#1a202c',
-    },
-  };
-
-  const mouth = mouthConfig[mouthShape];
 
   return (
     <div
@@ -136,6 +97,24 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
           50% { transform: rotate(8deg); }
         }
 
+        /* SPEAKING: Mouth Animation (CSS-based for smoothness) */
+        .robotic-cat-avatar[data-state="speaking"] .avatar-mouth {
+          animation: mouthTalk 0.3s infinite alternate ease-in-out;
+          transform-origin: 100px 140px;
+        }
+
+        /* Define path shapes via CSS variables or just animate scale/transform for now as path interpolation is tricky */
+        /* Using scaleY is robust and smooth */
+        @keyframes mouthTalk {
+          0% { transform: scaleY(0.4); } /* Almost closed */
+          100% { transform: scaleY(1.5); } /* Wide open */
+        }
+        
+        /* Ensure mouth looks like a smile when idle/listening/processing */
+        .avatar-mouth {
+          transition: d 0.2s ease;
+        }
+
         /* MOOD-BASED SUBTLE CHANGES */
         /* Encouraging: slight upward tilt, warmer glow */
         .robotic-cat-avatar[data-mood="encouraging"] .avatar-head {
@@ -186,10 +165,10 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
             <stop offset="100%" stopColor="#fda4af" stopOpacity="1" /> {/* salmon pink */}
           </linearGradient>
           <filter id="glow">
-            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+            <feGaussianBlur stdDeviation="3" result="coloredBlur" />
             <feMerge>
-              <feMergeNode in="coloredBlur"/>
-              <feMergeNode in="SourceGraphic"/>
+              <feMergeNode in="coloredBlur" />
+              <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
         </defs>
@@ -289,21 +268,22 @@ const RoboticCatAvatar: React.FC<RoboticCatAvatarProps> = ({
 
         {/* Mouth - Animated opening and closing */}
         <path
-          d={mouth.path}
-          stroke={mouthShape === 'closed' ? '#1a202c' : 'none'}
-          strokeWidth={mouthShape === 'closed' ? 3 : 0}
+          className="avatar-mouth"
+          d={isTTSPlaying
+            ? "M 85,135 Q 100,155 115,135 Q 100,160 85,135"  // Oval for speaking (scaled by CSS)
+            : "M 85,140 Q 100,145 115,140" // Smile for idle
+          }
+          stroke={isTTSPlaying ? "none" : "#1a202c"}
+          strokeWidth={isTTSPlaying ? 0 : 3}
           strokeLinecap="round"
-          fill={mouth.fill}
-          style={{
-            transition: 'd 0.12s ease-in-out, fill 0.12s ease-in-out, stroke 0.12s ease-in-out',
-          }}
+          fill={isTTSPlaying ? "#1a202c" : "none"}
         />
-        
+
         {/* Whiskers - Left side (evenly spaced, slightly curved) */}
         <path d="M 40,100 Q 50,98 60,100" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
         <path d="M 40,108 Q 50,108 60,108" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
         <path d="M 40,116 Q 50,118 60,116" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-        
+
         {/* Whiskers - Right side (evenly spaced, slightly curved) */}
         <path d="M 160,100 Q 150,98 140,100" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
         <path d="M 160,108 Q 150,108 140,108" stroke="#1a202c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
