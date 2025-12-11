@@ -15,6 +15,9 @@ import { ResponseMode, UserIntent, ModeState } from './lib/responseMode';
 import { lightPreClassify, selectMode } from './lib/modeSelector';
 import { buildModePrompt } from './lib/modePrompts';
 import { parseIntentFromResponse, stripIntentTag } from './lib/responseEnforcer';
+import { generateGreetingQuestion, buildRAGPrompt } from './lib/questionEngine';
+import { getContextInfo } from './lib/contextAwareness';
+import { validateQuestion } from './lib/safetyGuardrails';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -3902,9 +3905,42 @@ export async function setupSTTMode(
         }
       }
       
-      // Send a prompt that will generate a dynamic greeting
-      // The AI will use the instructions to greet with the child's name in the first message
-      const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
+      // Generate proactive question using RAG approach
+      const contextInfo = getContextInfo();
+      const questionContext = {
+        userName,
+        userAge,
+        effectiveLevel: effectiveLevel || 'elem_mid', // Fallback if not set
+        topMemories: memories,
+        timeOfDay: contextInfo.timeOfDay,
+        dayOfWeek: contextInfo.dayOfWeek,
+      };
+      
+      // Generate grounding data (fact, dilemma, misconception, etc.)
+      const generatedQuestion = generateGreetingQuestion(questionContext);
+      
+      // Validate grounding for safety (check if fact/topic is appropriate)
+      let greetingPrompt: string;
+      const validation = validateQuestion(
+        generatedQuestion.grounding.fact || 
+        generatedQuestion.grounding.commonBelief || 
+        generatedQuestion.grounding.option1 || 
+        'question',
+        questionContext.effectiveLevel
+      );
+      
+      if (!validation.isValid) {
+        console.warn(`[QuestionEngine] Grounding failed validation: ${validation.reason}, using fallback`);
+        // Fallback to simple greeting
+        greetingPrompt = userName 
+          ? `Please greet ${userName} warmly and ask what they'd like to explore today.`
+          : "Please greet the child warmly and ask what they'd like to explore today.";
+      } else {
+        // Use RAG approach: Build prompt with grounding data, LLM generates natural question
+        const ragPrompt = buildRAGPrompt(generatedQuestion.grounding, questionContext);
+        greetingPrompt = ragPrompt;
+      }
+      
       // Don't add to conversationHistory here - getChatResponseStream will add it
       // This prevents the greeting prompt from appearing twice in the UI
       
