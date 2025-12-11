@@ -59,11 +59,15 @@ DEEPGRAM_STT_ENDPOINTING_MS = 100
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
 
-# CORS configuration - allow Next.js frontend
+# CORS configuration - allow Next.js frontend and Capacitor Android app
 frontend_url = os.getenv("FRONTEND_URL", "")
 cors_origins = [
     "http://localhost:3000",  # Next.js dev
     "http://127.0.0.1:3000",
+    "https://localhost",  # Capacitor Android app (uses https://localhost)
+    "http://localhost",  # Capacitor web fallback
+    "capacitor://localhost",  # Capacitor Android app (alternative)
+    "ionic://localhost",  # Ionic/Capacitor alternative
 ]
 # Add production frontend URL if provided
 if frontend_url:
@@ -73,21 +77,24 @@ if frontend_url:
         if url:
             cors_origins.append(url)
 
-# CORS regex patterns for preview deployments
+# CORS regex patterns for preview deployments and localhost over any port
 # Vercel: Matches patterns like: https://*-*-*-*.vercel.app or https://project-name.vercel.app
 vercel_pattern = r"https://.*\.vercel\.app"
 # Railway: Matches patterns like: https://*-*-*-*.up.railway.app
 railway_pattern = r"https://.*\.railway\.app"
+# Localhost (any port, http or https)
+localhost_pattern = r"https?://localhost(:[0-9]+)?"
 
-# Combine both patterns for preview deployments
-preview_pattern = f"({vercel_pattern}|{railway_pattern})"
+# Combine patterns
+preview_pattern = f"({vercel_pattern}|{railway_pattern}|{localhost_pattern})"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_origin_regex=preview_pattern,  # Allow all Vercel and Railway preview/production URLs
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
+    allow_headers=["*"],
     allow_headers=["*"],
 )
 
