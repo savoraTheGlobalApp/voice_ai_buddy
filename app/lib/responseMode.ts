@@ -15,7 +15,8 @@ export type ResponseMode =
   | 'engage'     // Re-engage with humor, story, or interesting fact
   | 'redirect'   // Gently redirect unsafe/off-topic content
   | 'clarify'    // Ask for clarification on unclear input
-  | 'teach';     // Inverse tutoring - let child teach the AI
+  | 'teach'      // Inverse tutoring - let child teach the AI
+  | 'social';    // Encourage physical activities, hands-on experiments, and parent engagement
 
 /**
  * User intent types detected from input
@@ -31,6 +32,8 @@ export type UserIntent =
   | 'boredom'             // "Boring", "Not interesting"
   | 'request_story'       // "Tell me a story"
   | 'request_joke'        // "Tell me a joke"
+  | 'request_activity'    // "I want to move", "Let's do something"
+  | 'request_parent'      // "Can I ask my mom?", "I want to tell my dad"
   | 'unclear'             // Can't understand
   | 'unsafe'              // Unsafe content detected
   | 'greeting'            // "Hi", "Hello"
@@ -150,6 +153,16 @@ export const MODE_POLICIES: Record<ResponseMode, ModePolicy> = {
     wordBudgetMultiplier: 0.6, // short responses to let child talk more
     description: 'Inverse tutoring - let child teach the AI',
   },
+  social: {
+    mode: 'social',
+    maxQuestions: 1, // optional follow-up
+    requiresAnalogy: false,
+    requiresFact: false,
+    allowHumor: true,
+    toneModifier: 'enthusiastic',
+    wordBudgetMultiplier: 0.8,
+    description: 'Encourage physical activities, hands-on experiments, and parent engagement',
+  },
 };
 
 /**
@@ -163,6 +176,9 @@ export interface ModeState {
   confusionStreak: number;        // Consecutive confusion signals from child
   engagementStreak: number;       // Consecutive engaged responses from child
   turnCount: number;              // Total turns in session
+  modeUsage: Record<ResponseMode, number>; // Count of each mode used (for diversity tracking)
+  previousLLMIntent: UserIntent | null;  // LLM's intent analysis from previous turn
+  previousLLMConfidence: number;         // Confidence of previous LLM intent (0-100)
 }
 
 /**

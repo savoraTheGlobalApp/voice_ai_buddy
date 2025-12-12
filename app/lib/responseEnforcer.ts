@@ -155,6 +155,7 @@ export function parseIntentFromResponse(response: string): UserIntent | null {
       'question_factual', 'question_why', 'question_how',
       'statement_sharing', 'statement_opinion', 'statement_explaining',
       'confusion', 'boredom', 'request_story', 'request_joke',
+      'request_activity', 'request_parent',
       'unclear', 'unsafe', 'greeting', 'silence', 'unknown',
     ];
     

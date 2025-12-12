@@ -101,7 +101,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'compound',
     abstractConcepts: true,
     hintComplexity: 'progressive',
-    responseLength: { min: 15, max: 40 },  // Updated: max increased for explanations
+    responseLength: { min: 12, max: 25 },  // Reduced from 40 to 25 for age-appropriate length
   },
   elem_mid: {
     level: 'elem_mid',
@@ -111,7 +111,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'compound',
     abstractConcepts: true,
     hintComplexity: 'progressive',
-    responseLength: { min: 15, max: 50 },  // Updated: max increased for explanations
+    responseLength: { min: 15, max: 30 },  // Reduced from 50 to 30 for age-appropriate length
   },
   elem_high: {
     level: 'elem_high',
@@ -121,7 +121,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'complex',
     abstractConcepts: true,
     hintComplexity: 'progressive',
-    responseLength: { min: 15, max: 60 },  // Updated: max increased for explanations
+    responseLength: { min: 15, max: 35 },  // Reduced from 60 to 35 for age-appropriate length
   },
   upper_low: {
     level: 'upper_low',

@@ -499,6 +499,13 @@ export async function updateAdaptiveStateAge(uid: string, newAge: number): Promi
  * Starting mode is 'engage' for warm, friendly greeting
  */
 export function initializeModeState(): ModeState {
+  // Initialize modeUsage with all modes set to 0
+  const allModes: ResponseMode[] = ['probe', 'hint', 'explain', 'encourage', 'simplify', 'engage', 'redirect', 'clarify', 'teach', 'social'];
+  const initialModeUsage: Record<ResponseMode, number> = {} as Record<ResponseMode, number>;
+  allModes.forEach(mode => {
+    initialModeUsage[mode] = 0;
+  });
+  
   const initialState: ModeState = {
     currentMode: 'engage',
     lastModes: [],
@@ -506,6 +513,9 @@ export function initializeModeState(): ModeState {
     confusionStreak: 0,
     engagementStreak: 0,
     turnCount: 0,
+    modeUsage: initialModeUsage,
+    previousLLMIntent: null,
+    previousLLMConfidence: 0,
   };
   
   console.log('[ModeState] Initialized:', JSON.stringify(initialState));
@@ -519,7 +529,8 @@ export function updateModeState(
   currentState: ModeState,
   selectedMode: ResponseMode,
   preClass: PreClassification,
-  detectedIntent: UserIntent | null
+  detectedIntent: UserIntent | null,
+  llmConfidence?: number
 ): ModeState {
   // Use detected intent if available, otherwise use pre-classification
   const effectiveIntent = detectedIntent || preClass.intent;
@@ -554,6 +565,10 @@ export function updateModeState(
   }
   // If neutral, don't change engagement streak
   
+  // Update mode usage tracking
+  const newModeUsage = { ...currentState.modeUsage };
+  newModeUsage[selectedMode] = (newModeUsage[selectedMode] || 0) + 1;
+  
   const newState: ModeState = {
     currentMode: selectedMode,
     lastModes: newLastModes,
@@ -561,9 +576,38 @@ export function updateModeState(
     confusionStreak,
     engagementStreak,
     turnCount: currentState.turnCount + 1,
+    modeUsage: newModeUsage,
+    previousLLMIntent: detectedIntent || null,
+    previousLLMConfidence: llmConfidence || (detectedIntent ? 75 : 0),
   };
   
   return newState;
+}
+
+/**
+ * Get mode diversity score (0-1, higher = more diverse)
+ */
+export function getModeDiversityScore(modeState: ModeState): number {
+  if (modeState.lastModes.length === 0) return 1.0; // Perfect diversity if no history
+  
+  const modeCounts: Record<string, number> = {};
+  modeState.lastModes.forEach(mode => {
+    modeCounts[mode] = (modeCounts[mode] || 0) + 1;
+  });
+  
+  // Calculate entropy (diversity measure)
+  const total = modeState.lastModes.length;
+  let entropy = 0;
+  Object.values(modeCounts).forEach(count => {
+    const p = count / total;
+    if (p > 0) {
+      entropy -= p * Math.log2(p);
+    }
+  });
+  
+  // Normalize to 0-1 (max entropy = log2(number of unique modes))
+  const maxEntropy = Math.log2(Object.keys(modeCounts).length || 1);
+  return maxEntropy > 0 ? entropy / maxEntropy : 1.0;
 }
 
 /**
@@ -590,8 +634,21 @@ export function logModeInteraction(
  * Log mode state after update
  */
 export function logModeStateAfterUpdate(modeState: ModeState): void {
+  const diversityScore = getModeDiversityScore(modeState);
   console.log(
-    `[ModeState] Updated: { current: ${modeState.currentMode}, turn: ${modeState.turnCount}, qStreak: ${modeState.questionStreak}, confStreak: ${modeState.confusionStreak}, engStreak: ${modeState.engagementStreak} }`
+    `[ModeState] Updated: { current: ${modeState.currentMode}, turn: ${modeState.turnCount}, qStreak: ${modeState.questionStreak}, confStreak: ${modeState.confusionStreak}, engStreak: ${modeState.engagementStreak}, diversity: ${(diversityScore * 100).toFixed(0)}% }`
   );
+  
+  // Log mode usage percentages if we have enough history
+  if (modeState.lastModes.length >= 3) {
+    const modeCounts: Record<string, number> = {};
+    modeState.lastModes.forEach(m => {
+      modeCounts[m] = (modeCounts[m] || 0) + 1;
+    });
+    const usage = Object.entries(modeCounts)
+      .map(([mode, count]) => `${mode}:${((count / modeState.lastModes.length) * 100).toFixed(0)}%`)
+      .join(', ');
+    console.log(`[ModeState] Mode usage (last ${modeState.lastModes.length}): ${usage}`);
+  }
 }
 

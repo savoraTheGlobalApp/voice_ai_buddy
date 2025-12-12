@@ -87,12 +87,16 @@ Where <intent_type> is one of:
 - question_factual, question_why, question_how
 - statement_sharing, statement_opinion, statement_explaining
 - confusion, boredom
-- request_story, request_joke
+- request_story, request_joke, request_activity, request_parent
 - unclear, greeting, unknown
+
+OPTIONAL: You may also include your confidence level (0-100):
+[CONFIDENCE: <number>]
 
 Example response:
 "That's a great question! Think about how water flows downhill..."
 [INTENT: question_why]
+[CONFIDENCE: 85]
 
 `;
 }
@@ -166,6 +170,7 @@ const MODE_INSTRUCTION_TEMPLATES: Record<ResponseMode, (langParams: LanguagePara
 - ${langParams.vocabularyGuidance}
 - ${langParams.sentenceGuidance}
 - Keep response to ${langParams.wordCountRange}
+- OPTIONAL (20% chance): You may suggest a quick physical activity or hands-on experiment related to the topic
 `,
 
   redirect: (langParams, ageGroup) => `## YOUR TASK: REDIRECT (Gently redirect)
@@ -196,7 +201,53 @@ const MODE_INSTRUCTION_TEMPLATES: Record<ResponseMode, (langParams: LanguagePara
 - ${ageGroup === 'early' ? 'Use very simple confusion' : ageGroup === 'elementary' ? 'Use moderate confusion' : 'Use more nuanced confusion'}
 - ${langParams.vocabularyGuidance}
 `,
+
+  social: (langParams, ageGroup) => `## YOUR TASK: SOCIAL (Encourage physical activities, hands-on experiments, and parent engagement)
+- Suggest a simple physical activity OR hands-on experiment related to the current topic
+- Encourage parent engagement: ask them to share what they learned, ask parents questions, or do activities together
+- Make it fun, age-appropriate, and easy to do
+- Keep it short and enthusiastic
+- You may ask ONE optional follow-up question
+- ${getSocialModeGuidance(ageGroup)}
+- ${langParams.vocabularyGuidance}
+- ${langParams.sentenceGuidance}
+- Keep response to ${langParams.wordCountRange}
+`,
 };
+
+/**
+ * Get social mode guidance based on age group
+ */
+function getSocialModeGuidance(ageGroup: AgeGroup): string {
+  switch (ageGroup) {
+    case 'early':
+      return `For ages 3-6:
+- Physical: Simple movements (jump 3 times, stretch like a cat, dance to a song)
+- Hands-on: Sensory activities (touch different textures, sort by color, make shapes with playdough)
+- Parent: "Ask your mom/dad: What color is your favorite toy?" or "Show your dad what you learned about [topic]!"
+- Keep activities VERY simple (1-2 steps)
+- Use familiar objects from daily life`;
+      
+    case 'elementary':
+      return `For ages 6-9:
+- Physical: Movement breaks (10 jumping jacks, stretch like a tree, quick dance)
+- Hands-on: Simple experiments (test if things float, mix colors, observe shadows)
+- Parent: "Ask your parent: How does [related thing] work?" or "Tell your mom what you learned about [topic]!"
+- Suggest parent-child activities: "Try this with your dad: [simple experiment]"
+- Activities should be 2-3 steps, safe and fun`;
+      
+    case 'upper':
+      return `For ages 9-12:
+- Physical: Physical challenges (balance on one foot, do 5 push-ups, quick exercise)
+- Hands-on: Projects and experiments (build something, test a hypothesis, create a model)
+- Parent: "Discuss with your parents: What do you think about [topic]?" or "Explain to your mom what we learned!"
+- Suggest parent-child projects: "Try this project with your family: [activity]"
+- Activities can be more complex (3-5 steps), encourage critical thinking`;
+      
+    default:
+      return 'Suggest age-appropriate physical activities and parent engagement';
+  }
+}
 
 /**
  * Build the core role description based on age group with Montessori-inspired guidance
@@ -372,24 +423,62 @@ export function getAdjustedWordCount(
 }
 
 /**
- * Parse detected intent from LLM response
+ * Enhanced intent extraction from LLM response
+ * Extracts intent, confidence, and signals
+ */
+export function parseEnhancedIntentFromResponse(response: string): {
+  intent: UserIntent | null;
+  confidence: number;
+  signals?: {
+    confusion?: boolean;
+    boredom?: boolean;
+    effort?: boolean;
+    engagement?: boolean;
+    explaining?: boolean;
+  };
+} {
+  // Parse [INTENT: ...] tag
+  const intentMatch = response.match(/\[INTENT:\s*(\w+)\]/i);
+  if (!intentMatch) {
+    return { intent: null, confidence: 0 };
+  }
+  
+  const intent = intentMatch[1].toLowerCase() as UserIntent;
+  
+  // Validate it's a known intent
+  const validIntents: UserIntent[] = [
+    'question_factual', 'question_why', 'question_how',
+    'statement_sharing', 'statement_opinion', 'statement_explaining',
+    'confusion', 'boredom', 'request_story', 'request_joke',
+    'request_activity', 'request_parent',
+    'unclear', 'greeting', 'unknown',
+  ];
+  
+  if (!validIntents.includes(intent)) {
+    return { intent: null, confidence: 0 };
+  }
+  
+  // Parse [CONFIDENCE: ...] tag (optional)
+  const confidenceMatch = response.match(/\[CONFIDENCE:\s*(\d+)\]/i);
+  const confidence = confidenceMatch ? Math.min(100, Math.max(0, parseInt(confidenceMatch[1]))) : 75; // Default 75%
+  
+  // Extract signals from response text (if LLM mentions them)
+  const signals = {
+    confusion: /\b(confused|confusion|don'?t understand|doesn'?t make sense)\b/i.test(response),
+    boredom: /\b(boring|bored|not interesting|dull)\b/i.test(response),
+    effort: /\b(trying|think|maybe|probably|guess|wonder)\b/i.test(response),
+    engagement: response.length > 100 || response.split(' ').length > 15,
+    explaining: /\b(explain|because|the reason|so basically|what happens is)\b/i.test(response),
+  };
+  
+  return { intent, confidence, signals };
+}
+
+/**
+ * Parse detected intent from LLM response (backward compatibility)
  */
 export function parseIntentFromResponse(response: string): UserIntent | null {
-  const intentMatch = response.match(/\[INTENT:\s*(\w+)\]/i);
-  if (intentMatch && intentMatch[1]) {
-    const intent = intentMatch[1].toLowerCase() as UserIntent;
-    // Validate it's a known intent
-    const validIntents: UserIntent[] = [
-      'question_factual', 'question_why', 'question_how',
-      'statement_sharing', 'statement_opinion', 'statement_explaining',
-      'confusion', 'boredom', 'request_story', 'request_joke',
-      'unclear', 'greeting', 'unknown',
-    ];
-    if (validIntents.includes(intent)) {
-      return intent;
-    }
-  }
-  return null;
+  return parseEnhancedIntentFromResponse(response).intent;
 }
 
 /**

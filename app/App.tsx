@@ -12,9 +12,10 @@ import CatLogo from '@/app/components/CatLogo';
 import { buildAgeSpecificInstructions, getLanguageComplexityParams } from './lib/ageSpecificInstructions';
 import { loadAdaptiveState, initializeAdaptiveState, analyzeAndUpdateState, AdaptiveState, updateAdaptiveStateAge, initializeModeState, updateModeState, logModeStateAfterUpdate } from './lib/adaptiveState';
 import { ResponseMode, UserIntent, ModeState } from './lib/responseMode';
-import { lightPreClassify, selectMode } from './lib/modeSelector';
-import { buildModePrompt } from './lib/modePrompts';
-import { parseIntentFromResponse, stripIntentTag } from './lib/responseEnforcer';
+import { combinedPreClassify, selectModeWithReasoning, logModeSelection } from './lib/modeSelector';
+import { getMetricsTracker } from './lib/modeMetrics';
+import { buildModePrompt, parseEnhancedIntentFromResponse } from './lib/modePrompts';
+import { stripIntentTag } from './lib/responseEnforcer';
 import { generateGreetingQuestion, buildRAGPrompt } from './lib/questionEngine';
 import { getContextInfo } from './lib/contextAwareness';
 import { validateQuestion } from './lib/safetyGuardrails';
@@ -1813,14 +1814,31 @@ export async function setupSTTMode(
       }
       // === MODE STATE MACHINE: Pre-classification and mode selection ===
       let selectedMode: ResponseMode = modeState.currentMode;
-      let preClass = lightPreClassify(userMessage || '');
+      // Use combined intent analysis (rule-based + previous LLM intent)
+      let preClass = combinedPreClassify(
+        userMessage || '',
+        modeState.previousLLMIntent,
+        modeState.previousLLMConfidence,
+        modeState
+      );
       
       if (!isInitialGreeting && userMessage && effectiveLevel) {
-        // Select mode based on pre-classification and current state
-        selectedMode = selectMode(preClass, modeState, effectiveLevel);
+        // Select mode based on combined pre-classification and current state (with reasoning)
+        const modeSelection = selectModeWithReasoning(preClass, modeState, effectiveLevel);
+        selectedMode = modeSelection.mode;
         
-        // Log mode selection
-        console.log(`[ModeState] Turn ${modeState.turnCount + 1} | Pre-class: ${preClass.intent} | Selected: ${selectedMode} | Signals: confusion=${preClass.signals.confusion}, boredom=${preClass.signals.boredom}`);
+        // Record mode usage for metrics
+        const metricsTracker = getMetricsTracker();
+        metricsTracker.recordModeUsage(selectedMode, modeState.turnCount + 1);
+        
+        // Log mode selection with enhanced reasoning
+        logModeSelection(
+          modeState.turnCount + 1,
+          preClass,
+          selectedMode,
+          modeState,
+          modeSelection.reason
+        );
         
         // Build mode-specific prompt and update system message
         const modePrompt = buildModePrompt({
@@ -1919,15 +1937,31 @@ export async function setupSTTMode(
                     let detectedIntent: UserIntent | null = null;
                     
                     if (!isInitialGreeting && effectiveLevel) {
-                      // Parse intent from the LLM's response
-                      detectedIntent = parseIntentFromResponse(fullResponse);
+                      // Parse enhanced intent from the LLM's response (includes confidence)
+                      const enhancedIntent = parseEnhancedIntentFromResponse(fullResponse);
+                      detectedIntent = enhancedIntent.intent;
                       
                       // Strip intent tag from response for display/TTS
                       cleanResponse = stripIntentTag(fullResponse);
                       
-                      // Update mode state based on selected mode and detected intent
-                      modeState = updateModeState(modeState, selectedMode, preClass, detectedIntent);
+                      // Update mode state based on selected mode and detected intent with confidence
+                      modeState = updateModeState(
+                        modeState, 
+                        selectedMode, 
+                        preClass, 
+                        detectedIntent,
+                        enhancedIntent.confidence
+                      );
                       logModeStateAfterUpdate(modeState);
+                      
+                      // Record outcome for metrics (this turn's user input is the outcome of previous mode)
+                      const metricsTracker = getMetricsTracker();
+                      metricsTracker.recordOutcome(preClass, modeState, modeState.engagementStreak);
+                      
+                      // Log metrics summary every 10 turns
+                      if (modeState.turnCount % 10 === 0) {
+                        metricsTracker.logSummary();
+                      }
                     }
                     // === END MODE STATE MACHINE POST-PROCESSING ===
                     
@@ -1983,10 +2017,26 @@ export async function setupSTTMode(
             // === MODE STATE MACHINE: Post-processing (fallback path) ===
             let cleanResponseFallback = fullResponse;
             if (!isInitialGreeting && effectiveLevel) {
-              const detectedIntentFallback = parseIntentFromResponse(fullResponse);
+              const enhancedIntentFallback = parseEnhancedIntentFromResponse(fullResponse);
+              const detectedIntentFallback = enhancedIntentFallback.intent;
               cleanResponseFallback = stripIntentTag(fullResponse);
-              modeState = updateModeState(modeState, selectedMode, preClass, detectedIntentFallback);
+              modeState = updateModeState(
+                modeState, 
+                selectedMode, 
+                preClass, 
+                detectedIntentFallback,
+                enhancedIntentFallback.confidence
+              );
               logModeStateAfterUpdate(modeState);
+              
+              // Record outcome for metrics
+              const metricsTracker = getMetricsTracker();
+              metricsTracker.recordOutcome(preClass, modeState, modeState.engagementStreak);
+              
+              // Log metrics summary every 10 turns
+              if (modeState.turnCount % 10 === 0) {
+                metricsTracker.logSummary();
+              }
             }
             // === END MODE STATE MACHINE POST-PROCESSING ===
             
@@ -2050,14 +2100,31 @@ export async function setupSTTMode(
       }
       // === MODE STATE MACHINE: Pre-classification and mode selection ===
       let selectedModeNonStream: ResponseMode = modeState.currentMode;
-      let preClassNonStream = lightPreClassify(userMessage || '');
+      // Use combined intent analysis (rule-based + previous LLM intent)
+      let preClassNonStream = combinedPreClassify(
+        userMessage || '',
+        modeState.previousLLMIntent,
+        modeState.previousLLMConfidence,
+        modeState
+      );
       
       if (!isInitialGreeting && userMessage && effectiveLevel) {
-        // Select mode based on pre-classification and current state
-        selectedModeNonStream = selectMode(preClassNonStream, modeState, effectiveLevel);
+        // Select mode based on combined pre-classification and current state (with reasoning)
+        const modeSelectionNonStream = selectModeWithReasoning(preClassNonStream, modeState, effectiveLevel);
+        selectedModeNonStream = modeSelectionNonStream.mode;
         
-        // Log mode selection
-        console.log(`[ModeState] Turn ${modeState.turnCount + 1} | Pre-class: ${preClassNonStream.intent} | Selected: ${selectedModeNonStream} | Signals: confusion=${preClassNonStream.signals.confusion}, boredom=${preClassNonStream.signals.boredom}`);
+        // Record mode usage for metrics
+        const metricsTracker = getMetricsTracker();
+        metricsTracker.recordModeUsage(selectedModeNonStream, modeState.turnCount + 1);
+        
+        // Log mode selection with enhanced reasoning
+        logModeSelection(
+          modeState.turnCount + 1,
+          preClassNonStream,
+          selectedModeNonStream,
+          modeState,
+          modeSelectionNonStream.reason
+        );
         
         // Build mode-specific prompt and update system message
         const modePromptNonStream = buildModePrompt({
@@ -2126,15 +2193,31 @@ export async function setupSTTMode(
           let detectedIntentNonStream: UserIntent | null = null;
           
           if (!isInitialGreeting && effectiveLevel) {
-            // Parse intent from the LLM's response
-            detectedIntentNonStream = parseIntentFromResponse(assistantMessage);
+            // Parse enhanced intent from the LLM's response (includes confidence)
+            const enhancedIntentNonStream = parseEnhancedIntentFromResponse(assistantMessage);
+            detectedIntentNonStream = enhancedIntentNonStream.intent;
             
             // Strip intent tag from response for display/TTS
             cleanAssistantMessage = stripIntentTag(assistantMessage);
             
-            // Update mode state based on selected mode and detected intent
-            modeState = updateModeState(modeState, selectedModeNonStream, preClassNonStream, detectedIntentNonStream);
+            // Update mode state based on selected mode and detected intent with confidence
+            modeState = updateModeState(
+              modeState, 
+              selectedModeNonStream, 
+              preClassNonStream, 
+              detectedIntentNonStream,
+              enhancedIntentNonStream.confidence
+            );
             logModeStateAfterUpdate(modeState);
+            
+            // Record outcome for metrics
+            const metricsTracker = getMetricsTracker();
+            metricsTracker.recordOutcome(preClassNonStream, modeState, modeState.engagementStreak);
+            
+            // Log metrics summary every 10 turns
+            if (modeState.turnCount % 10 === 0) {
+              metricsTracker.logSummary();
+            }
           }
           // === END MODE STATE MACHINE POST-PROCESSING ===
           
