@@ -10,6 +10,7 @@ import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 import CatLogo from '@/app/components/CatLogo';
+import { isNativeAudioAvailable, listNativeInputs, listNativeOutputs, setNativeInputDevice, setNativeOutputDevice } from '@/lib/nativeDevices';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -289,13 +290,32 @@ export async function setupRealtimeMode(
     instructions: instructions,
   });
   // Capture mic stream explicitly and pass it to the WebRTC transport
-  const constraints: MediaStreamConstraints = {
+  if (isNativeAudioAvailable()) {
+    await setNativeInputDevice(inputDeviceId);
+  }
+
+  // Build relaxed constraints and fall back if over-constrained
+  let mediaStream: MediaStream | null = null;
+  const primaryConstraints: MediaStreamConstraints = {
     audio: inputDeviceId ? { deviceId: { exact: inputDeviceId } } : true,
   };
-  const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+  const fallbackConstraints: MediaStreamConstraints = { audio: true };
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia(primaryConstraints);
+  } catch (err: any) {
+    if (err && err.name === 'OverconstrainedError') {
+      console.warn('[realtime] Overconstrained with selected mic, falling back to default mic');
+      mediaStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+    } else {
+      throw err;
+    }
+  }
   
   if (audioEl && typeof (audioEl as any).setSinkId === 'function' && outputDeviceId) {
     try { await (audioEl as any).setSinkId(outputDeviceId); } catch (e) { console.warn('Failed to set sinkId', e); }
+  }
+  if (isNativeAudioAvailable()) {
+    await setNativeOutputDevice(outputDeviceId);
   }
   
   // Refresh device list after stream is active (needed for mobile browsers to show device names)
@@ -340,6 +360,7 @@ export async function setupRealtimeMode(
     }
     // Get backend URL from environment variable or use default
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    console.log('[Realtime] Using backend URL:', backendUrl);
     const resp = await fetch(`${backendUrl}/api/realtime-token`, { method: 'GET' });
     if (!resp.ok) {
       const text = await resp.text();
@@ -361,6 +382,7 @@ export async function setupRealtimeMode(
       let userMsgCounter = 0;
       const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      console.log('[Memory Extract] Using backend URL:', backendUrl);
       const maybeExtractMemories = async () => {
         if (!uid) return;
         try {
@@ -844,10 +866,26 @@ export async function setupSTTMode(
     ];
 
     // Get media stream for microphone
-    const constraints: MediaStreamConstraints = {
+    if (isNativeAudioAvailable()) {
+      await setNativeInputDevice(inputDeviceId);
+    }
+
+    // Build relaxed constraints and fall back if over-constrained
+    let mediaStream: MediaStream | null = null;
+    const primaryConstraints: MediaStreamConstraints = {
       audio: inputDeviceId ? { deviceId: { exact: inputDeviceId } } : true,
     };
-    const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const fallbackConstraints: MediaStreamConstraints = { audio: true };
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia(primaryConstraints);
+    } catch (err: any) {
+      if (err && err.name === 'OverconstrainedError') {
+        console.warn('[STT] Overconstrained with selected mic, falling back to default mic');
+        mediaStream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+      } else {
+        throw err;
+      }
+    }
 
     // Set output device if available
     if (audioEl && typeof (audioEl as any).setSinkId === 'function' && outputDeviceId) {
@@ -856,6 +894,9 @@ export async function setupSTTMode(
       } catch (e) {
         console.warn('Failed to set sinkId', e);
       }
+    }
+    if (isNativeAudioAvailable()) {
+      await setNativeOutputDevice(outputDeviceId);
     }
 
     // Refresh device list after stream is active (needed for mobile browsers to show device names)
@@ -889,6 +930,7 @@ export async function setupSTTMode(
     // Fallback to backend only if admin settings don't exist
     if (!hasAdminSettings || !sttProvider) {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+      console.log('[STT Config] Using backend URL:', backendUrl);
       try {
         const resp = await fetch(`${backendUrl}/api/stt-provider`);
         if (resp.ok) {
@@ -4548,12 +4590,96 @@ export default function Page() {
   // Device refresh function - can be called after media stream is active (needed for mobile browsers)
   const refreshDevices = useCallback(async (preserveSelection: boolean = true, updateSelection: boolean = true) => {
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const ins = devices.filter((d) => d.kind === 'audioinput');
-      const outs = devices.filter((d) => d.kind === 'audiooutput');
+      let ins: MediaDeviceInfo[] = [];
+      let outs: MediaDeviceInfo[] = [];
+
+      if (isNativeAudioAvailable()) {
+        try {
+          const [nativeIns, nativeOuts] = await Promise.all([listNativeInputs(), listNativeOutputs()]);
+          // Cast to MediaDeviceInfo shape for reuse in UI
+          ins = nativeIns as unknown as MediaDeviceInfo[];
+          outs = nativeOuts as unknown as MediaDeviceInfo[];
+          console.log('[DeviceRefresh] Native devices found:', { inputs: ins.length, outputs: outs.length });
+        } catch (nativeError) {
+          console.warn('[DeviceRefresh] Native plugin failed, falling back to browser API:', nativeError);
+          // Fall through to browser API
+        }
+      }
       
-      setInputs(ins);
-      setOutputs(outs);
+      // If native failed or not available, use browser API
+      if (ins.length === 0 || outs.length === 0) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+          const browserIns = devices.filter((d) => d.kind === 'audioinput');
+          const browserOuts = devices.filter((d) => d.kind === 'audiooutput');
+          
+          // Generate meaningful labels for devices with empty labels (common on mobile)
+          const generateLabel = (device: MediaDeviceInfo, index: number, kind: string) => {
+            if (device.label && device.label.trim() !== '') {
+              return device.label;
+            }
+            // Generate label based on deviceId pattern or index
+            const deviceIdStr = device.deviceId || '';
+            if (deviceIdStr.includes('bluetooth') || deviceIdStr.toLowerCase().includes('bt')) {
+              return `Bluetooth ${kind === 'audioinput' ? 'Microphone' : 'Headset'}`;
+            }
+            if (deviceIdStr.includes('usb')) {
+              return `USB ${kind === 'audioinput' ? 'Microphone' : 'Speaker'}`;
+            }
+            if (deviceIdStr.includes('default') || deviceIdStr === 'default' || deviceIdStr === 'communications' || deviceIdStr === '') {
+              return `Default ${kind === 'audioinput' ? 'Microphone' : 'Speaker'}`;
+            }
+            // Fallback to numbered device
+            return `${kind === 'audioinput' ? 'Microphone' : 'Speaker'} ${index + 1}`;
+          };
+          
+          // Apply labels to browser devices
+          const labeledIns = browserIns.map((d, i) => ({
+            ...d,
+            label: generateLabel(d, i, 'audioinput')
+          }));
+          const labeledOuts = browserOuts.map((d, i) => ({
+            ...d,
+            label: generateLabel(d, i, 'audiooutput')
+          }));
+          
+          // Merge with native results (native takes priority)
+          if (ins.length === 0) ins = labeledIns;
+          if (outs.length === 0) outs = labeledOuts;
+          
+          console.log('[DeviceRefresh] Browser devices found:', { inputs: browserIns.length, outputs: browserOuts.length });
+          console.log('[DeviceRefresh] Browser device labels:', { inputs: labeledIns.map(d => d.label), outputs: labeledOuts.map(d => d.label) });
+        } catch (browserError) {
+          console.warn('[DeviceRefresh] Browser enumerateDevices failed:', browserError);
+        }
+      }
+
+      // Add fallback "Default" option if no devices found
+      if (ins.length === 0) {
+        ins = [{
+          deviceId: 'default',
+          kind: 'audioinput',
+          label: 'Default Microphone',
+          groupId: '',
+          toJSON: () => ({})
+        } as MediaDeviceInfo];
+        console.log('[DeviceRefresh] Added fallback input device');
+      }
+      
+      if (outs.length === 0) {
+        outs = [{
+          deviceId: 'default',
+          kind: 'audiooutput',
+          label: 'Default Speaker',
+          groupId: '',
+          toJSON: () => ({})
+        } as MediaDeviceInfo];
+        console.log('[DeviceRefresh] Added fallback output device');
+      }
+
+      console.log('[DeviceRefresh] Final device lists:', { inputs: ins.length, outputs: outs.length, inputLabels: ins.map(d => d.label), outputLabels: outs.map(d => d.label) });
+        setInputs(ins);
+        setOutputs(outs);
       
       // Only update selection if explicitly requested (default true for backward compatibility)
       if (updateSelection) {
@@ -4579,21 +4705,28 @@ export default function Page() {
       }
       // If updateSelection is false, we only update the device lists, not the selections
       // This prevents interfering with ongoing audio playback
-    } catch (e) {
-      console.warn('enumerateDevices failed', e);
-    }
+      } catch (e) {
+        console.warn('enumerateDevices failed', e);
+      }
   }, []);
 
   useEffect(() => {
     // enumerate devices when permissions are available
     const refresh = async () => {
       try {
+        console.log('[DeviceInit] Requesting microphone permission...');
         await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {}
+        console.log('[DeviceInit] Permission granted, enumerating devices...');
+      } catch (e) {
+        console.warn('[DeviceInit] Permission request failed:', e);
+      }
       await refreshDevices(false);
     };
     refresh();
-    navigator.mediaDevices?.addEventListener?.('devicechange', refresh);
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+      console.log('[DeviceChange] Device change detected, refreshing...');
+      refresh();
+    });
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh);
   }, [refreshDevices]);
 
@@ -5122,6 +5255,14 @@ export default function Page() {
           )
             .then(() => {
               setStatus('connected');
+              // Refresh devices again after connection is complete to ensure mobile browsers show device names
+              // Don't update selection to avoid interfering with ongoing audio playback
+              console.log('[Connect] Connection successful, refreshing devices...');
+              refreshDevices(true, false).then(() => {
+                console.log('[Connect] Device refresh complete');
+              }).catch(e => {
+                console.warn('[Connect] Failed to refresh devices after connection', e);
+              });
               // Refresh devices again after connection is complete to ensure mobile browsers show device names
               // Don't update selection to avoid interfering with ongoing audio playback
               refreshDevices(true, false).catch(e => console.warn('Failed to refresh devices after connection', e));
