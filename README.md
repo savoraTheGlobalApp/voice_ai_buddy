@@ -137,12 +137,53 @@ voice_ai_buddy/
 ├── app/                    # Next.js frontend
 │   ├── App.tsx            # Main voice AI component
 │   └── page.tsx           # Next.js page wrapper
+├── android/                # Android app (Capacitor)
 ├── backend/               # Python FastAPI backend
 │   ├── main.py           # FastAPI application
 │   ├── requirements.txt  # Python dependencies
 │   └── README.md         # Backend documentation
+├── lib/                    # Shared utilities
+│   └── nativeDevices.ts  # Native device plugin interface
 └── README.md             # This file
 ```
+
+## Android App
+
+### Prerequisites
+- Android Studio with Android SDK
+- Java 11 or 17
+- Physical Android device with USB debugging enabled
+
+### Build APK
+
+1. **Set backend URL** in `.env.local`:
+   ```bash
+   NEXT_PUBLIC_BACKEND_URL=https://your-railway-app.up.railway.app
+   ```
+
+2. **Build and install**:
+   ```bash
+   # Build Next.js app
+   npm run build
+   
+   # Sync Capacitor
+   npx cap sync android
+   
+   # Build APK
+   cd android
+   ./gradlew.bat assembleDebug
+   cd ..
+   
+   # Install on device
+   adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+   ```
+
+3. **Or use build script**:
+   ```bash
+   ./build-android.sh
+   ```
+
+See **[README-ANDROID.md](./README-ANDROID.md)** for detailed Android build instructions and troubleshooting.
 
 ## Deployment
 

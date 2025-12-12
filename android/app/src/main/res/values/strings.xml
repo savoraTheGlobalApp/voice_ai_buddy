@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Learning Buddy</string>
+    <string name="title_activity_main">Learning Buddy</string>
+    <string name="package_name">com.startupworld.voiceaibuddy</string>
+    <string name="custom_url_scheme">com.startupworld.voiceaibuddy</string>
+</resources>
