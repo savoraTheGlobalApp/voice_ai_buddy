@@ -318,15 +318,22 @@ export function buildRAGPrompt(grounding: QuestionGrounding, context: QuestionCo
   switch (grounding.strategy) {
     case 'did_you_know':
       // RAG: Provide fact, LLM generates curiosity-inducing question
-      prompt = `${greeting}${namePart}! I have an interesting fact for you: "${grounding.fact}" (Topic: ${grounding.topic}). 
-      
-Generate a natural, age-appropriate question that creates an INFORMATION GAP - don't just state the fact. Instead, create curiosity by:
-- Highlighting what's surprising or unexpected about this fact
-- Asking a question that makes them wonder "why" or "how"
-- Using Information Gap Theory: present a partial scenario that begs completion
-- Making it engaging and conversational
+      prompt = `${greeting}${namePart}! I have an interesting fact: "${grounding.fact}" (Topic: ${grounding.topic}).
 
-Example approach: Instead of "Did you know octopuses have three hearts?", try "Most animals have one heart, but octopuses have THREE! Can you guess why they might need so many?"`;
+Generate a very short, age-appropriate greeting + hook. Keep it concrete and friendly:
+- One short greeting (3-5 words) + the fact (1 short sentence)
+- Then ask ONE simple, concrete question (no "why do you think" yet)
+- Use Information Gap gently: invite curiosity without demanding an explanation
+- Keep total length tight (aim <= ~18 words for early ages)
+
+Good patterns:
+- "Hi! Sharks are super old. Do you like sharks or dolphins more?"
+- "Hello! Sharks lived before trees. Which animal do you like?"
+
+Avoid:
+- Long multi-clause questions
+- "Why do you think..." on the first turn
+- Abstract follow-ups before the child shows interest`;
       break;
       
     case 'would_you_rather':
@@ -345,29 +352,32 @@ Generate a natural, age-appropriate "Would you rather" question that:
       
     case 'bridging':
       // RAG: Provide analogy mapping, LLM generates bridging question
-      prompt = `${greeting}${namePart}! I want to help explain ${grounding.targetDomain} using an analogy to ${grounding.sourceDomain}.
+      prompt = `${greeting}${namePart}! Let's use an analogy: "${grounding.sourceDomain} is like ${grounding.targetDomain}".
 
-Generate a natural, age-appropriate question that:
-- Uses the analogy: "${grounding.sourceDomain} is like ${grounding.targetDomain}"
-- Creates a curiosity gap by asking what specific part maps to what
-- Makes it engaging and relatable
-- Follows this structure: "Imagine [target] is like [source]. If [source element], what do you think [target element] is?"
+Generate a very short, age-appropriate question with NO praise:
+- One short greeting (2-4 words) + the analogy setup
+- Ask ONE mapping question: "If [source element], what is [target element]?"
+- Keep it concrete and concise
+- Avoid praise or flattery ("great idea", etc.)
 
-Example: "Imagine your body is like a castle. If germs are invaders trying to get in, what do you think acts like the knights protecting the gates?"`;
+Example:
+- "Hi! Internet is like mail. If emails are letters, what are servers like?"`;
       break;
       
     case 'information_gap':
       // RAG: Provide misconception, LLM generates gap-revealing question
-      prompt = `${greeting}${namePart}! I have something interesting about a common misconception:
+      prompt = `${greeting}${namePart}! Quick fact:
 - Most people think: "${grounding.commonBelief}"
-- But actually: "${grounding.actualFact}"
-(Topic: ${grounding.topic})
+- But actually: "${grounding.actualFact}" (Topic: ${grounding.topic})
 
-Generate a natural, age-appropriate question that:
-- Uses Information Gap Theory: presents the misconception first, then reveals the actual fact
-- Creates curiosity by highlighting the gap between what people think and what's true
-- Asks them to guess or think about why this might be
-- Makes it engaging: "Most people think [X], but actually [Y]. Can you guess why that might be?"`;
+Generate a very short, age-appropriate question:
+- One short greeting (2-4 words) + the fact (1 short sentence)
+- Then ask ONE simple question: "Can you guess why?"
+- Avoid praise or flattery (no "fascinating insight")
+- Keep it concise and concrete
+
+Example:
+- "Hi! Many think chameleons change to hide, but it's to communicate & stay comfy. Can you guess why?"`;
       break;
   }
   

@@ -18,6 +18,7 @@ import { parseIntentFromResponse, stripIntentTag } from './lib/responseEnforcer'
 import { generateGreetingQuestion, buildRAGPrompt } from './lib/questionEngine';
 import { getContextInfo } from './lib/contextAwareness';
 import { validateQuestion } from './lib/safetyGuardrails';
+import { decideTopicAction } from './lib/topicCoherence';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
@@ -1701,6 +1702,8 @@ export async function setupSTTMode(
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
       globalResponseId: 0, // Initialize global response ID counter
+      currentTopic: null,
+      recentUserMessages: [],
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
       ...(sttProvider && { sttProvider }),
@@ -1785,6 +1788,29 @@ export async function setupSTTMode(
       onChunk: (chunk: string) => void,
       isInitialGreeting: boolean = false
     ): Promise<string> => {
+      // === TOPIC COHERENCE: Track engagement and topic ===
+      let topicNote = '';
+      if (!isInitialGreeting && currentSTTSession) {
+        const sessionAny = currentSTTSession as any;
+        // Track recent user messages
+        const recent = sessionAny.recentUserMessages || [];
+        recent.push(userMessage);
+        sessionAny.recentUserMessages = recent.slice(-3);
+
+        const decision = decideTopicAction(
+          sessionAny.currentTopic || null,
+          userMessage,
+          sessionAny.recentUserMessages
+        );
+        sessionAny.currentTopic = decision.nextTopic || decision.currentTopic || sessionAny.currentTopic || null;
+
+        if (sessionAny.currentTopic) {
+          topicNote = `\\n\\n# TOPIC GUIDANCE\\nCurrent topic: ${sessionAny.currentTopic}. Maintain coherence.`;
+          if (!decision.maintain) {
+            topicNote += ` If engagement seems low, you may gently pivot to this topic: ${sessionAny.currentTopic}.`;
+          }
+        }
+      }
       // === MODE STATE MACHINE: Pre-classification and mode selection ===
       let selectedMode: ResponseMode = modeState.currentMode;
       let preClass = lightPreClassify(userMessage || '');
@@ -1803,7 +1829,7 @@ export async function setupSTTMode(
           userName,
           userAge,
           topMemories: memories,
-        });
+        }) + topicNote;
         conversationHistory[0] = {
           role: 'system',
           content: modePrompt,
@@ -2000,6 +2026,28 @@ export async function setupSTTMode(
     };
     
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      // === TOPIC COHERENCE: Track engagement and topic ===
+      let topicNote = '';
+      if (!isInitialGreeting && currentSTTSession) {
+        const sessionAny = currentSTTSession as any;
+        const recent = sessionAny.recentUserMessages || [];
+        recent.push(userMessage);
+        sessionAny.recentUserMessages = recent.slice(-3);
+
+        const decision = decideTopicAction(
+          sessionAny.currentTopic || null,
+          userMessage,
+          sessionAny.recentUserMessages
+        );
+        sessionAny.currentTopic = decision.nextTopic || decision.currentTopic || sessionAny.currentTopic || null;
+
+        if (sessionAny.currentTopic) {
+          topicNote = `\\n\\n# TOPIC GUIDANCE\\nCurrent topic: ${sessionAny.currentTopic}. Maintain coherence.`;
+          if (!decision.maintain) {
+            topicNote += ` If engagement seems low, you may gently pivot to this topic: ${sessionAny.currentTopic}.`;
+          }
+        }
+      }
       // === MODE STATE MACHINE: Pre-classification and mode selection ===
       let selectedModeNonStream: ResponseMode = modeState.currentMode;
       let preClassNonStream = lightPreClassify(userMessage || '');
@@ -2018,7 +2066,7 @@ export async function setupSTTMode(
           userName,
           userAge,
           topMemories: memories,
-        });
+        }) + topicNote;
         conversationHistory[0] = {
           role: 'system',
           content: modePromptNonStream,

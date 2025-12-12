@@ -131,7 +131,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'complex',
     abstractConcepts: true,
     hintComplexity: 'progressive',
-    responseLength: { min: 15, max: 70 },  // Updated: max increased, min stays low for short responses
+    responseLength: { min: 15, max: 35 },  // tightened for shorter responses
   },
   upper_mid: {
     level: 'upper_mid',
@@ -141,7 +141,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'complex',
     abstractConcepts: true,
     hintComplexity: 'progressive',
-    responseLength: { min: 15, max: 80 },  // Updated: max increased, min stays low for short responses
+    responseLength: { min: 15, max: 35 },  // tightened for shorter responses
   },
   upper_high: {
     level: 'upper_high',
@@ -151,7 +151,7 @@ export const SUB_AGE_LEVELS: Record<SubAgeLevel, SubAgeLevelConfig> = {
     sentenceStructure: 'complex',
     abstractConcepts: true,
     hintComplexity: 'deep',
-    responseLength: { min: 20, max: 100 },  // Updated: max increased for detailed explanations
+    responseLength: { min: 18, max: 45 },  // tightened but allows some depth
   },
 };
 
