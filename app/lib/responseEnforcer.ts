@@ -167,10 +167,13 @@ export function parseIntentFromResponse(response: string): UserIntent | null {
 }
 
 /**
- * Strip intent tag from response for display
+ * Strip intent tag and confidence tag from response for display
  */
 export function stripIntentTag(response: string): string {
-  return response.replace(/\n?\[INTENT:\s*\w+\]/gi, '').trim();
+  return response
+    .replace(/\n?\[INTENT:\s*\w+\]/gi, '')
+    .replace(/\n?\[CONFIDENCE:\s*\d+\]/gi, '')
+    .trim();
 }
 
 /**
