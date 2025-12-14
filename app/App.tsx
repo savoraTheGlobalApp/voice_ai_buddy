@@ -73,6 +73,7 @@ let currentSTTSession: {
   globalResponseId?: number; // Global response ID counter (incremented for each new STT transcript)
   currentTtsResponseId?: number; // Current TTS response ID being processed (stored in closure for audio chunks)
   lastTranscriptTimestamp?: number; // Timestamp of the last processed transcript (for rapid interruption detection)
+  isTTSPlaying?: boolean; // Track if TTS is currently playing (for interruption detection control)
 } | null = null;
 
 // Callback to update chat UI when conversation history changes
@@ -1273,6 +1274,9 @@ export async function setupSTTMode(
       let googleCloudWs: WebSocket | null = null;
       let audioChunkCount = 0;
       
+      // Check environment variable for interruption detection (default: true to maintain current behavior)
+      const enableInterruptionDetection = process.env.NEXT_PUBLIC_ENABLE_INTERRUPTION_DETECTION !== 'false';
+      
       // onaudioprocess fires continuously (every ~128ms at 16kHz with 2048 buffer)
       // This ensures continuous audio streaming to Google Cloud, including silence
       // Google Cloud requires continuous audio to prevent timeout
@@ -1286,6 +1290,12 @@ export async function setupSTTMode(
           int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
         
+        // If interruption detection is disabled and TTS is playing, don't send audio chunks
+        if (!enableInterruptionDetection && currentSTTSession?.isTTSPlaying) {
+          // Don't send audio while AI is speaking
+          return;
+        }
+        
         // Send audio chunks continuously (including silence) to keep Google Cloud stream alive
         // This matches the reference code behavior - continuous microphone capture
         if (googleCloudWs && googleCloudWs.readyState === WebSocket.OPEN) {
@@ -1293,9 +1303,9 @@ export async function setupSTTMode(
             googleCloudWs.send(int16Data.buffer);
             audioChunkCount++;
             // Log every 100 chunks (~12 seconds at 16kHz) to confirm audio is flowing
-            if (audioChunkCount % 100 === 0) {
-              console.log(`[STT] Sent ${audioChunkCount} audio chunks to Google Cloud`);
-            }
+            // if (audioChunkCount % 100 === 0) {
+            //   console.log(`[STT] Sent ${audioChunkCount} audio chunks to Google Cloud`);
+            // }
           } catch (err) {
             console.error('[STT] Error sending audio to Google Cloud:', err);
           }
@@ -1705,6 +1715,7 @@ export async function setupSTTMode(
       globalResponseId: 0, // Initialize global response ID counter
       currentTopic: null,
       recentUserMessages: [],
+      isTTSPlaying: false, // Initialize TTS playing flag
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
       ...(sttProvider && { sttProvider }),
@@ -2281,6 +2292,9 @@ export async function setupSTTMode(
       
       console.log('[TTS] Stopping current TTS playback due to user interruption');
       
+      // Clear TTS playing flag
+      currentSTTSession.isTTSPlaying = false;
+      
       // Stop Deepgram TTS playback
       // Stop all active audio sources
       if (currentSTTSession.deepgramTtsActiveSources) {
@@ -2606,8 +2620,13 @@ export async function setupSTTMode(
                   // Update avatar: TTS is now speaking (Deepgram streaming)
                   // It's safe to set this on each chunk; color doesn't change per chunk.
                   if (onAvatarStateUpdate) {
-                    console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
+                    // console.log('[TTS SPEAKING] Deepgram audio chunk started at', playTime);
                     onAvatarStateUpdate('speaking', true);
+                  }
+                  
+                  // Mark TTS as playing for interruption detection control
+                  if (currentSTTSession) {
+                    currentSTTSession.isTTSPlaying = true;
                   }
 
                   const duration = audioBuffer.duration;
@@ -2623,6 +2642,17 @@ export async function setupSTTMode(
                     // Mark processing as done
                     if (currentSTTSession) {
                       currentSTTSession.deepgramTtsIsProcessingQueue = false;
+                    }
+                    
+                    // Check if all TTS playback is finished (no active sources and queue is empty)
+                    if (currentSTTSession) {
+                      const hasActiveSources = currentSTTSession.deepgramTtsActiveSources && 
+                                               currentSTTSession.deepgramTtsActiveSources.size > 0;
+                      const hasQueueItems = queue.length > 0;
+                      if (!hasActiveSources && !hasQueueItems) {
+                        currentSTTSession.isTTSPlaying = false;
+                        console.log('[STT] TTS playback finished, resuming microphone input');
+                      }
                     }
                     
                     // Process next chunk if available
@@ -2866,6 +2896,11 @@ export async function setupSTTMode(
               // Don't close AudioContext - it's shared across requests
               // Next play time is already updated in processAudioQueue
               playbackFinished = true;
+              // Mark TTS as not playing for interruption detection control
+              if (currentSTTSession) {
+                currentSTTSession.isTTSPlaying = false;
+                console.log('[STT] TTS playback finished, resuming microphone input');
+              }
               // Update avatar: TTS playback finished, return to idle
               if (onAvatarStateUpdate) {
                 onAvatarStateUpdate('idle', false);
@@ -3361,6 +3396,10 @@ export async function setupSTTMode(
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
             }
+            // Mark TTS as playing for interruption detection control
+            if (currentSTTSession) {
+              currentSTTSession.isTTSPlaying = true;
+            }
             // Update avatar: TTS is now speaking
             if (onAvatarStateUpdate) {
               console.log('[TTS SPEAKING] Backend audio element play()');
@@ -3374,6 +3413,11 @@ export async function setupSTTMode(
             if (pauseResumeTimeout) {
               clearTimeout(pauseResumeTimeout);
               pauseResumeTimeout = null;
+            }
+            // Mark TTS as not playing for interruption detection control
+            if (currentSTTSession) {
+              currentSTTSession.isTTSPlaying = false;
+              console.log('[STT] TTS playback finished, resuming microphone input');
             }
             // Clear current audio element reference
             if (currentSTTSession && currentSTTSession.currentTTSAudioElement === audioEl) {
