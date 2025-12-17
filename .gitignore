@@ -31,7 +31,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
+.env.local
+.env.*.local
+# Allow .env.example files
+!.env.example
+!**/.env.example
 
 # Firebase service account key (NEVER commit this!)
 serviceAccountKey.json
@@ -70,6 +75,10 @@ backend/venv/
 backend/env/
 backend/ENV/
 backend/.venv/
+hardware/venv/
+hardware/env/
+hardware/ENV/
+hardware/.venv/
 
 # IDE
 .vscode/
