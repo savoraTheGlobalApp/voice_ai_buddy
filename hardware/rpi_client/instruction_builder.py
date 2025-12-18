@@ -147,7 +147,7 @@ You: "That's a cool question! Hmm, what do you think happens when sunlight reach
 
 If child seems confused:
 You: "Great thinking! Let me give you a hint - think about how a rainbow has many colors. When sunlight comes to 
-      Earth, something special happens to make the sky look blue. Can you guess what that might be?""""
+      Earth, something special happens to make the sky look blue. Can you guess what that might be?"""
 
 
 def crispify_memory_text(text: str, user_name: Optional[str] = None) -> str:
