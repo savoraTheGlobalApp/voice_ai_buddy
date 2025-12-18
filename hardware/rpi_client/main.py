@@ -10,14 +10,8 @@ from typing import List, Optional
 
 from .config import config
 from .audio_handler import AudioHandler
-from .api_client import APIClient, ChatMessage
+from .api_client import APIClient, ChatMessage, MemoryCandidate
 from .instruction_builder import build_socratic_tutor_instructions, UserMemory
-from .memory_manager import fetch_top_memories, add_memories_with_limit, MemoryCandidate
-from .conversation_manager import (
-    start_conversation_session,
-    append_conversation_chunk,
-    ConversationMessage
-)
 
 # Configure logging
 logging.basicConfig(
@@ -68,14 +62,26 @@ class VoiceAIBuddy:
         # Initialize API client
         self.api_client = APIClient()
         
-        # Fetch user memories
+        # Fetch user memories from backend
         memories: List[UserMemory] = []
-        if config.USER_UID:
+        if config.USER_UID and self.api_client:
             try:
-                memories = fetch_top_memories(config.USER_UID, config.TOP_MEMORIES_COUNT)
-                logger.info(f"Loaded {len(memories)} user memories")
+                memory_dicts = await self.api_client.get_top_memories(
+                    config.USER_UID,
+                    config.TOP_MEMORIES_COUNT
+                )
+                memories = [
+                    UserMemory(
+                        id=mem.get("id"),
+                        text=mem.get("text", ""),
+                        type=mem.get("type", "facts"),
+                        importance=mem.get("importance", 3)
+                    )
+                    for mem in memory_dicts
+                ]
+                logger.info(f"Loaded {len(memories)} user memories from backend")
             except Exception as e:
-                logger.warning(f"Failed to fetch memories: {e}")
+                logger.warning(f"Failed to fetch memories from backend: {e}")
         
         # Build instructions
         instructions = build_socratic_tutor_instructions(
@@ -90,13 +96,17 @@ class VoiceAIBuddy:
             ChatMessage(role="system", content=instructions)
         ]
         
-        # Start conversation session
-        if config.USER_UID:
+        # Start conversation session via backend
+        if config.USER_UID and self.api_client:
             import time
             import random
             self.conversation_session_id = f"{int(time.time() * 1000)}-{random.randint(100000, 999999)}"
             try:
-                start_conversation_session(config.USER_UID, self.conversation_session_id, "stt")
+                await self.api_client.start_conversation_session(
+                    config.USER_UID,
+                    self.conversation_session_id,
+                    "stt"
+                )
                 logger.info(f"Started conversation session: {self.conversation_session_id}")
             except Exception as e:
                 logger.error(f"Failed to start conversation session: {e}")
@@ -193,8 +203,8 @@ class VoiceAIBuddy:
             logger.error(f"Error processing transcript: {e}")
     
     async def _extract_and_save_memories(self) -> None:
-        """Extract and save memories from conversation."""
-        if not config.USER_UID:
+        """Extract and save memories from conversation via backend."""
+        if not config.USER_UID or not self.api_client:
             return
         
         try:
@@ -208,11 +218,14 @@ class VoiceAIBuddy:
             if not recent_messages:
                 return
             
-            # Fetch existing memories
-            existing_memories = fetch_top_memories(config.USER_UID, config.MEMORY_LIMIT)
-            existing_texts = [m.text for m in existing_memories]
+            # Fetch existing memories from backend
+            existing_memories = await self.api_client.get_top_memories(
+                config.USER_UID,
+                config.MEMORY_LIMIT
+            )
+            existing_texts = [m.get("text", "") for m in existing_memories]
             
-            # Extract memories
+            # Extract memories using backend API
             memories = await self.api_client.extract_memories(
                 messages=recent_messages,
                 top_k=5,
@@ -220,25 +233,21 @@ class VoiceAIBuddy:
             )
             
             if memories:
-                # Save memories
-                from .memory_manager import crispify_memory_text
-                memory_candidates = [
-                    MemoryCandidate(
-                        text=crispify_memory_text(mem.text, config.USER_NAME),
-                        type=mem.type,
-                        importance=mem.importance
-                    )
-                    for mem in memories
-                ]
-                add_memories_with_limit(config.USER_UID, memory_candidates, config.USER_NAME)
-                logger.info(f"Extracted and saved {len(memories)} memories")
+                # Save memories via backend API
+                # Backend will handle crispifying
+                await self.api_client.save_memories(
+                    config.USER_UID,
+                    memories,
+                    config.USER_NAME
+                )
+                logger.info(f"Extracted and saved {len(memories)} memories via backend")
         
         except Exception as e:
-            logger.error(f"Failed to extract memories: {e}")
+            logger.error(f"Failed to extract/save memories: {e}")
     
     async def _save_conversation_chunk(self) -> None:
-        """Save conversation chunk to Firebase."""
-        if not config.USER_UID or not self.conversation_session_id:
+        """Save conversation chunk via backend."""
+        if not config.USER_UID or not self.conversation_session_id or not self.api_client:
             return
         
         try:
@@ -250,22 +259,22 @@ class VoiceAIBuddy:
             if not new_messages:
                 return
             
-            # Convert to ConversationMessage format
+            # Convert to dict format for backend API
             import time
-            conversation_messages = [
-                ConversationMessage(
-                    role=msg.role,  # type: ignore
-                    content=msg.content,
-                    ts=time.time()
-                )
+            message_dicts = [
+                {
+                    "role": msg.role,
+                    "content": msg.content,
+                    "ts": time.time()
+                }
                 for msg in new_messages
             ]
             
-            # Append to conversation
-            result = append_conversation_chunk(
+            # Append to conversation via backend API
+            result = await self.api_client.append_conversation_chunk(
                 config.USER_UID,
                 self.conversation_session_id,
-                conversation_messages
+                message_dicts
             )
             
             # Update session ID if document was split
@@ -274,7 +283,7 @@ class VoiceAIBuddy:
                 logger.info(f"Conversation session split, continuing in: {self.conversation_session_id}")
             
             self.last_saved_message_index = len(self.conversation_history)
-            logger.debug(f"Saved {len(new_messages)} messages to conversation")
+            logger.debug(f"Saved {len(new_messages)} messages to conversation via backend")
         
         except Exception as e:
             logger.error(f"Failed to save conversation chunk: {e}")

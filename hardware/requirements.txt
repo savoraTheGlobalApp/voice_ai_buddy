@@ -10,8 +10,7 @@ pydub==0.25.1
 httpx>=0.28.1
 websockets==13.1
 
-# Firebase Admin SDK
-firebase-admin>=7.0.0,<8.0.0
+# Note: firebase-admin removed - Firebase access now handled by backend
 
 # Additional audio libraries (optional, for better MP3 support)
 # These may be needed depending on system configuration

@@ -80,6 +80,8 @@ class Config:
         """
         Validate configuration and return list of errors.
         Returns empty list if all valid.
+        Note: FIREBASE_CREDENTIALS_PATH is no longer required as Firebase
+        access is now handled by the backend.
         """
         errors = []
         
@@ -88,9 +90,6 @@ class Config:
         
         if not cls.USER_NAME:
             errors.append("USER_NAME is required")
-        
-        if not Path(cls.FIREBASE_CREDENTIALS_PATH).exists():
-            errors.append(f"Firebase credentials not found at: {cls.FIREBASE_CREDENTIALS_PATH}")
         
         if cls.STT_PROVIDER not in ["googlecloud", "deepgram"]:
             errors.append(f"Invalid STT_PROVIDER: {cls.STT_PROVIDER}. Must be 'googlecloud' or 'deepgram'")

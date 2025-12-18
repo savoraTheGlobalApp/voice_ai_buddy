@@ -279,6 +279,148 @@ class APIClient:
                 logger.error(f"Unexpected error in memory extraction: {e}")
                 raise
     
+    async def get_top_memories(self, uid: str, limit: int = 10) -> List[dict]:
+        """
+        Get top memories for a user from backend.
+        
+        Args:
+            uid: Firebase user ID
+            limit: Number of top memories to fetch
+        
+        Returns:
+            List of memory dicts with id, text, type, importance
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.get(
+                    f"{self.backend_url}/api/users/{uid}/memories/top",
+                    params={"limit": limit}
+                )
+                response.raise_for_status()
+                data = response.json()
+                return data.get("memories", [])
+            except httpx.HTTPError as e:
+                logger.error(f"Get top memories API error: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error getting top memories: {e}")
+                raise
+    
+    async def save_memories(
+        self,
+        uid: str,
+        memories: List[MemoryCandidate],
+        user_name: Optional[str] = None
+    ) -> dict:
+        """
+        Save memories for a user via backend.
+        
+        Args:
+            uid: Firebase user ID
+            memories: List of memory candidates to save
+            user_name: Optional user name for crispifying
+        
+        Returns:
+            Response dict with message and saved_count
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    f"{self.backend_url}/api/users/{uid}/memories",
+                    json={
+                        "memories": [
+                            {
+                                "text": mem.text,
+                                "type": mem.type,
+                                "importance": mem.importance
+                            }
+                            for mem in memories
+                        ],
+                        "user_name": user_name
+                    }
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"Save memories API error: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error saving memories: {e}")
+                raise
+    
+    async def start_conversation_session(
+        self,
+        uid: str,
+        session_id: str,
+        mode: str = "stt"
+    ) -> dict:
+        """
+        Start a conversation session via backend.
+        
+        Args:
+            uid: Firebase user ID
+            session_id: Unique session ID
+            mode: Conversation mode ('realtime' or 'stt')
+        
+        Returns:
+            Response dict with message and session_id
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    f"{self.backend_url}/api/users/{uid}/conversations/start",
+                    json={
+                        "session_id": session_id,
+                        "mode": mode
+                    }
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"Start conversation API error: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error starting conversation: {e}")
+                raise
+    
+    async def append_conversation_chunk(
+        self,
+        uid: str,
+        session_id: str,
+        messages: List[dict]
+    ) -> dict:
+        """
+        Append messages to conversation via backend.
+        
+        Args:
+            uid: Firebase user ID
+            session_id: Session ID
+            messages: List of message dicts with role, content, optional ts
+        
+        Returns:
+            Response dict with session_id and was_split boolean
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    f"{self.backend_url}/api/users/{uid}/conversations/{session_id}/append",
+                    json={
+                        "messages": messages
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                return {
+                    "sessionId": data.get("session_id"),
+                    "wasSplit": data.get("was_split", False)
+                }
+            except httpx.HTTPError as e:
+                logger.error(f"Append conversation API error: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error appending conversation: {e}")
+                raise
+    
     async def close(self) -> None:
         """Close API client connections."""
         if self.stt_websocket:
