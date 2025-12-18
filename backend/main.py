@@ -1470,7 +1470,10 @@ async def get_top_memories(uid: str, limit: int = 10):
             ]
         }
     except Exception as e:
-        logger.error(f"Failed to fetch top memories for {uid}: {e}")
+        logger.error(f"Failed to fetch top memories for {uid}: {e}", exc_info=True)
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Traceback: {error_details}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch memories: {str(e)}"

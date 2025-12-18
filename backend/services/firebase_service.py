@@ -56,15 +56,36 @@ def get_firebase_app():
         elif service_account_key:
             try:
                 import json
+                # Strip whitespace and handle potential newline issues
+                service_account_key = service_account_key.strip()
+                # Try to parse JSON
+                try:
+                    creds_json = json.loads(service_account_key)
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"Invalid JSON in GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY: {json_err}")
+                    logger.error(f"First 100 chars of key: {service_account_key[:100]}")
+                    raise ValueError(f"GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY contains invalid JSON: {json_err}")
+                
+                # Validate required fields
+                required_fields = ["type", "project_id", "private_key_id", "private_key", "client_email"]
+                missing_fields = [field for field in required_fields if field not in creds_json]
+                if missing_fields:
+                    logger.error(f"Missing required fields in service account key: {missing_fields}")
+                    raise ValueError(f"Service account key missing required fields: {missing_fields}")
+                
+                # Create temporary file for credentials
                 import tempfile
-                creds_json = json.loads(service_account_key)
                 temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
                 json.dump(creds_json, temp_file)
                 temp_file.close()
                 cred = credentials.Certificate(temp_file.name)
                 logger.info("Using Firebase credentials from GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY")
+            except ValueError as ve:
+                # Re-raise ValueError as-is (these are our validation errors)
+                raise
             except Exception as e:
-                logger.error(f"Failed to load Firebase credentials from GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY: {e}")
+                logger.error(f"Failed to load Firebase credentials from GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY: {e}", exc_info=True)
+                raise ValueError(f"Failed to process GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY: {str(e)}")
         
         if cred is None:
             raise ValueError(
