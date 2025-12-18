@@ -1,0 +1,19 @@
+# Nixpacks configuration for Railway Frontend Service
+# This explicitly tells Railway this is a Next.js project
+# Make sure your frontend service has Root Directory set to "/" in Railway dashboard
+
+[providers]
+node = "20"
+
+[phases.setup]
+nixPkgs = ["nodejs-20_x"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"
+
