@@ -102,6 +102,76 @@ class AudioHandler:
                     return device["index"]  # Return first output device
         return None
     
+    def _get_device_supported_rate(self, device_index: int, preferred_rate: int) -> int:
+        """
+        Get a supported sample rate for a device.
+        Tries preferred rate first, then device default, then common fallbacks.
+        
+        Args:
+            device_index: Audio device index
+            preferred_rate: Preferred sample rate
+        
+        Returns:
+            Supported sample rate
+        """
+        device_info = self.audio.get_device_info_by_index(device_index)
+        default_rate = int(device_info.get("defaultSampleRate", 44100))
+        
+        # Try preferred rate first
+        try:
+            test_stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=preferred_rate,
+                input=True,
+                input_device_index=device_index,
+                frames_per_buffer=1024
+            )
+            test_stream.close()
+            return preferred_rate
+        except Exception:
+            pass
+        
+        # Try device default rate
+        if default_rate != preferred_rate:
+            try:
+                test_stream = self.audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=default_rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=1024
+                )
+                test_stream.close()
+                logger.warning(f"Device {device_index} doesn't support {preferred_rate}Hz, using default {default_rate}Hz")
+                return default_rate
+            except Exception:
+                pass
+        
+        # Try common fallback rates
+        for fallback_rate in [48000, 44100, 16000, 8000]:
+            if fallback_rate == preferred_rate or fallback_rate == default_rate:
+                continue
+            try:
+                test_stream = self.audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=fallback_rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=1024
+                )
+                test_stream.close()
+                logger.warning(f"Device {device_index} doesn't support {preferred_rate}Hz, using fallback {fallback_rate}Hz")
+                return fallback_rate
+            except Exception:
+                continue
+        
+        # If all else fails, return default
+        logger.error(f"Could not find supported sample rate for device {device_index}, using default {default_rate}Hz")
+        return default_rate
+    
     def start_recording(self, callback: Optional[Callable[[bytes], None]] = None) -> Generator[bytes, None, None]:
         """
         Start recording from microphone.
@@ -122,6 +192,14 @@ class AudioHandler:
             input_device = self.find_input_device()
             if input_device is None:
                 raise Exception("No input device found")
+        
+        # Get a supported sample rate for this device
+        actual_sample_rate = self._get_device_supported_rate(input_device, self.sample_rate)
+        
+        # Update sample rate if different
+        if actual_sample_rate != self.sample_rate:
+            logger.info(f"Using sample rate {actual_sample_rate}Hz instead of {self.sample_rate}Hz for device {input_device}")
+            self.sample_rate = actual_sample_rate
         
         try:
             self.input_stream = self.audio.open(
