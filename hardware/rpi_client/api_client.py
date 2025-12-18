@@ -7,7 +7,7 @@ import json
 import asyncio
 import websockets
 import httpx
-from typing import Optional, Callable, AsyncGenerator
+from typing import Optional, Callable, AsyncGenerator, List
 from dataclasses import dataclass
 
 from .config import config
