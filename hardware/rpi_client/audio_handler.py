@@ -105,7 +105,7 @@ class AudioHandler:
     def _get_device_supported_rate(self, device_index: int, preferred_rate: int) -> int:
         """
         Get a supported sample rate for a device.
-        Tries preferred rate first, then device default, then common fallbacks.
+        Tries preferred rate first, then common high-quality rates (48000, 44100), then device default, then lower rates.
         
         Args:
             device_index: Audio device index
@@ -132,8 +132,29 @@ class AudioHandler:
         except Exception:
             pass
         
-        # Try device default rate
-        if default_rate != preferred_rate:
+        # Try common high-quality rates first (48000Hz is often better than device default)
+        # Priority: 48000 > 44100 > device default > 16000 > 8000
+        high_quality_rates = [48000, 44100]
+        for rate in high_quality_rates:
+            if rate == preferred_rate:
+                continue
+            try:
+                test_stream = self.audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=rate,
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=1024
+                )
+                test_stream.close()
+                logger.warning(f"Device {device_index} doesn't support {preferred_rate}Hz, using {rate}Hz")
+                return rate
+            except Exception:
+                continue
+        
+        # Try device default rate (if not already tried)
+        if default_rate != preferred_rate and default_rate not in high_quality_rates:
             try:
                 test_stream = self.audio.open(
                     format=pyaudio.paInt16,
@@ -149,8 +170,8 @@ class AudioHandler:
             except Exception:
                 pass
         
-        # Try common fallback rates
-        for fallback_rate in [48000, 44100, 16000, 8000]:
+        # Try lower quality fallback rates
+        for fallback_rate in [16000, 8000]:
             if fallback_rate == preferred_rate or fallback_rate == default_rate:
                 continue
             try:
