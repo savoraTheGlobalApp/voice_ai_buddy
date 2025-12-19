@@ -7,7 +7,7 @@ import json
 import asyncio
 import websockets
 import httpx
-from typing import Optional, Callable, AsyncGenerator, List
+from typing import Optional, Callable, AsyncGenerator, List, Awaitable
 from dataclasses import dataclass
 
 from .config import config
@@ -32,7 +32,7 @@ class APIClient:
         self.ws_url = config.get_ws_url()
         self.stt_websocket: Optional[websockets.WebSocketClientProtocol] = None
     
-    async def connect_stt(self, on_transcript: Callable[[str], None]) -> AsyncGenerator[None, None]:
+    async def connect_stt(self, on_transcript: Callable[[str], Awaitable[None]]) -> AsyncGenerator[None, None]:
         """
         Connect to STT WebSocket and stream audio.
         
@@ -53,7 +53,7 @@ class APIClient:
         else:
             raise ValueError(f"Unsupported STT provider: {stt_provider}")
     
-    async def _connect_googlecloud_stt(self, on_transcript: Callable[[str], None]) -> AsyncGenerator[None, None]:
+    async def _connect_googlecloud_stt(self, on_transcript: Callable[[str], Awaitable[None]]) -> AsyncGenerator[None, None]:
         """Connect to Google Cloud STT WebSocket."""
         ws_endpoint = f"{self.ws_url}/api/stt/googlecloud"
         
@@ -74,7 +74,8 @@ class APIClient:
                                     transcript = data.get("text", "").strip()
                                     if transcript:
                                         logger.info(f"✓ Received transcript from STT: '{transcript}'")
-                                        on_transcript(transcript)
+                                        # on_transcript is async, so we need to await it
+                                        await on_transcript(transcript)
                                     else:
                                         logger.debug("Received empty transcript, ignoring")
                                 else:
@@ -105,7 +106,7 @@ class APIClient:
             logger.error(f"Failed to connect to STT WebSocket: {e}")
             raise
     
-    async def _connect_deepgram_stt(self, on_transcript: Callable[[str], None]) -> AsyncGenerator[None, None]:
+    async def _connect_deepgram_stt(self, on_transcript: Callable[[str], Awaitable[None]]) -> AsyncGenerator[None, None]:
         """Connect to Deepgram STT WebSocket."""
         ws_endpoint = f"{self.ws_url}/api/stt/deepgram"
         
@@ -123,8 +124,9 @@ class APIClient:
                                 if data.get("type") == "transcript":
                                     transcript = data.get("text", "").strip()
                                     if transcript:
-                                        logger.info(f"Received transcript: {transcript}")
-                                        on_transcript(transcript)
+                                        logger.info(f"✓ Received transcript from STT: '{transcript}'")
+                                        # on_transcript is async, so we need to await it
+                                        await on_transcript(transcript)
                             except json.JSONDecodeError:
                                 logger.warning(f"Invalid JSON from STT: {message}")
                             except Exception as e:
