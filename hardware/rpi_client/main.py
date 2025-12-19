@@ -130,14 +130,21 @@ class VoiceAIBuddy:
                 # Create async generator for audio chunks
                 async def audio_stream():
                     """Stream audio chunks to STT."""
+                    chunk_count = 0
                     try:
+                        logger.info("Audio stream started, reading chunks...")
                         for chunk in self.audio_handler.start_recording():
                             if not self.is_running:
                                 break
+                            chunk_count += 1
+                            if chunk_count % 100 == 0:  # Log every 100 chunks
+                                logger.debug(f"Sent {chunk_count} audio chunks to STT")
                             await self.api_client.send_audio_chunk(chunk)
                             await asyncio.sleep(0)  # Yield control
                     except Exception as e:
-                        logger.error(f"Error in audio stream: {e}")
+                        logger.error(f"Error in audio stream: {e}", exc_info=True)
+                    finally:
+                        logger.info(f"Audio stream ended. Total chunks sent: {chunk_count}")
                 
                 # Run audio streaming
                 audio_task = asyncio.create_task(audio_stream())
