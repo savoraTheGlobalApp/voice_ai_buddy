@@ -419,3 +419,72 @@ class AudioHandler:
         except Exception:
             pass
 
+
+def resample_audio_to_16khz(audio_data: bytes, source_sample_rate: int) -> bytes:
+    """
+    Resample audio data from source sample rate to 16kHz.
+    Required because STT services expect 16kHz audio.
+    
+    Args:
+        audio_data: Raw PCM audio data (Int16, mono)
+        source_sample_rate: Source sample rate in Hz
+    
+    Returns:
+        Resampled audio data at 16kHz (Int16, mono)
+    """
+    if source_sample_rate == 16000:
+        return audio_data  # No resampling needed
+    
+    logger.debug(f"Resampling audio from {source_sample_rate}Hz to 16kHz ({len(audio_data)} bytes)")
+    
+    try:
+        from pydub import AudioSegment
+        import numpy as np
+        
+        # Convert bytes to numpy array (Int16)
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        
+        # Create AudioSegment from numpy array
+        audio_segment = AudioSegment(
+            audio_array.tobytes(),
+            frame_rate=source_sample_rate,
+            sample_width=2,  # 16-bit = 2 bytes
+            channels=1  # Mono
+        )
+        
+        # Resample to 16kHz
+        resampled = audio_segment.set_frame_rate(16000)
+        
+        # Convert back to bytes
+        result = resampled.raw_data
+        logger.debug(f"Resampled to 16kHz: {len(result)} bytes")
+        return result
+        
+    except ImportError:
+        # Fallback: simple linear interpolation (less accurate but works without pydub)
+        logger.warning("pydub not available, using simple resampling (may be less accurate)")
+        try:
+            import numpy as np
+        except ImportError:
+            logger.error("numpy not available, cannot resample audio. Returning original data.")
+            return audio_data
+        
+        # Convert to numpy array
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        
+        # Calculate resampling ratio
+        ratio = 16000 / source_sample_rate
+        target_length = int(len(audio_array) * ratio)
+        
+        # Simple linear interpolation
+        indices = np.linspace(0, len(audio_array) - 1, target_length)
+        resampled = np.interp(indices, np.arange(len(audio_array)), audio_array)
+        
+        # Convert back to Int16 and bytes
+        result = resampled.astype(np.int16).tobytes()
+        logger.debug(f"Resampled to 16kHz (simple method): {len(result)} bytes")
+        return result
+    except Exception as e:
+        logger.error(f"Error resampling audio: {e}", exc_info=True)
+        # Return original data if resampling fails
+        return audio_data
