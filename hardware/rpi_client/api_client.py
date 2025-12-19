@@ -65,22 +65,28 @@ class APIClient:
                 # Task to receive transcripts
                 async def receive_transcripts():
                     try:
+                        logger.info("Started listening for transcripts from STT...")
                         async for message in ws:
                             try:
+                                logger.debug(f"Received message from STT: {message[:100]}...")
                                 data = json.loads(message)
                                 if data.get("type") == "transcript":
                                     transcript = data.get("text", "").strip()
                                     if transcript:
-                                        logger.info(f"Received transcript: {transcript}")
+                                        logger.info(f"✓ Received transcript from STT: '{transcript}'")
                                         on_transcript(transcript)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Invalid JSON from STT: {message}")
+                                    else:
+                                        logger.debug("Received empty transcript, ignoring")
+                                else:
+                                    logger.debug(f"Received non-transcript message: {data.get('type')}")
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"Invalid JSON from STT: {message[:100]}... Error: {e}")
                             except Exception as e:
-                                logger.error(f"Error processing transcript: {e}")
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.info("STT WebSocket closed")
+                                logger.error(f"Error processing transcript: {e}", exc_info=True)
+                    except websockets.exceptions.ConnectionClosed as e:
+                        logger.info(f"STT WebSocket closed: {e}")
                     except Exception as e:
-                        logger.error(f"Error receiving transcripts: {e}")
+                        logger.error(f"Error receiving transcripts: {e}", exc_info=True)
                 
                 # Start receiving transcripts
                 receive_task = asyncio.create_task(receive_transcripts())
@@ -150,7 +156,7 @@ class APIClient:
         Send audio chunk to STT WebSocket.
         
         Args:
-            audio_data: Audio data as bytes (Int16 PCM)
+            audio_data: Audio data as bytes (Int16 PCM, 16kHz)
         """
         if not self.stt_websocket:
             logger.warning("STT WebSocket not connected")
@@ -159,7 +165,7 @@ class APIClient:
         try:
             await self.stt_websocket.send(audio_data)
         except Exception as e:
-            logger.error(f"Failed to send audio chunk: {e}")
+            logger.error(f"Failed to send audio chunk: {e}", exc_info=True)
             raise
     
     async def chat(self, messages: list[ChatMessage], model: Optional[str] = None) -> str:
@@ -210,6 +216,7 @@ class APIClient:
             Audio data as bytes (MP3 format)
         """
         provider = provider or config.TTS_PROVIDER
+        logger.info(f"Requesting TTS for text: '{text[:50]}...' (provider: {provider}, voice: {voice})")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -222,12 +229,14 @@ class APIClient:
                     }
                 )
                 response.raise_for_status()
-                return response.content
+                audio_data = response.content
+                logger.info(f"Received TTS audio: {len(audio_data)} bytes")
+                return audio_data
             except httpx.HTTPError as e:
-                logger.error(f"TTS API error: {e}")
+                logger.error(f"TTS API error: {e}", exc_info=True)
                 raise
             except Exception as e:
-                logger.error(f"Unexpected error in TTS: {e}")
+                logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
                 raise
     
     async def extract_memories(
