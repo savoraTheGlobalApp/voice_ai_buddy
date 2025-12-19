@@ -1212,8 +1212,9 @@ async def googlecloud_stt_websocket(websocket: WebSocket):
                                     import traceback
                                     traceback.print_exc()
                             else:
-                                # Log interim results for debugging (but don't send to frontend)
-                                print(f"[Google Cloud STT] Interim result (not sending): {transcript}")
+                                # Don't log interim results to reduce log noise
+                                # Only log final transcripts
+                                pass
                         except Exception as process_error:
                             print(f"[Google Cloud STT] Error processing response: {process_error}")
                             import traceback
