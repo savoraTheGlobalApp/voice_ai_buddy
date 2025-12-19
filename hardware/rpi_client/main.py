@@ -131,20 +131,33 @@ class VoiceAIBuddy:
                 async def audio_stream():
                     """Stream audio chunks to STT."""
                     chunk_count = 0
+                    bytes_sent = 0
                     try:
                         logger.info("Audio stream started, reading chunks...")
+                        logger.info(f"Recording at {self.audio_handler.sample_rate}Hz, will resample to 16kHz for STT")
+                        
+                        # Import resampling function
+                        from .audio_handler import resample_audio_to_16khz
+                        
                         for chunk in self.audio_handler.start_recording():
                             if not self.is_running:
                                 break
                             chunk_count += 1
+                            
+                            # Resample audio to 16kHz if needed (STT expects 16kHz)
+                            if self.audio_handler.sample_rate != 16000:
+                                chunk = resample_audio_to_16khz(chunk, self.audio_handler.sample_rate)
+                            
+                            bytes_sent += len(chunk)
                             if chunk_count % 100 == 0:  # Log every 100 chunks
-                                logger.debug(f"Sent {chunk_count} audio chunks to STT")
+                                logger.info(f"Sent {chunk_count} audio chunks ({bytes_sent} bytes) to STT")
+                            
                             await self.api_client.send_audio_chunk(chunk)
                             await asyncio.sleep(0)  # Yield control
                     except Exception as e:
                         logger.error(f"Error in audio stream: {e}", exc_info=True)
                     finally:
-                        logger.info(f"Audio stream ended. Total chunks sent: {chunk_count}")
+                        logger.info(f"Audio stream ended. Total: {chunk_count} chunks, {bytes_sent} bytes sent")
                 
                 # Run audio streaming
                 audio_task = asyncio.create_task(audio_stream())
@@ -174,9 +187,10 @@ class VoiceAIBuddy:
             transcript: Transcribed text
         """
         if not transcript:
+            logger.debug("Received empty transcript, ignoring")
             return
         
-        logger.info(f"User said: {transcript}")
+        logger.info(f"🎤 User said: '{transcript}'")
         
         # Add to conversation history
         user_message = ChatMessage(role="user", content=transcript)
@@ -185,8 +199,9 @@ class VoiceAIBuddy:
         
         # Get AI response
         try:
+            logger.info("🤖 Getting AI response...")
             response_text = await self.api_client.chat(self.conversation_history)
-            logger.info(f"AI response: {response_text}")
+            logger.info(f"🤖 AI response: '{response_text}'")
             
             # Add AI response to conversation history
             assistant_message = ChatMessage(role="assistant", content=response_text)
@@ -194,20 +209,26 @@ class VoiceAIBuddy:
             
             # Generate and play TTS
             try:
+                logger.info("🔊 Generating TTS audio...")
                 audio_data = await self.api_client.tts(response_text)
+                logger.info(f"🔊 Playing TTS audio ({len(audio_data)} bytes)...")
                 self.audio_handler.play_audio(audio_data, format="mp3")
+                logger.info("✅ TTS playback complete")
             except Exception as e:
-                logger.error(f"Failed to play TTS: {e}")
+                logger.error(f"❌ Failed to play TTS: {e}", exc_info=True)
             
             # Extract memories periodically
             if self.user_msg_counter % self.memory_extract_every_n == 0:
+                logger.info("💾 Extracting memories...")
                 await self._extract_and_save_memories()
             
             # Save conversation to Firebase
+            logger.debug("💾 Saving conversation chunk...")
             await self._save_conversation_chunk()
+            logger.info("✅ Transcript processing complete")
         
         except Exception as e:
-            logger.error(f"Error processing transcript: {e}")
+            logger.error(f"❌ Error processing transcript: {e}", exc_info=True)
     
     async def _extract_and_save_memories(self) -> None:
         """Extract and save memories from conversation via backend."""
