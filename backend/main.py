@@ -140,7 +140,7 @@ class ConversationStartRequest(BaseModel):
     mode: str = "stt"  # "realtime" or "stt"
 
 class ConversationAppendRequest(BaseModel):
-    messages: List[Dict[str, str]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional}]
+    messages: List[Dict[str, Any]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional float}]
 
 class ConversationAppendResponse(BaseModel):
     session_id: str
@@ -1425,7 +1425,7 @@ class ConversationStartRequest(BaseModel):
     mode: str = "stt"  # "realtime" or "stt"
 
 class ConversationAppendRequest(BaseModel):
-    messages: List[Dict[str, str]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional}]
+    messages: List[Dict[str, Any]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional float}]
 
 class ConversationAppendResponse(BaseModel):
     session_id: str
