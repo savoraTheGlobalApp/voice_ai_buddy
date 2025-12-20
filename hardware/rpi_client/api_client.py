@@ -58,7 +58,13 @@ class APIClient:
         ws_endpoint = f"{self.ws_url}/api/stt/googlecloud"
         
         try:
-            async with websockets.connect(ws_endpoint) as ws:
+            # Add ping/pong for keepalive to prevent timeout
+            async with websockets.connect(
+                ws_endpoint,
+                ping_interval=20,  # Send ping every 20 seconds
+                ping_timeout=10,   # Wait 10 seconds for pong
+                close_timeout=10
+            ) as ws:
                 self.stt_websocket = ws
                 logger.info("Connected to Google Cloud STT WebSocket")
                 
@@ -111,7 +117,13 @@ class APIClient:
         ws_endpoint = f"{self.ws_url}/api/stt/deepgram"
         
         try:
-            async with websockets.connect(ws_endpoint) as ws:
+            # Add ping/pong for keepalive to prevent timeout
+            async with websockets.connect(
+                ws_endpoint,
+                ping_interval=20,  # Send ping every 20 seconds
+                ping_timeout=10,   # Wait 10 seconds for pong
+                close_timeout=10
+            ) as ws:
                 self.stt_websocket = ws
                 logger.info("Connected to Deepgram STT WebSocket")
                 
@@ -421,9 +433,12 @@ class APIClient:
                 )
                 response.raise_for_status()
                 data = response.json()
+                # Backend returns snake_case, normalize to both formats for compatibility
                 return {
-                    "sessionId": data.get("session_id"),
-                    "wasSplit": data.get("was_split", False)
+                    "session_id": data.get("session_id"),
+                    "sessionId": data.get("session_id"),  # For backward compatibility
+                    "was_split": data.get("was_split", False),
+                    "wasSplit": data.get("was_split", False)  # For backward compatibility
                 }
             except httpx.HTTPError as e:
                 logger.error(f"Append conversation API error: {e}")
