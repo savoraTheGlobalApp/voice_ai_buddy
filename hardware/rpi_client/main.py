@@ -306,8 +306,9 @@ class VoiceAIBuddy:
             )
             
             # Update session ID if document was split
-            if result.get("wasSplit"):
-                self.conversation_session_id = result["sessionId"]
+            # Backend returns snake_case (was_split, session_id)
+            if result.get("was_split") or result.get("wasSplit"):
+                self.conversation_session_id = result.get("session_id") or result.get("sessionId")
                 logger.info(f"Conversation session split, continuing in: {self.conversation_session_id}")
             
             self.last_saved_message_index = len(self.conversation_history)
