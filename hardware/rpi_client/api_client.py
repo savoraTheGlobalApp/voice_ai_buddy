@@ -32,6 +32,27 @@ class APIClient:
         self.ws_url = config.get_ws_url()
         self.stt_websocket: Optional[websockets.WebSocketClientProtocol] = None
     
+    async def get_hardware_config(self) -> dict:
+        """
+        Fetch hardware-specific configuration from backend.
+        Returns company-controlled settings (OTA-updatable).
+        
+        Returns:
+            Dict with stt_provider, tts_provider, chat_model, top_memories_count,
+            memory_limit, sample_rate, chunk_size
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.get(f"{self.backend_url}/api/config/hardware")
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to fetch hardware config: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error fetching hardware config: {e}")
+                raise
+    
     async def connect_stt(self, on_transcript: Callable[[str], Awaitable[None]]) -> AsyncGenerator[None, None]:
         """
         Connect to STT WebSocket and stream audio.
@@ -193,7 +214,8 @@ class APIClient:
         Returns:
             Assistant response text
         """
-        model = model or config.CHAT_MODEL
+        if not model:
+            model = await config.get_chat_model()
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -229,7 +251,8 @@ class APIClient:
         Returns:
             Audio data as bytes (MP3 format)
         """
-        provider = provider or config.TTS_PROVIDER
+        if not provider:
+            provider = await config.get_tts_provider()
         logger.info(f"Requesting TTS for text: '{text[:50]}...' (provider: {provider}, voice: {voice})")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
