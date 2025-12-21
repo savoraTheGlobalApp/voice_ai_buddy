@@ -64,7 +64,9 @@ def fetch_top_memories(uid: str, top_n: Optional[int] = None) -> List[UserMemory
     """
     from .config import config
     
-    n = top_n or config.TOP_MEMORIES_COUNT
+    # Use fallback default if remote config not available (legacy function, not async)
+    # In practice, use api_client.get_top_memories() which uses remote config
+    n = top_n or config._FALLBACK_TOP_MEMORIES_COUNT
     db = _get_db()
     memories_ref = db.collection("users").document(uid).collection("memories")
     
@@ -149,7 +151,9 @@ def add_memories_with_limit(
     if not memories:
         return
     
-    max_memories = config.MEMORY_LIMIT
+    # Use fallback default if remote config not available (legacy function, not async)
+    # In practice, use api_client.save_memories() which uses remote config
+    max_memories = config._FALLBACK_MEMORY_LIMIT
     db = _get_db()
     memories_ref = db.collection("users").document(uid).collection("memories")
     
