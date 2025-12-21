@@ -39,7 +39,7 @@ class VoiceAIBuddy:
         """Initialize all components."""
         logger.info("Initializing Voice AI Buddy...")
         
-        # Validate configuration
+        # Validate local configuration
         errors = config.validate()
         if errors:
             logger.error("Configuration errors:")
@@ -47,10 +47,30 @@ class VoiceAIBuddy:
                 logger.error(f"  - {error}")
             raise ValueError("Configuration validation failed")
         
-        # Initialize audio handler
+        # Initialize API client (needed for fetching remote config)
+        self.api_client = APIClient()
+        
+        # Fetch remote configuration from backend (OTA-updatable settings)
+        logger.info("Fetching remote configuration from backend...")
+        config_fetched = await config.fetch_remote_config(self.api_client)
+        if not config_fetched:
+            logger.warning("Using fallback defaults for remote configuration")
+        
+        # Validate remote configuration
+        remote_errors = await config.validate_remote_config()
+        if remote_errors:
+            logger.warning("Remote configuration validation warnings:")
+            for error in remote_errors:
+                logger.warning(f"  - {error}")
+        
+        # Get remote config values for initialization
+        sample_rate = await config.get_sample_rate()
+        chunk_size = await config.get_chunk_size()
+        
+        # Initialize audio handler with remote config
         self.audio_handler = AudioHandler(
-            sample_rate=config.SAMPLE_RATE,
-            chunk_size=config.CHUNK_SIZE,
+            sample_rate=sample_rate,
+            chunk_size=chunk_size,
             input_device=config.AUDIO_INPUT_DEVICE,
             output_device=config.AUDIO_OUTPUT_DEVICE
         )
@@ -59,16 +79,14 @@ class VoiceAIBuddy:
         devices = self.audio_handler.list_devices()
         logger.info(f"Found {len(devices)} audio devices")
         
-        # Initialize API client
-        self.api_client = APIClient()
-        
         # Fetch user memories from backend
         memories: List[UserMemory] = []
         if config.USER_UID and self.api_client:
             try:
+                top_memories_count = await config.get_top_memories_count()
                 memory_dicts = await self.api_client.get_top_memories(
                     config.USER_UID,
-                    config.TOP_MEMORIES_COUNT
+                    top_memories_count
                 )
                 memories = [
                     UserMemory(
@@ -84,11 +102,12 @@ class VoiceAIBuddy:
                 logger.warning(f"Failed to fetch memories from backend: {e}")
         
         # Build instructions
+        top_memories_count = await config.get_top_memories_count()
         instructions = build_socratic_tutor_instructions(
             user_name=config.USER_NAME,
             user_age=config.USER_AGE,
             top_memories=memories,
-            top_memories_count=config.TOP_MEMORIES_COUNT
+            top_memories_count=top_memories_count
         )
         
         # Initialize conversation history
@@ -247,9 +266,10 @@ class VoiceAIBuddy:
                 return
             
             # Fetch existing memories from backend
+            memory_limit = await config.get_memory_limit()
             existing_memories = await self.api_client.get_top_memories(
                 config.USER_UID,
-                config.MEMORY_LIMIT
+                memory_limit
             )
             existing_texts = [m.get("text", "") for m in existing_memories]
             
@@ -262,7 +282,7 @@ class VoiceAIBuddy:
             
             if memories:
                 # Save memories via backend API
-                # Backend will handle crispifying
+                # Backend will handle crispifying and use its own MEMORY_LIMIT
                 await self.api_client.save_memories(
                     config.USER_UID,
                     memories,
