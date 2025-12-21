@@ -63,7 +63,7 @@ class APIClient:
         Yields:
             Control flow (use with async for)
         """
-        stt_provider = config.STT_PROVIDER
+        stt_provider = await config.get_stt_provider()
         
         if stt_provider == "googlecloud":
             async for _ in self._connect_googlecloud_stt(on_transcript):
