@@ -175,7 +175,7 @@ async def get_stt_provider():
 @app.get("/api/config")
 async def get_config():
     """
-    Get all backend configuration for admin settings.
+    Get all backend configuration for admin settings (web frontend).
     Returns STT provider, TTS provider, and Chat model.
     Note: Mode selection (realtime vs STT-TTT-TTS) is handled by frontend via NEXT_PUBLIC_USE_STT_MODE.
     """
@@ -200,6 +200,41 @@ async def get_config():
         "chat_model": chat_model,
         "deepgram_tts_available": deepgram_tts_available,
         "google_cloud_stt_available": google_cloud_stt_available,
+    }
+
+
+@app.get("/api/config/hardware")
+async def get_hardware_config():
+    """
+    Get hardware/RPi-specific configuration (OTA-updatable).
+    Returns company-controlled settings that can be updated remotely.
+    This endpoint is separate from /api/config to avoid breaking web frontend.
+    """
+    # STT/TTS/Chat configuration (company-controlled)
+    stt_provider = _get_stt_provider()
+    # For hardware, map webspeech to googlecloud (hardware doesn't use browser APIs)
+    if stt_provider == "webspeech":
+        stt_provider = "googlecloud"  # Default for hardware
+    
+    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+    
+    # Memory configuration (company-controlled)
+    top_memories_count = int(os.getenv("TOP_MEMORIES_COUNT", "10"))
+    memory_limit = int(os.getenv("MEMORY_LIMIT", "100"))
+    
+    # Audio configuration (company-controlled for consistency)
+    sample_rate = int(os.getenv("SAMPLE_RATE", "16000"))
+    chunk_size = int(os.getenv("CHUNK_SIZE", "2048"))
+    
+    return {
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+        "chat_model": chat_model,
+        "top_memories_count": top_memories_count,
+        "memory_limit": memory_limit,
+        "sample_rate": sample_rate,
+        "chunk_size": chunk_size,
     }
 
 
