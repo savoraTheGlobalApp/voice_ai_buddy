@@ -11,7 +11,6 @@ from typing import Optional, Callable, AsyncGenerator, List, Awaitable
 from dataclasses import dataclass
 
 from .config import config
-from .memory_manager import MemoryCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,14 @@ class ChatMessage:
     """Chat message for conversation."""
     role: str
     content: str
+
+
+@dataclass
+class MemoryCandidate:
+    """Memory candidate from extraction API."""
+    text: str
+    type: str
+    importance: int
 
 
 class APIClient:
