@@ -71,6 +71,12 @@ class Config:
     _FALLBACK_SAMPLE_RATE = 16000
     _FALLBACK_CHUNK_SIZE = 2048
     
+    # Streaming configuration (local, can be overridden by env vars)
+    ENABLE_STREAMING_TTT: bool = os.getenv("ENABLE_STREAMING_TTT", "true").lower() == "true"
+    ENABLE_STREAMING_TTS: bool = os.getenv("ENABLE_STREAMING_TTS", "true").lower() == "true"
+    STREAMING_FALLBACK_ENABLED: bool = os.getenv("STREAMING_FALLBACK_ENABLED", "true").lower() == "true"
+    STREAMING_TTS_CHUNK_SIZE: int = int(os.getenv("STREAMING_TTS_CHUNK_SIZE", "60"))  # Chars to buffer before sending to TTS
+    
     @classmethod
     async def fetch_remote_config(cls, api_client) -> bool:
         """
