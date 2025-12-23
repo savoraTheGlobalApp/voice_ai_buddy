@@ -1,0 +1,20 @@
+# Core dependencies
+python-dotenv==1.0.1
+pydantic==2.9.2
+
+# Audio processing
+pyaudio==0.2.14
+pydub==0.25.1
+numpy>=1.24.0  # For audio resampling
+
+# HTTP/WebSocket clients
+httpx>=0.28.1
+websockets==13.1
+
+# Note: firebase-admin removed - Firebase access now handled by backend
+
+# Additional audio libraries (optional, for better MP3 support)
+# These may be needed depending on system configuration
+# simpleaudio==1.0.4  # Alternative audio playback
+# sounddevice==0.4.6  # Alternative to PyAudio
+

@@ -15,6 +15,11 @@ import time
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Import TTS libraries (lazy imports)
 # This prevents import errors from crashing the server if packages aren't installed
@@ -125,6 +130,23 @@ class MemoryExtractResponse(BaseModel):
     memories: List[MemoryCandidate]
 
 
+# New request/response models for hardware client endpoints
+class MemorySaveRequest(BaseModel):
+    memories: List[MemoryCandidate]
+    user_name: Optional[str] = None
+
+class ConversationStartRequest(BaseModel):
+    session_id: str
+    mode: str = "stt"  # "realtime" or "stt"
+
+class ConversationAppendRequest(BaseModel):
+    messages: List[Dict[str, Any]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional float}]
+
+class ConversationAppendResponse(BaseModel):
+    session_id: str
+    was_split: bool
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -153,7 +175,7 @@ async def get_stt_provider():
 @app.get("/api/config")
 async def get_config():
     """
-    Get all backend configuration for admin settings.
+    Get all backend configuration for admin settings (web frontend).
     Returns STT provider, TTS provider, and Chat model.
     Note: Mode selection (realtime vs STT-TTT-TTS) is handled by frontend via NEXT_PUBLIC_USE_STT_MODE.
     """
@@ -178,6 +200,56 @@ async def get_config():
         "chat_model": chat_model,
         "deepgram_tts_available": deepgram_tts_available,
         "google_cloud_stt_available": google_cloud_stt_available,
+    }
+
+
+@app.get("/api/config/hardware")
+async def get_hardware_config():
+    """
+    Get hardware/RPi-specific configuration (OTA-updatable).
+    Returns company-controlled settings that can be updated remotely.
+    This endpoint is separate from /api/config to avoid breaking web frontend.
+    
+    Uses RPI_STT_PROVIDER and RPI_TTS_PROVIDER if set, otherwise falls back to
+    STT_PROVIDER and TTS_PROVIDER (for backward compatibility).
+    """
+    # STT/TTS/Chat configuration (company-controlled)
+    # Check RPI-specific vars first, then fall back to regular vars
+    rpi_stt_provider = os.getenv("RPI_STT_PROVIDER")
+    if rpi_stt_provider:
+        stt_provider = rpi_stt_provider.lower()
+    else:
+        stt_provider = _get_stt_provider()
+    
+    # For hardware, map webspeech to googlecloud (hardware doesn't use browser APIs)
+    if stt_provider == "webspeech":
+        stt_provider = "googlecloud"  # Default for hardware
+    
+    # Check RPI-specific TTS provider first, then fall back to regular TTS provider
+    rpi_tts_provider = os.getenv("RPI_TTS_PROVIDER")
+    if rpi_tts_provider:
+        tts_provider = rpi_tts_provider.lower()
+    else:
+        tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    
+    chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
+    
+    # Memory configuration (company-controlled)
+    top_memories_count = int(os.getenv("TOP_MEMORIES_COUNT", "10"))
+    memory_limit = int(os.getenv("MEMORY_LIMIT", "100"))
+    
+    # Audio configuration (company-controlled for consistency)
+    sample_rate = int(os.getenv("SAMPLE_RATE", "16000"))
+    chunk_size = int(os.getenv("CHUNK_SIZE", "2048"))
+    
+    return {
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+        "chat_model": chat_model,
+        "top_memories_count": top_memories_count,
+        "memory_limit": memory_limit,
+        "sample_rate": sample_rate,
+        "chunk_size": chunk_size,
     }
 
 
@@ -443,6 +515,25 @@ async def _generate_gtts(text: str, lang: str = "en") -> bytes:
             return audio_data
     except Exception as e:
         raise Exception(f"gTTS error: {str(e)}")
+
+# Import services (lazy import to avoid errors if Firebase not configured)
+try:
+    from services.firebase_service import is_firebase_available, get_db
+    from services.memory_service import (
+        fetch_top_memories as _fetch_top_memories,
+        add_memories_with_limit as _add_memories_with_limit,
+        MemoryCandidate as ServiceMemoryCandidate
+    )
+    from services.conversation_service import (
+        start_conversation_session as _start_conversation_session,
+        append_conversation_chunk as _append_conversation_chunk,
+        ConversationMessage as ServiceConversationMessage
+    )
+    FIREBASE_SERVICES_AVAILABLE = True
+except ImportError as e:
+    FIREBASE_SERVICES_AVAILABLE = False
+    logger.warning(f"Firebase services not available: {e}")
+
 
 @app.post("/api/memories/extract", response_model=MemoryExtractResponse)
 async def extract_memories(request: MemoryExtractRequest):
@@ -1171,8 +1262,9 @@ async def googlecloud_stt_websocket(websocket: WebSocket):
                                     import traceback
                                     traceback.print_exc()
                             else:
-                                # Log interim results for debugging (but don't send to frontend)
-                                print(f"[Google Cloud STT] Interim result (not sending): {transcript}")
+                                # Don't log interim results to reduce log noise
+                                # Only log final transcripts
+                                pass
                         except Exception as process_error:
                             print(f"[Google Cloud STT] Error processing response: {process_error}")
                             import traceback
@@ -1342,6 +1434,269 @@ async def deepgram_tts_websocket(websocket: WebSocket):
     except Exception as e:
         print(f"[Deepgram TTS] Connection error: {e}")
         await websocket.close(code=1011, reason=f"Server error: {str(e)}")
+
+
+# ============================================================================
+# Hardware Client API Endpoints
+# These endpoints allow RPi clients to access Firebase through the backend
+# instead of directly, improving security and centralizing data access.
+# ============================================================================
+
+# Import logging for service endpoints
+import logging
+logger = logging.getLogger(__name__)
+
+# Import services (lazy import to avoid errors if Firebase not configured)
+try:
+    from services.firebase_service import is_firebase_available, get_db
+    from services.memory_service import (
+        fetch_top_memories as _fetch_top_memories,
+        add_memories_with_limit as _add_memories_with_limit,
+        MemoryCandidate as ServiceMemoryCandidate
+    )
+    from services.conversation_service import (
+        start_conversation_session as _start_conversation_session,
+        append_conversation_chunk as _append_conversation_chunk,
+        ConversationMessage as ServiceConversationMessage
+    )
+    FIREBASE_SERVICES_AVAILABLE = True
+except ImportError as e:
+    FIREBASE_SERVICES_AVAILABLE = False
+    logger.warning(f"Firebase services not available: {e}")
+
+
+# New request/response models for hardware client endpoints
+class MemorySaveRequest(BaseModel):
+    memories: List[MemoryCandidate]
+    user_name: Optional[str] = None
+
+class ConversationStartRequest(BaseModel):
+    session_id: str
+    mode: str = "stt"  # "realtime" or "stt"
+
+class ConversationAppendRequest(BaseModel):
+    messages: List[Dict[str, Any]]  # [{"role": "user|assistant|system", "content": "...", "ts": optional float}]
+
+class ConversationAppendResponse(BaseModel):
+    session_id: str
+    was_split: bool
+
+
+@app.get("/api/users/{uid}/memories/top")
+async def get_top_memories(uid: str, limit: int = 10):
+    """
+    Get top memories for a user (for hardware clients).
+    Replaces direct Firebase access from RPi.
+    
+    Args:
+        uid: Firebase user ID
+        limit: Number of top memories to fetch (default: 10)
+    
+    Returns:
+        List of memory objects with id, text, type, importance
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+    
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+    
+    try:
+        memories = _fetch_top_memories(uid, limit)
+        return {
+            "memories": [
+                {
+                    "id": m.id,
+                    "text": m.text,
+                    "type": m.type,
+                    "importance": m.importance
+                }
+                for m in memories
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch top memories for {uid}: {e}", exc_info=True)
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Traceback: {error_details}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch memories: {str(e)}"
+        )
+
+
+@app.post("/api/users/{uid}/memories")
+async def save_memories(uid: str, request: MemorySaveRequest):
+    """
+    Save memories for a user with limit enforcement (for hardware clients).
+    Replaces direct Firebase access from RPi.
+    
+    Args:
+        uid: Firebase user ID
+        request: MemorySaveRequest with memories list and optional user_name
+    
+    Returns:
+        Success message with count of saved memories
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+    
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+    
+    if not request.memories:
+        return {"message": "No memories to save", "saved_count": 0}
+    
+    try:
+        max_memories = int(os.getenv("MEMORY_LIMIT", "100"))
+        
+        # Convert to service MemoryCandidate objects
+        memory_candidates = [
+            ServiceMemoryCandidate(
+                text=mem.text,
+                type=mem.type,
+                importance=mem.importance
+            )
+            for mem in request.memories
+        ]
+        
+        _add_memories_with_limit(
+            uid=uid,
+            memories=memory_candidates,
+            user_name=request.user_name,
+            max_memories=max_memories
+        )
+        
+        return {
+            "message": "Memories saved successfully",
+            "saved_count": len(request.memories)
+        }
+    except Exception as e:
+        logger.error(f"Failed to save memories for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save memories: {str(e)}"
+        )
+
+
+@app.post("/api/users/{uid}/conversations/start")
+async def start_conversation(uid: str, request: ConversationStartRequest):
+    """
+    Start a new conversation session (for hardware clients).
+    Replaces direct Firebase access from RPi.
+    
+    Args:
+        uid: Firebase user ID
+        request: ConversationStartRequest with session_id and mode
+    
+    Returns:
+        Success message
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+    
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+    
+    if request.mode not in ["realtime", "stt"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Mode must be 'realtime' or 'stt'"
+        )
+    
+    try:
+        _start_conversation_session(
+            uid=uid,
+            session_id=request.session_id,
+            mode=request.mode  # type: ignore
+        )
+        return {
+            "message": "Conversation session started",
+            "session_id": request.session_id
+        }
+    except Exception as e:
+        logger.error(f"Failed to start conversation session for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start conversation session: {str(e)}"
+        )
+
+
+@app.post("/api/users/{uid}/conversations/{session_id}/append", response_model=ConversationAppendResponse)
+async def append_conversation(uid: str, session_id: str, request: ConversationAppendRequest):
+    """
+    Append messages to conversation (for hardware clients).
+    Replaces direct Firebase access from RPi.
+    Handles document size limits and continuation documents automatically.
+    
+    Args:
+        uid: Firebase user ID
+        session_id: Conversation session ID
+        request: ConversationAppendRequest with messages list
+    
+    Returns:
+        ConversationAppendResponse with updated session_id and was_split flag
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+    
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+    
+    if not request.messages:
+        return ConversationAppendResponse(session_id=session_id, was_split=False)
+    
+    try:
+        # Convert to service ConversationMessage objects
+        conversation_messages = [
+            ServiceConversationMessage(
+                role=msg.get("role", "user"),  # type: ignore
+                content=msg.get("content", ""),
+                ts=msg.get("ts")
+            )
+            for msg in request.messages
+        ]
+        
+        result = _append_conversation_chunk(
+            uid=uid,
+            session_id=session_id,
+            messages=conversation_messages
+        )
+        
+        return ConversationAppendResponse(
+            session_id=result["sessionId"],
+            was_split=result["wasSplit"]
+        )
+    except Exception as e:
+        logger.error(f"Failed to append conversation for {uid}/{session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to append conversation: {str(e)}"
+        )
 
 
 if __name__ == "__main__":

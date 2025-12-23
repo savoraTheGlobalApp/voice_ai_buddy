@@ -1,0 +1,25 @@
+# Exclude backend and hardware directories from frontend service builds
+# These are separate services on Railway
+
+backend/
+hardware/
+backend/**/*
+hardware/**/*
+
+# Exclude Python virtual environments
+**/venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+
+# Exclude service account keys (should be in env vars)
+**/service-account-key.json
+**/ServiceAccountKey.json
+
+# Exclude build artifacts
+out/
+.next/
+node_modules/
+
