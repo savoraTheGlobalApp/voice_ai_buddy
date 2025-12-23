@@ -200,7 +200,7 @@ class VoiceAIBuddy:
     
     async def _on_transcript(self, transcript: str) -> None:
         """
-        Handle transcript from STT.
+        Handle transcript from STT with streaming TTT and TTS with fallback.
         
         Args:
             transcript: Transcribed text
@@ -216,38 +216,223 @@ class VoiceAIBuddy:
         self.conversation_history.append(user_message)
         self.user_msg_counter += 1
         
-        # Get AI response
-        try:
-            logger.info("Getting AI response...")
-            response_text = await self.api_client.chat(self.conversation_history)
-            logger.info(f"AI response: '{response_text}'")
-            
-            # Add AI response to conversation history
-            assistant_message = ChatMessage(role="assistant", content=response_text)
-            self.conversation_history.append(assistant_message)
-            
-            # Generate and play TTS
-            try:
-                logger.info(" Generating TTS audio...")
-                audio_data = await self.api_client.tts(response_text)
-                logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
-                self.audio_handler.play_audio(audio_data, format="mp3")
-                logger.info("TTS playback complete")
-            except Exception as e:
-                logger.error(f"Failed to play TTS: {e}", exc_info=True)
-            
-            # Extract memories periodically
-            if self.user_msg_counter % self.memory_extract_every_n == 0:
-                logger.info("Extracting memories...")
-                await self._extract_and_save_memories()
-            
-            # Save conversation to Firebase
-            logger.debug("Saving conversation chunk...")
-            await self._save_conversation_chunk()
-            logger.info("Transcript processing complete")
+        # Try streaming first if enabled, fallback to non-streaming on error
+        use_streaming = config.ENABLE_STREAMING_TTT and config.ENABLE_STREAMING_TTS
         
+        if use_streaming:
+            try:
+                await self._process_response_streaming()
+            except Exception as streaming_error:
+                logger.warning(f"Streaming failed: {streaming_error}")
+                if config.STREAMING_FALLBACK_ENABLED:
+                    logger.info("Falling back to non-streaming...")
+                    try:
+                        await self._process_response_non_streaming()
+                    except Exception as fallback_error:
+                        logger.error(f"Non-streaming fallback also failed: {fallback_error}", exc_info=True)
+                else:
+                    logger.error("Streaming failed and fallback disabled", exc_info=True)
+                    raise
+        else:
+            # Streaming disabled, use non-streaming directly
+            await self._process_response_non_streaming()
+        
+        # Extract memories periodically
+        if self.user_msg_counter % self.memory_extract_every_n == 0:
+            logger.info("Extracting memories...")
+            await self._extract_and_save_memories()
+        
+        # Save conversation to Firebase
+        logger.debug("Saving conversation chunk...")
+        await self._save_conversation_chunk()
+        logger.info("Transcript processing complete")
+    
+    async def _process_response_streaming(self) -> None:
+        """
+        Process AI response using streaming TTT and streaming TTS.
+        Falls back to non-streaming if any step fails.
+        """
+        logger.info("Processing response with streaming...")
+        
+        # Get TTS provider to check if streaming is supported
+        tts_provider = await config.get_tts_provider()
+        if tts_provider != "deepgram":
+            raise ValueError(f"Streaming TTS requires 'deepgram' provider, got '{tts_provider}'")
+        
+        # Step 1: Try streaming chat
+        response_text = ""
+        text_buffer = ""
+        MIN_CHUNK_SIZE = 20  # Minimum chars before sending to TTS
+        SEND_CHUNK_SIZE = config.STREAMING_TTS_CHUNK_SIZE  # Send chunk to TTS every N chars
+        
+        try:
+            # Connect to TTS WebSocket first
+            await self.api_client.connect_tts_stream()
+            
+            # Start streaming audio playback
+            self.audio_handler.start_streaming_playback(sample_rate=48000, channels=1)
+            
+            # Stream chat response and feed to TTS
+            tts_failed = False
+            remaining_text = ""
+            audio_reception_task = None
+            
+            try:
+                # Start audio reception task (runs concurrently)
+                async def receive_audio_continuously():
+                    """Continuously receive and play audio chunks."""
+                    nonlocal tts_failed
+                    try:
+                        async for audio_chunk in self.api_client.receive_tts_audio():
+                            self.audio_handler.play_audio_chunk(audio_chunk)
+                    except Exception as audio_error:
+                        logger.warning(f"TTS audio reception error: {audio_error}")
+                        tts_failed = True
+                
+                audio_reception_task = asyncio.create_task(receive_audio_continuously())
+                
+                # Stream chat and send text to TTS
+                async for text_chunk in self.api_client.chat_stream(self.conversation_history):
+                    response_text += text_chunk
+                    text_buffer += text_chunk
+                    
+                    # Send to TTS when buffer reaches threshold
+                    if len(text_buffer) >= SEND_CHUNK_SIZE:
+                        try:
+                            await self.api_client.send_tts_text(text_buffer)
+                            text_buffer = ""
+                        except Exception as tts_send_error:
+                            logger.warning(f"TTS send error: {tts_send_error}, will buffer remaining text")
+                            tts_failed = True
+                            remaining_text = response_text
+                            break
+                
+                # Send any remaining buffered text
+                if text_buffer and not tts_failed:
+                    try:
+                        await self.api_client.send_tts_text(text_buffer)
+                        text_buffer = ""
+                    except Exception as e:
+                        logger.warning(f"Error sending final TTS chunk: {e}")
+                        if not tts_failed:
+                            remaining_text = response_text
+                            tts_failed = True
+                
+                # Flush TTS to ensure all text is processed
+                if not tts_failed:
+                    try:
+                        await self.api_client.flush_tts()
+                    except Exception as e:
+                        logger.warning(f"Error flushing TTS: {e}")
+                
+                # Wait for audio reception to complete (or timeout)
+                # Note: receive_tts_audio will yield until PlaybackFinished or connection closes
+                try:
+                    # Wait for audio task with reasonable timeout
+                    await asyncio.wait_for(audio_reception_task, timeout=60.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Audio reception timeout - cancelling task")
+                    audio_reception_task.cancel()
+                    try:
+                        await audio_reception_task
+                    except asyncio.CancelledError:
+                        pass
+                    tts_failed = True
+                    if not remaining_text:
+                        remaining_text = response_text
+                except Exception as e:
+                    logger.warning(f"Audio reception task error: {e}")
+                    if not audio_reception_task.done():
+                        audio_reception_task.cancel()
+                        try:
+                            await audio_reception_task
+                        except asyncio.CancelledError:
+                            pass
+                    tts_failed = True
+                    if not remaining_text:
+                        remaining_text = response_text
+                
+                # If TTS failed mid-stream, use non-streaming for remaining text
+                if tts_failed and remaining_text:
+                    logger.info("Falling back to non-streaming TTS for remaining text")
+                    await self.api_client.close_tts_stream()
+                    self.audio_handler.stop_streaming_playback()
+                    
+                    # Get full response if we don't have it
+                    if not response_text:
+                        response_text = await self.api_client.chat(self.conversation_history)
+                    
+                    # Use non-streaming TTS
+                    audio_data = await self.api_client.tts(remaining_text)
+                    self.audio_handler.play_audio(audio_data, format="mp3")
+                    return
+                
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as chat_error:
+                # Chat streaming failed - close TTS and fallback completely
+                logger.warning(f"Streaming chat failed: {chat_error}")
+                await self.api_client.close_tts_stream()
+                self.audio_handler.stop_streaming_playback()
+                raise  # Will trigger non-streaming fallback
+            
+            finally:
+                # Cleanup streaming resources
+                if audio_reception_task and not audio_reception_task.done():
+                    audio_reception_task.cancel()
+                    try:
+                        await audio_reception_task
+                    except asyncio.CancelledError:
+                        pass
+                try:
+                    await self.api_client.close_tts_stream()
+                except Exception:
+                    pass
+                try:
+                    self.audio_handler.stop_streaming_playback()
+                except Exception:
+                    pass
+            
+            # If we got here, streaming worked
+            if response_text:
+                # We have the full response from streaming
+                assistant_message = ChatMessage(role="assistant", content=response_text)
+                self.conversation_history.append(assistant_message)
+                logger.info(f"Streaming complete. AI response: '{response_text[:100]}...'")
+            else:
+                raise Exception("No response received from streaming chat")
+                
+        except (ValueError, RuntimeError) as e:
+            # Configuration or connection errors - fallback
+            logger.warning(f"Streaming setup error: {e}, falling back")
+            raise
         except Exception as e:
-            logger.error(f"Error processing transcript: {e}", exc_info=True)
+            # Any other streaming error - fallback
+            logger.warning(f"Streaming error: {e}, falling back")
+            raise
+    
+    async def _process_response_non_streaming(self) -> None:
+        """
+        Process AI response using non-streaming TTT and TTS (fallback).
+        """
+        logger.info("Processing response with non-streaming (fallback)...")
+        
+        # Get AI response
+        response_text = await self.api_client.chat(self.conversation_history)
+        logger.info(f"AI response: '{response_text}'")
+        
+        # Add AI response to conversation history
+        assistant_message = ChatMessage(role="assistant", content=response_text)
+        self.conversation_history.append(assistant_message)
+        
+        # Generate and play TTS
+        try:
+            logger.info("Generating TTS audio...")
+            audio_data = await self.api_client.tts(response_text)
+            logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
+            self.audio_handler.play_audio(audio_data, format="mp3")
+            logger.info("TTS playback complete")
+        except Exception as e:
+            logger.error(f"Failed to play TTS: {e}", exc_info=True)
+            raise
     
     async def _extract_and_save_memories(self) -> None:
         """Extract and save memories from conversation via backend."""
