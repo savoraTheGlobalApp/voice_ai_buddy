@@ -209,7 +209,7 @@ class VoiceAIBuddy:
             logger.debug("Received empty transcript, ignoring")
             return
         
-        logger.info(f"🎤 User said: '{transcript}'")
+        logger.info(f"User said: '{transcript}'")
         
         # Add to conversation history
         user_message = ChatMessage(role="user", content=transcript)
@@ -218,9 +218,9 @@ class VoiceAIBuddy:
         
         # Get AI response
         try:
-            logger.info("🤖 Getting AI response...")
+            logger.info("Getting AI response...")
             response_text = await self.api_client.chat(self.conversation_history)
-            logger.info(f"🤖 AI response: '{response_text}'")
+            logger.info(f"AI response: '{response_text}'")
             
             # Add AI response to conversation history
             assistant_message = ChatMessage(role="assistant", content=response_text)
@@ -228,26 +228,26 @@ class VoiceAIBuddy:
             
             # Generate and play TTS
             try:
-                logger.info("🔊 Generating TTS audio...")
+                logger.info(" Generating TTS audio...")
                 audio_data = await self.api_client.tts(response_text)
-                logger.info(f"🔊 Playing TTS audio ({len(audio_data)} bytes)...")
+                logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
                 self.audio_handler.play_audio(audio_data, format="mp3")
-                logger.info("✅ TTS playback complete")
+                logger.info("TTS playback complete")
             except Exception as e:
-                logger.error(f"❌ Failed to play TTS: {e}", exc_info=True)
+                logger.error(f"Failed to play TTS: {e}", exc_info=True)
             
             # Extract memories periodically
             if self.user_msg_counter % self.memory_extract_every_n == 0:
-                logger.info("💾 Extracting memories...")
+                logger.info("Extracting memories...")
                 await self._extract_and_save_memories()
             
             # Save conversation to Firebase
-            logger.debug("💾 Saving conversation chunk...")
+            logger.debug("Saving conversation chunk...")
             await self._save_conversation_chunk()
-            logger.info("✅ Transcript processing complete")
+            logger.info("Transcript processing complete")
         
         except Exception as e:
-            logger.error(f"❌ Error processing transcript: {e}", exc_info=True)
+            logger.error(f"Error processing transcript: {e}", exc_info=True)
     
     async def _extract_and_save_memories(self) -> None:
         """Extract and save memories from conversation via backend."""

@@ -107,7 +107,7 @@ class APIClient:
                                 if data.get("type") == "transcript":
                                     transcript = data.get("text", "").strip()
                                     if transcript:
-                                        logger.info(f"✓ Received transcript from STT: '{transcript}'")
+                                        logger.info(f"Received transcript from STT: '{transcript}'")
                                         # on_transcript is async, so we need to await it
                                         await on_transcript(transcript)
                                     else:
@@ -164,7 +164,7 @@ class APIClient:
                                 if data.get("type") == "transcript":
                                     transcript = data.get("text", "").strip()
                                     if transcript:
-                                        logger.info(f"✓ Received transcript from STT: '{transcript}'")
+                                        logger.info(f"Received transcript from STT: '{transcript}'")
                                         # on_transcript is async, so we need to await it
                                         await on_transcript(transcript)
                             except json.JSONDecodeError:
