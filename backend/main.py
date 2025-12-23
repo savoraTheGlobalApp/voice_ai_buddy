@@ -209,14 +209,29 @@ async def get_hardware_config():
     Get hardware/RPi-specific configuration (OTA-updatable).
     Returns company-controlled settings that can be updated remotely.
     This endpoint is separate from /api/config to avoid breaking web frontend.
+    
+    Uses RPI_STT_PROVIDER and RPI_TTS_PROVIDER if set, otherwise falls back to
+    STT_PROVIDER and TTS_PROVIDER (for backward compatibility).
     """
     # STT/TTS/Chat configuration (company-controlled)
-    stt_provider = _get_stt_provider()
+    # Check RPI-specific vars first, then fall back to regular vars
+    rpi_stt_provider = os.getenv("RPI_STT_PROVIDER")
+    if rpi_stt_provider:
+        stt_provider = rpi_stt_provider.lower()
+    else:
+        stt_provider = _get_stt_provider()
+    
     # For hardware, map webspeech to googlecloud (hardware doesn't use browser APIs)
     if stt_provider == "webspeech":
         stt_provider = "googlecloud"  # Default for hardware
     
-    tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    # Check RPI-specific TTS provider first, then fall back to regular TTS provider
+    rpi_tts_provider = os.getenv("RPI_TTS_PROVIDER")
+    if rpi_tts_provider:
+        tts_provider = rpi_tts_provider.lower()
+    else:
+        tts_provider = os.getenv("TTS_PROVIDER", "gtts").lower()
+    
     chat_model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
     
     # Memory configuration (company-controlled)

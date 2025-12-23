@@ -538,13 +538,19 @@ See `.env.example` for all available options. Key variables:
 
 These are set on the backend and fetched by the RPi client on startup:
 
-- `STT_PROVIDER`: `googlecloud` (default) or `deepgram`
-- `TTS_PROVIDER`: `gtts` (default), `openai`, `edge`, or `deepgram`
+- `RPI_STT_PROVIDER` (optional): RPi-specific STT provider (`googlecloud` or `deepgramnova3`)
+  - If not set, falls back to `STT_PROVIDER` (which defaults to `webspeech`, but is mapped to `googlecloud` for RPi)
+  - Allows separate STT provider configuration for RPi vs web frontend
+- `RPI_TTS_PROVIDER` (optional): RPi-specific TTS provider (`gtts`, `openai`, `edge`, or `deepgram`)
+  - If not set, falls back to `TTS_PROVIDER` (which defaults to `gtts`)
+  - Allows separate TTS provider configuration for RPi vs web frontend
 - `CHAT_MODEL`: `gpt-4o-mini` (default) or other OpenAI models
 - `TOP_MEMORIES_COUNT`: Number of top memories to fetch (default: 10)
 - `MEMORY_LIMIT`: Maximum memories per user (default: 100)
 - `SAMPLE_RATE`: Audio sample rate in Hz (default: 16000)
 - `CHUNK_SIZE`: Audio buffer size in frames (default: 2048)
+
+**Note**: The RPi-specific provider variables (`RPI_STT_PROVIDER`, `RPI_TTS_PROVIDER`) allow you to configure different providers for RPi hardware vs the web frontend. This enables independent optimization, A/B testing, and cost management per platform.
 
 ### Audio Device Selection
 
