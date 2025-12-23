@@ -42,6 +42,8 @@ class AudioHandler:
         self.is_recording = False
         self.recording_thread: Optional[Thread] = None
         self.stop_event = Event()
+        self.streaming_output_stream: Optional[pyaudio.Stream] = None
+        self.is_streaming_audio = False
     
     def list_devices(self) -> list[dict]:
         """
@@ -403,9 +405,74 @@ class AudioHandler:
             logger.error(f"Failed to play MP3 audio: {e}")
             raise
     
+    def start_streaming_playback(self, sample_rate: int = 48000, channels: int = 1) -> None:
+        """
+        Start streaming audio playback (for PCM audio chunks).
+        
+        Args:
+            sample_rate: Sample rate in Hz (default: 48000 for Deepgram TTS)
+            channels: Number of audio channels (default: 1 for mono)
+        """
+        if self.is_streaming_audio:
+            logger.warning("Already streaming audio")
+            return
+        
+        # Auto-detect output device if not specified
+        output_device = self.output_device
+        if output_device is None:
+            output_device = self.find_output_device()
+            if output_device is None:
+                raise Exception("No output device found")
+        
+        try:
+            self.streaming_output_stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=sample_rate,
+                output=True,
+                output_device_index=output_device,
+                frames_per_buffer=self.chunk_size
+            )
+            self.is_streaming_audio = True
+            logger.info(f"Started streaming audio playback at {sample_rate}Hz, {channels} channel(s)")
+        except Exception as e:
+            logger.error(f"Failed to start streaming playback: {e}")
+            raise
+    
+    def play_audio_chunk(self, audio_chunk: bytes) -> None:
+        """
+        Play a single audio chunk (must call start_streaming_playback first).
+        
+        Args:
+            audio_chunk: PCM audio data as bytes (Int16)
+        """
+        if not self.is_streaming_audio or not self.streaming_output_stream:
+            raise RuntimeError("Streaming playback not started. Call start_streaming_playback() first.")
+        
+        try:
+            self.streaming_output_stream.write(audio_chunk)
+        except Exception as e:
+            logger.error(f"Error playing audio chunk: {e}")
+            raise
+    
+    def stop_streaming_playback(self) -> None:
+        """Stop streaming audio playback."""
+        self.is_streaming_audio = False
+        
+        if self.streaming_output_stream:
+            try:
+                self.streaming_output_stream.stop_stream()
+                self.streaming_output_stream.close()
+            except Exception as e:
+                logger.error(f"Error stopping streaming playback: {e}")
+            finally:
+                self.streaming_output_stream = None
+                logger.info("Stopped streaming audio playback")
+    
     def close(self) -> None:
         """Close audio handler and cleanup resources."""
         self.stop_recording()
+        self.stop_streaming_playback()
         
         if self.output_stream:
             try:
