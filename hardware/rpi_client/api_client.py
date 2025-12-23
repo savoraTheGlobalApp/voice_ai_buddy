@@ -38,6 +38,7 @@ class APIClient:
         self.backend_url = config.get_backend_url()
         self.ws_url = config.get_ws_url()
         self.stt_websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.tts_websocket: Optional[websockets.WebSocketClientProtocol] = None
     
     async def get_hardware_config(self) -> dict:
         """
@@ -212,7 +213,7 @@ class APIClient:
     
     async def chat(self, messages: list[ChatMessage], model: Optional[str] = None) -> str:
         """
-        Send chat request and get response.
+        Send chat request and get response (non-streaming).
         
         Args:
             messages: List of chat messages
@@ -246,9 +247,85 @@ class APIClient:
                 logger.error(f"Unexpected error in chat: {e}")
                 raise
     
+    async def chat_stream(self, messages: list[ChatMessage], model: Optional[str] = None) -> AsyncGenerator[str, None]:
+        """
+        Stream chat response as text chunks arrive (SSE).
+        
+        Args:
+            messages: List of chat messages
+            model: Optional model override (default from config)
+        
+        Yields:
+            Text chunks as they arrive from the streaming API
+        """
+        if not model:
+            model = await config.get_chat_model()
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    'POST',
+                    f"{self.backend_url}/api/chat/stream",
+                    json={
+                        "messages": [
+                            {"role": msg.role, "content": msg.content}
+                            for msg in messages
+                        ],
+                        "model": model
+                    }
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        raise httpx.HTTPStatusError(
+                            f"HTTP {response.status_code}: {error_text.decode()[:200]}",
+                            request=response.request,
+                            response=response
+                        )
+                    
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        
+                        # SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            
+                            # Check for [DONE] marker
+                            if data_str.strip() == "[DONE]":
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                
+                                # Check for error
+                                if "error" in data:
+                                    raise Exception(f"Streaming error: {data['error']}")
+                                
+                                # Get delta content
+                                delta = data.get("delta", "")
+                                if delta:
+                                    yield delta
+                                
+                                # Check if done
+                                if data.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON lines
+                                logger.warning(f"Invalid JSON in SSE stream: {data_str[:100]}")
+                                continue
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            logger.warning(f"Streaming chat connection error: {e}, will fallback to non-streaming")
+            raise
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"Streaming chat HTTP error: {e}, will fallback to non-streaming")
+            raise
+        except Exception as e:
+            logger.warning(f"Streaming chat error: {e}, will fallback to non-streaming")
+            raise
+    
     async def tts(self, text: str, voice: str = "nova", provider: Optional[str] = None) -> bytes:
         """
-        Generate speech from text.
+        Generate speech from text (non-streaming).
         
         Args:
             text: Text to convert to speech
@@ -282,6 +359,120 @@ class APIClient:
             except Exception as e:
                 logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
                 raise
+    
+    async def connect_tts_stream(self) -> None:
+        """
+        Connect to Deepgram TTS WebSocket for streaming TTS.
+        Must be called before using send_tts_text and receive_tts_audio.
+        """
+        tts_provider = await config.get_tts_provider()
+        if tts_provider != "deepgram":
+            raise ValueError(f"Streaming TTS only supports 'deepgram' provider, got '{tts_provider}'")
+        
+        ws_endpoint = f"{self.ws_url}/api/tts/deepgram"
+        
+        try:
+            self.tts_websocket = await websockets.connect(
+                ws_endpoint,
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=10
+            )
+            logger.info("Connected to Deepgram TTS WebSocket")
+        except (websockets.exceptions.InvalidURI, websockets.exceptions.InvalidHandshake) as e:
+            logger.error(f"Failed to connect to TTS WebSocket: {e}")
+            raise
+        except OSError as e:
+            logger.error(f"Network error connecting to TTS WebSocket: {e}")
+            raise
+        except asyncio.TimeoutError as e:
+            logger.error(f"Timeout connecting to TTS WebSocket: {e}")
+            raise
+    
+    async def send_tts_text(self, text: str) -> None:
+        """
+        Send text chunk to TTS WebSocket for synthesis.
+        
+        Args:
+            text: Text to synthesize
+        """
+        if not self.tts_websocket:
+            raise RuntimeError("TTS WebSocket not connected. Call connect_tts_stream() first.")
+        
+        try:
+            await self.tts_websocket.send(json.dumps({
+                "type": "speak",
+                "text": text
+            }))
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("TTS WebSocket closed unexpectedly")
+            raise
+        except Exception as e:
+            logger.error(f"Error sending text to TTS: {e}")
+            raise
+    
+    async def receive_tts_audio(self) -> AsyncGenerator[bytes, None]:
+        """
+        Receive audio chunks from TTS WebSocket.
+        Continues until PlaybackFinished message or connection closes.
+        
+        Yields:
+            PCM audio chunks as bytes (Int16, 48kHz by default)
+        """
+        if not self.tts_websocket:
+            raise RuntimeError("TTS WebSocket not connected. Call connect_tts_stream() first.")
+        
+        try:
+            async for message in self.tts_websocket:
+                if isinstance(message, bytes):
+                    # PCM audio data
+                    yield message
+                elif isinstance(message, str):
+                    # Control frame (JSON)
+                    try:
+                        data = json.loads(message)
+                        msg_type = data.get("type")
+                        
+                        if msg_type == "PlaybackFinished":
+                            # TTS finished - stop receiving
+                            logger.debug("TTS playback finished")
+                            break
+                        elif msg_type == "error":
+                            # Error from Deepgram
+                            error_msg = data.get("message", "Unknown error")
+                            raise Exception(f"Deepgram TTS error: {error_msg}")
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON from TTS: {message}")
+                        continue
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("TTS WebSocket closed during audio reception")
+            raise
+        except Exception as e:
+            logger.error(f"Error receiving TTS audio: {e}")
+            raise
+    
+    async def flush_tts(self) -> None:
+        """
+        Send flush command to TTS WebSocket to flush any pending text.
+        """
+        if not self.tts_websocket:
+            raise RuntimeError("TTS WebSocket not connected")
+        
+        try:
+            await self.tts_websocket.send(json.dumps({"type": "flush"}))
+        except Exception as e:
+            logger.error(f"Error flushing TTS: {e}")
+            raise
+    
+    async def close_tts_stream(self) -> None:
+        """Close TTS WebSocket connection."""
+        if self.tts_websocket:
+            try:
+                await self.tts_websocket.close()
+            except Exception as e:
+                logger.error(f"Error closing TTS WebSocket: {e}")
+            finally:
+                self.tts_websocket = None
     
     async def extract_memories(
         self,
@@ -486,4 +677,6 @@ class APIClient:
                 logger.error(f"Error closing STT WebSocket: {e}")
             finally:
                 self.stt_websocket = None
+        
+        await self.close_tts_stream()
 
