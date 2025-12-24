@@ -36,8 +36,8 @@ export default function SignUpPage() {
     }
 
     const age = parseInt(formData.age);
-    if (!formData.age || isNaN(age) || age < 1 || age > 150) {
-      setError('Please enter a valid age');
+    if (!formData.age || isNaN(age) || age < 3 || age > 12) {
+      setError('Age must be between 3 and 12 years');
       return false;
     }
 
@@ -202,14 +202,20 @@ export default function SignUpPage() {
             <input
               id="age"
               type="number"
-              min="1"
-              max="150"
+              min="3"
+              max="12"
               value={formData.age}
               onChange={(e) => {
-                setFormData({ ...formData, age: e.target.value });
-                setError('');
+                const ageValue = e.target.value;
+                setFormData({ ...formData, age: ageValue });
+                // Validate age range
+                if (ageValue && (parseInt(ageValue) < 3 || parseInt(ageValue) > 12)) {
+                  setError('Age must be between 3 and 12 years');
+                } else {
+                  setError('');
+                }
               }}
-              placeholder="Enter your age"
+              placeholder="Enter age (3-12 years)"
               disabled={loading}
               required
               style={{
@@ -225,6 +231,11 @@ export default function SignUpPage() {
                 backgroundColor: 'white',
               }}
             />
+            {formData.age && (parseInt(formData.age) < 3 || parseInt(formData.age) > 12) && (
+              <div style={{ fontSize: '12px', color: '#ef4444', marginTop: '4px' }}>
+                Age must be between 3 and 12 years
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: '20px' }}>

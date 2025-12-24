@@ -4,131 +4,37 @@ import { RealtimeAgent, RealtimeSession, OpenAIRealtimeWebRTC } from '@openai/ag
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { fetchTopMemories, addMemoriesWithLimit, UserMemory } from '@/lib/memories';
-import { startConversationSession, appendConversationChunk } from '@/lib/conversations';
-import { verifyAdminCode } from '@/lib/admin';
-import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { startConversationSession, appendConversationChunk, ConversationMessage } from '@/lib/conversations';
+import { verifyAdminCode } from '@/lib/admin';import { doc, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import RoboticCatAvatar from '@/app/components/RoboticCatAvatar';
 import CatLogo from '@/app/components/CatLogo';
+import { buildAgeSpecificInstructions, getLanguageComplexityParams } from './lib/ageSpecificInstructions';
+import { loadAdaptiveState, initializeAdaptiveState, analyzeAndUpdateState, AdaptiveState, updateAdaptiveStateAge, initializeModeState, updateModeState, logModeStateAfterUpdate } from './lib/adaptiveState';
+import { ResponseMode, UserIntent, ModeState } from './lib/responseMode';
+import { combinedPreClassify, selectModeWithReasoning, logModeSelection } from './lib/modeSelector';
+import { getMetricsTracker } from './lib/modeMetrics';
+import { buildModePrompt, parseEnhancedIntentFromResponse } from './lib/modePrompts';
+import { stripIntentTag } from './lib/responseEnforcer';
+import { generateGreetingQuestion, buildRAGPrompt } from './lib/questionEngine';
+import { getContextInfo } from './lib/contextAwareness';
+import { validateQuestion } from './lib/safetyGuardrails';
+import { decideTopicAction } from './lib/topicCoherence';
 
 // Minimum time interval (in milliseconds) between consecutive utterances to be considered a valid interruption
 // If user interrupts within this time, the second transcript will be ignored to prevent duplicate processing
 const MIN_INTERRUPTION_INTERVAL_MS = 3500; // in ms
 
 // Function to build personalized instructions with user data
-function buildSocraticTutorInstructions(userName?: string, userAge?: number, topMemories?: UserMemory[]): string {
-  let userInfoSection = '';
-  let memoriesSection = '';
-  
-  if (userName && userAge) {
-    userInfoSection = `# USER INFORMATION
-- The child's name is ${userName} and they are ${userAge} years old.
-- ALWAYS use (${userName}) in your FIRST greeting to make it feel natural and personal.
-- After that, mention their name once every 2-3 exchanges for warmth and authenticity.
-- Avoid overusing it. Don't repeat the name in every sentence.
-- If asked, say they're ${userAge} years old.
-- Match your language complexity to their age.
-`;
-  } else if (userName) {
-    userInfoSection = `# USER INFORMATION
-- The child's name is ${userName}
-- ALWAYS use (${userName}) in your FIRST greeting to make it feel natural and personal.
-- After that, mention their name once every 2-3 exchanges for warmth and authenticity.
-- Avoid overusing it. Don't repeat the name in every sentence.
-`;
-  }
-
-  const topMemoriesCount = Number(process.env.NEXT_PUBLIC_TOP_MEMORIES_COUNT || 10);
-  if (topMemories && topMemories.length > 0) {
-    const items = topMemories.slice(0, topMemoriesCount).map(m => `- (${m.importance}) [${m.type}] ${m.text}`).join('\n');
-    memoriesSection = `# USER MEMORIES (Top ${Math.min(topMemories.length, topMemoriesCount)})\n${items}\n\n`;
-  }
-
-  return `You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
-who helps kids think deeply, be creative, and develop critical thinking skills. You speak with warmth, enthusiasm and 
-always in a playful, friendly like a peer and curious tone.
-
-${userInfoSection}${memoriesSection}# CORE ROLE
-Your goal is to help children become curious thinkers through guided discovery, not direct answers. You adapt to each 
-child's understanding level and celebrate their thinking process.
-
-# Beginning of the conversation
-- Start with a warm, personalized, and age-appropriate greeting.
-- Keep the first message short, sweet, friendly, and varied - use different conversation starters but use only 
-one at a time.
-- Vary your greeting style each time. Avoid repeating the same one.
-- Make the greeting age-appropriate and warm, suitable for a child
-- If they don't respond, follow up with something fun and engaging like a story, joke, poem, or a simple question about their day
-
-# SAFETY PROTOCOL (ALWAYS FIRST)
-Before responding to ANY input, check if it contains:
-- Sexual content
-- Instructions to build weapons
-- Violent threats
-- Self-harm intent
-- Explicit drug use instructions
-- Other adult/harmful material
-
-If unsafe content is detected:
-- Return ONLY 1-2 short sentences
-- Gently decline or redirect to a safe topic
-- Use simple words suitable for ages 3-10
-- Keep tone calm, affirmative, and redirective
-- NEVER mention 'unsafe', repeat the unsafe request, or use any unsafe words from the request
-- Example: "Let's talk about something fun! What did you learn at school today?" or "That's interesting, buddy! Tell 
-  me about your favorite game instead!"
-
-# PEDAGOGICAL APPROACH
-
-## For QUESTIONS (When the child asks something):
-- NEVER give direct answers immediately. Use progressive hinting. Guide them with one probing question at a 
-time (e.g., "What do you think happens if...?").
-- After each reply, assess confidence, confusion, and frustration (0-1 scale).
-- If confused (>0.7): give simpler, closer hints.
-- If confident (>0.7): give tougher hints or deepen thinking.
-- If frustrated (>0.7): explain the answer simply, then confirm understanding.
-- Reveal the answer only after 3-4 hint exchanges.
-- Keep explanations simple and age-appropriate; give technical detail only if asked.
-- End with one specific, easy follow-up question linked to the answer (not broad or open-ended). 
-For example, When talking about uniform, the AI should ask what are the benefits of wearing a tie rather 
-than asking the benefits of wearing a uniform which is more open ended
-
-## For STATEMENTS (Child shares something):
-- Give a short affirmation, then ask ONE (only one) simple follow-up question to deepen the chat
-- Or, share a quick related fact and add something engaging.
-- Or, ask one short prompt to keep it playful and age-appropriate.
-- Never ask multi-part or multiple questions at once.
-
-## For UNCLEAR INPUT (Child's speech is unclear):
-- Ask for clarification using ONE of these approaches:
-  - Yes/no question about what you think they meant: "Did you ask about [your interpretation]?"
-  - Simple request: "Sorry, I didn't catch that. Can you say that again?"
-
-## For ENTERTAINMENT REQUESTS (Story, joke, poem):
-- First, ask what topic or type they want.
-- If they answer, share a story/joke/poem on that (safe for ages 3-10).
-- If the topic is unsafe, politely decline and suggest a safe one.
-- If they don't specify, use a past topic or choose a fun, age-safe one.
-
-# RESPONSE STYLE & STRUCTURE
-- Keep replies under 35 words.
-- Use simple, age-appropriate (3-10) Indian English.
-- Maintain a warm, friendly, teacher-friend tone, enthusiastic yet patient.
-- Celebrate effort ("Nice thinking!", "Good try!").
-- Be genuinely curious and encouraging. Build on the child's interests.
-- Use Socratic and "what if" questions to inspire creativity and reasoning.
-- Match complexity to age and add fun occasionally.
-- Do NOT use emojis or emoticons in any response
-
-# EXAMPLES OF GOOD RESPONSES
-
-Question: "Why is the sky blue?"
-You: "That's a cool question! Hmm, what do you think happens when sunlight reaches us from so far away? Can you 
-      imagine what colors might be hiding in sunlight?"
-
-If child seems confused:
-You: "Great thinking! Let me give you a hint - think about how a rainbow has many colors. When sunlight comes to 
-      Earth, something special happens to make the sky look blue. Can you guess what that might be?"`;
+// Now uses age-specific instruction builders based on Montessori and child psychology
+// Supports adaptive learning with effectiveLevel parameter
+function buildSocraticTutorInstructions(
+  userName?: string, 
+  userAge?: number, 
+  topMemories?: UserMemory[],
+  effectiveLevel?: import('./lib/ageGroups').SubAgeLevel
+): string {
+  return buildAgeSpecificInstructions(userName, userAge, topMemories, effectiveLevel);
 }
 
 let currentSession: {
@@ -282,7 +188,23 @@ export async function setupRealtimeMode(
       memories = await fetchTopMemories(uid);
     }
   } catch {}
-  const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+  
+  // Load or initialize adaptive state
+  let adaptiveState: AdaptiveState | null = null;
+  if (uid && userAge) {
+    try {
+      adaptiveState = await loadAdaptiveState(uid);
+      if (!adaptiveState) {
+        adaptiveState = await initializeAdaptiveState(uid, userAge);
+      }
+    } catch (error) {
+      console.error('[Adaptive] Error loading adaptive state:', error);
+      // Continue without adaptive state
+    }
+  }
+  
+  const effectiveLevel = adaptiveState?.effectiveLevel;
+  const instructions = buildSocraticTutorInstructions(userName, userAge, memories, effectiveLevel);
 
   const agent = new RealtimeAgent({
     name: 'SocraticTutor',
@@ -809,7 +731,27 @@ export async function setupSTTMode(
         memories = await fetchTopMemories(uid);
       }
     } catch {}
-    const instructions = buildSocraticTutorInstructions(userName, userAge, memories);
+    
+    // Load or initialize adaptive state
+    let adaptiveState: AdaptiveState | null = null;
+    if (uid && userAge) {
+      try {
+        adaptiveState = await loadAdaptiveState(uid);
+        if (!adaptiveState) {
+          adaptiveState = await initializeAdaptiveState(uid, userAge);
+        }
+      } catch (error) {
+        console.error('[Adaptive] Error loading adaptive state:', error);
+        // Continue without adaptive state
+      }
+    }
+    
+    const effectiveLevel = adaptiveState?.effectiveLevel;
+    const instructions = buildSocraticTutorInstructions(userName, userAge, memories, effectiveLevel);
+
+    // Initialize mode state for response mode state machine (in-memory, not persisted)
+    let modeState: ModeState = initializeModeState();
+    console.log('[ModeState] Initialized with starting mode:', modeState.currentMode);
 
     // Conversation session tracking
     let conversationSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1644,8 +1586,8 @@ export async function setupSTTMode(
         console.error('[STT] Google Cloud WebSocket error:', error);
       };
       
-      googleCloudWs.onclose = () => {
-        console.log('[STT] Google Cloud WebSocket closed');
+      googleCloudWs.onclose = (event) => {
+        console.log('[STT] Google Cloud WebSocket closed', event.code, event.reason || '(no reason)');
       };
       
       // Wait for WebSocket to open and flush buffered audio
@@ -1771,6 +1713,8 @@ export async function setupSTTMode(
       processingGain: null,
       isProcessingAudioPlaying: () => isProcessingAudioPlaying,
       globalResponseId: 0, // Initialize global response ID counter
+      currentTopic: null,
+      recentUserMessages: [],
       isTTSPlaying: false, // Initialize TTS playing flag
       ...(deepgramWs && { deepgramWs }),
       ...(audioProcessor && { audioProcessor }),
@@ -1856,6 +1800,72 @@ export async function setupSTTMode(
       onChunk: (chunk: string) => void,
       isInitialGreeting: boolean = false
     ): Promise<string> => {
+      // === TOPIC COHERENCE: Track engagement and topic ===
+      let topicNote = '';
+      if (!isInitialGreeting && currentSTTSession) {
+        const sessionAny = currentSTTSession as any;
+        // Track recent user messages
+        const recent = sessionAny.recentUserMessages || [];
+        recent.push(userMessage);
+        sessionAny.recentUserMessages = recent.slice(-3);
+
+        const decision = decideTopicAction(
+          sessionAny.currentTopic || null,
+          userMessage,
+          sessionAny.recentUserMessages
+        );
+        sessionAny.currentTopic = decision.nextTopic || decision.currentTopic || sessionAny.currentTopic || null;
+
+        if (sessionAny.currentTopic) {
+          topicNote = `\\n\\n# TOPIC GUIDANCE\\nCurrent topic: ${sessionAny.currentTopic}. Maintain coherence.`;
+          if (!decision.maintain) {
+            topicNote += ` If engagement seems low, you may gently pivot to this topic: ${sessionAny.currentTopic}.`;
+          }
+        }
+      }
+      // === MODE STATE MACHINE: Pre-classification and mode selection ===
+      let selectedMode: ResponseMode = modeState.currentMode;
+      // Use combined intent analysis (rule-based + previous LLM intent)
+      let preClass = combinedPreClassify(
+        userMessage || '',
+        modeState.previousLLMIntent,
+        modeState.previousLLMConfidence,
+        modeState
+      );
+      
+      if (!isInitialGreeting && userMessage && effectiveLevel) {
+        // Select mode based on combined pre-classification and current state (with reasoning)
+        const modeSelection = selectModeWithReasoning(preClass, modeState, effectiveLevel);
+        selectedMode = modeSelection.mode;
+        
+        // Record mode usage for metrics
+        const metricsTracker = getMetricsTracker();
+        metricsTracker.recordModeUsage(selectedMode, modeState.turnCount + 1);
+        
+        // Log mode selection with enhanced reasoning
+        logModeSelection(
+          modeState.turnCount + 1,
+          preClass,
+          selectedMode,
+          modeState,
+          modeSelection.reason
+        );
+        
+        // Build mode-specific prompt and update system message
+        const modePrompt = buildModePrompt({
+          mode: selectedMode,
+          effectiveLevel,
+          userName,
+          userAge,
+          topMemories: memories,
+        }) + topicNote;
+        conversationHistory[0] = {
+          role: 'system',
+          content: modePrompt,
+        };
+      }
+      // === END MODE STATE MACHINE PRE-PROCESSING ===
+
       // Add user message to conversation history
       if (userMessage) {
         conversationHistory.push({ role: 'user', content: userMessage });
@@ -1933,19 +1943,75 @@ export async function setupSTTMode(
 
                   if (data.done) {
                     // Stream complete
-                    conversationHistory.push({ role: 'assistant', content: fullResponse });
+                    // === MODE STATE MACHINE: Post-processing ===
+                    let cleanResponse = fullResponse;
+                    let detectedIntent: UserIntent | null = null;
+                    
+                    if (!isInitialGreeting && effectiveLevel) {
+                      // Parse enhanced intent from the LLM's response (includes confidence)
+                      const enhancedIntent = parseEnhancedIntentFromResponse(fullResponse);
+                      detectedIntent = enhancedIntent.intent;
+                      
+                      // Strip intent tag from response for display/TTS
+                      cleanResponse = stripIntentTag(fullResponse);
+                      
+                      // Update mode state based on selected mode and detected intent with confidence
+                      modeState = updateModeState(
+                        modeState, 
+                        selectedMode, 
+                        preClass, 
+                        detectedIntent,
+                        enhancedIntent.confidence
+                      );
+                      logModeStateAfterUpdate(modeState);
+                      
+                      // Record outcome for metrics (this turn's user input is the outcome of previous mode)
+                      const metricsTracker = getMetricsTracker();
+                      metricsTracker.recordOutcome(preClass, modeState, modeState.engagementStreak);
+                      
+                      // Log metrics summary every 10 turns
+                      if (modeState.turnCount % 10 === 0) {
+                        metricsTracker.logSummary();
+                      }
+                    }
+                    // === END MODE STATE MACHINE POST-PROCESSING ===
+                    
+                    // Store clean response (without intent tag) in conversation history
+                    conversationHistory.push({ role: 'assistant', content: cleanResponse });
                     
                     // Detect mood from assistant response and update avatar
-                    const detectedMood = detectMoodFromText(fullResponse);
+                    const detectedMood = detectMoodFromText(cleanResponse);
                     if (onAvatarStateUpdate) {
                       onAvatarStateUpdate('processing', false, detectedMood);
+                    }
+                    
+                    // Update adaptive state based on conversation
+                    if (adaptiveState && uid && !isInitialGreeting) {
+                      try {
+                        const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
+                        adaptiveState = result.state;
+                        
+                        // If transition occurred, update instructions for next interaction
+                        if (result.transition) {
+                          console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
+                          // Update system message in conversation history
+                          const newEffectiveLevel = adaptiveState.effectiveLevel;
+                          const newInstructions = buildSocraticTutorInstructions(userName, userAge, memories, newEffectiveLevel);
+                          conversationHistory[0] = {
+                            role: 'system',
+                            content: newInstructions,
+                          };
+                        }
+                      } catch (error) {
+                        console.error('[Adaptive] Error updating state:', error);
+                      }
                     }
                     
                     // Update UI with complete response (but skip for initial greeting - it will be updated after removing the prompt)
                     if (onConversationUpdate && !isInitialGreeting) {
                       onConversationUpdate([...conversationHistory]);
                     }
-                    return fullResponse;
+                    return cleanResponse;
                   }
                 } catch (e) {
                   // Skip invalid JSON or continue processing
@@ -1959,12 +2025,38 @@ export async function setupSTTMode(
 
           // If we get here, stream ended without done flag
           if (fullResponse) {
-            conversationHistory.push({ role: 'assistant', content: fullResponse });
+            // === MODE STATE MACHINE: Post-processing (fallback path) ===
+            let cleanResponseFallback = fullResponse;
+            if (!isInitialGreeting && effectiveLevel) {
+              const enhancedIntentFallback = parseEnhancedIntentFromResponse(fullResponse);
+              const detectedIntentFallback = enhancedIntentFallback.intent;
+              cleanResponseFallback = stripIntentTag(fullResponse);
+              modeState = updateModeState(
+                modeState, 
+                selectedMode, 
+                preClass, 
+                detectedIntentFallback,
+                enhancedIntentFallback.confidence
+              );
+              logModeStateAfterUpdate(modeState);
+              
+              // Record outcome for metrics
+              const metricsTracker = getMetricsTracker();
+              metricsTracker.recordOutcome(preClass, modeState, modeState.engagementStreak);
+              
+              // Log metrics summary every 10 turns
+              if (modeState.turnCount % 10 === 0) {
+                metricsTracker.logSummary();
+              }
+            }
+            // === END MODE STATE MACHINE POST-PROCESSING ===
+            
+            conversationHistory.push({ role: 'assistant', content: cleanResponseFallback });
             // Update UI (but skip for initial greeting - it will be updated after removing the prompt)
             if (onConversationUpdate && !isInitialGreeting) {
               onConversationUpdate([...conversationHistory]);
             }
-            return fullResponse;
+            return cleanResponseFallback;
           }
 
           throw new Error('Stream ended without complete response');
@@ -1995,6 +2087,71 @@ export async function setupSTTMode(
     };
     
     const getChatResponse = async (userMessage: string, isInitialGreeting: boolean = false): Promise<string> => {
+      // === TOPIC COHERENCE: Track engagement and topic ===
+      let topicNote = '';
+      if (!isInitialGreeting && currentSTTSession) {
+        const sessionAny = currentSTTSession as any;
+        const recent = sessionAny.recentUserMessages || [];
+        recent.push(userMessage);
+        sessionAny.recentUserMessages = recent.slice(-3);
+
+        const decision = decideTopicAction(
+          sessionAny.currentTopic || null,
+          userMessage,
+          sessionAny.recentUserMessages
+        );
+        sessionAny.currentTopic = decision.nextTopic || decision.currentTopic || sessionAny.currentTopic || null;
+
+        if (sessionAny.currentTopic) {
+          topicNote = `\\n\\n# TOPIC GUIDANCE\\nCurrent topic: ${sessionAny.currentTopic}. Maintain coherence.`;
+          if (!decision.maintain) {
+            topicNote += ` If engagement seems low, you may gently pivot to this topic: ${sessionAny.currentTopic}.`;
+          }
+        }
+      }
+      // === MODE STATE MACHINE: Pre-classification and mode selection ===
+      let selectedModeNonStream: ResponseMode = modeState.currentMode;
+      // Use combined intent analysis (rule-based + previous LLM intent)
+      let preClassNonStream = combinedPreClassify(
+        userMessage || '',
+        modeState.previousLLMIntent,
+        modeState.previousLLMConfidence,
+        modeState
+      );
+      
+      if (!isInitialGreeting && userMessage && effectiveLevel) {
+        // Select mode based on combined pre-classification and current state (with reasoning)
+        const modeSelectionNonStream = selectModeWithReasoning(preClassNonStream, modeState, effectiveLevel);
+        selectedModeNonStream = modeSelectionNonStream.mode;
+        
+        // Record mode usage for metrics
+        const metricsTracker = getMetricsTracker();
+        metricsTracker.recordModeUsage(selectedModeNonStream, modeState.turnCount + 1);
+        
+        // Log mode selection with enhanced reasoning
+        logModeSelection(
+          modeState.turnCount + 1,
+          preClassNonStream,
+          selectedModeNonStream,
+          modeState,
+          modeSelectionNonStream.reason
+        );
+        
+        // Build mode-specific prompt and update system message
+        const modePromptNonStream = buildModePrompt({
+          mode: selectedModeNonStream,
+          effectiveLevel,
+          userName,
+          userAge,
+          topMemories: memories,
+        }) + topicNote;
+        conversationHistory[0] = {
+          role: 'system',
+          content: modePromptNonStream,
+        };
+      }
+      // === END MODE STATE MACHINE PRE-PROCESSING ===
+
       // Add user message to conversation history
       // For initial greeting, we still want to send the prompt but it won't be visible in UI
       if (userMessage) {
@@ -2040,11 +2197,61 @@ export async function setupSTTMode(
           }
 
           const data = await response.json();
-          const assistantMessage = data.response || data.message || '';
-          conversationHistory.push({ role: 'assistant', content: assistantMessage });
+          let assistantMessage = data.response || data.message || '';
+          
+          // === MODE STATE MACHINE: Post-processing ===
+          let cleanAssistantMessage = assistantMessage;
+          let detectedIntentNonStream: UserIntent | null = null;
+          
+          if (!isInitialGreeting && effectiveLevel) {
+            // Parse enhanced intent from the LLM's response (includes confidence)
+            const enhancedIntentNonStream = parseEnhancedIntentFromResponse(assistantMessage);
+            detectedIntentNonStream = enhancedIntentNonStream.intent;
+            
+            // Strip intent tag from response for display/TTS
+            cleanAssistantMessage = stripIntentTag(assistantMessage);
+            
+            // Update mode state based on selected mode and detected intent with confidence
+            modeState = updateModeState(
+              modeState, 
+              selectedModeNonStream, 
+              preClassNonStream, 
+              detectedIntentNonStream,
+              enhancedIntentNonStream.confidence
+            );
+            logModeStateAfterUpdate(modeState);
+            
+            // Record outcome for metrics
+            const metricsTracker = getMetricsTracker();
+            metricsTracker.recordOutcome(preClassNonStream, modeState, modeState.engagementStreak);
+            
+            // Log metrics summary every 10 turns
+            if (modeState.turnCount % 10 === 0) {
+              metricsTracker.logSummary();
+            }
+          }
+          // === END MODE STATE MACHINE POST-PROCESSING ===
+          
+          // Store clean response (without intent tag) in conversation history
+          conversationHistory.push({ role: 'assistant', content: cleanAssistantMessage });
+          
+          // Update adaptive state based on conversation (after mode state update)
+          if (adaptiveState && uid && !isInitialGreeting) {
+            try {
+              const result = await analyzeAndUpdateState(adaptiveState, conversationHistory as ConversationMessage[], uid);
+              adaptiveState = result.state;
+              
+              // If transition occurred, log it (system message will be rebuilt on next turn)
+              if (result.transition) {
+                console.log(`[Adaptive] Transition detected: ${result.transition.reason}`);
+              }
+            } catch (error) {
+              console.error('[Adaptive] Error updating state:', error);
+            }
+          }
           
           // Detect mood from assistant response and update avatar
-          const detectedMood = detectMoodFromText(assistantMessage);
+          const detectedMood = detectMoodFromText(cleanAssistantMessage);
           if (onAvatarStateUpdate) {
             onAvatarStateUpdate('processing', false, detectedMood);
           }
@@ -2053,7 +2260,7 @@ export async function setupSTTMode(
           if (onConversationUpdate) {
             onConversationUpdate([...conversationHistory]);
           }
-          return assistantMessage;
+          return cleanAssistantMessage;
         } catch (error: any) {
           if (timeoutId) clearTimeout(timeoutId);
           lastError = error;
@@ -3873,9 +4080,42 @@ export async function setupSTTMode(
         }
       }
       
-      // Send a prompt that will generate a dynamic greeting
-      // The AI will use the instructions to greet with the child's name in the first message
-      const greetingPrompt = "Please greet me and start our conversation in a warm and engaging way.";
+      // Generate proactive question using RAG approach
+      const contextInfo = getContextInfo();
+      const questionContext = {
+        userName,
+        userAge,
+        effectiveLevel: effectiveLevel || 'elem_mid', // Fallback if not set
+        topMemories: memories,
+        timeOfDay: contextInfo.timeOfDay,
+        dayOfWeek: contextInfo.dayOfWeek,
+      };
+      
+      // Generate grounding data (fact, dilemma, misconception, etc.)
+      const generatedQuestion = generateGreetingQuestion(questionContext);
+      
+      // Validate grounding for safety (check if fact/topic is appropriate)
+      let greetingPrompt: string;
+      const validation = validateQuestion(
+        generatedQuestion.grounding.fact || 
+        generatedQuestion.grounding.commonBelief || 
+        generatedQuestion.grounding.option1 || 
+        'question',
+        questionContext.effectiveLevel
+      );
+      
+      if (!validation.isValid) {
+        console.warn(`[QuestionEngine] Grounding failed validation: ${validation.reason}, using fallback`);
+        // Fallback to simple greeting
+        greetingPrompt = userName 
+          ? `Please greet ${userName} warmly and ask what they'd like to explore today.`
+          : "Please greet the child warmly and ask what they'd like to explore today.";
+      } else {
+        // Use RAG approach: Build prompt with grounding data, LLM generates natural question
+        const ragPrompt = buildRAGPrompt(generatedQuestion.grounding, questionContext);
+        greetingPrompt = ragPrompt;
+      }
+      
       // Don't add to conversationHistory here - getChatResponseStream will add it
       // This prevents the greeting prompt from appearing twice in the UI
       
@@ -4380,13 +4620,22 @@ export default function Page() {
         await updateDoc(userDocRef, { name: trimmedName });
       } else {
         const age = parseInt(editValue.trim());
-        if (isNaN(age) || age < 1 || age > 150) {
-          setSaveError('Please enter a valid age (1-150)');
+        if (isNaN(age) || age < 3 || age > 12) {
+          setSaveError('Please enter a valid age (3-12)');
           setIsSaving(false);
           return;
         }
         updatedValue = age;
         await updateDoc(userDocRef, { age });
+        
+        // Update adaptive state with new age
+        try {
+          await updateAdaptiveStateAge(currentUser.uid, age);
+          console.log('[Adaptive] Updated adaptive state with new age:', age);
+        } catch (error) {
+          console.error('[Adaptive] Error updating adaptive state age:', error);
+          // Don't fail the age update if adaptive state update fails
+        }
       }
 
       // Fetch updated user data to show changes immediately
@@ -4611,36 +4860,36 @@ export default function Page() {
       <div style={{
         backgroundColor: '#3b82f6', // blue
         color: '#ffffff',
-        padding: '12px 16px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          padding: '12px 16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <CatLogo size={40} backgroundColor="#3b82f6" />
-          <div>
-            <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
-            <div style={{ fontSize: '12px', opacity: 0.8 }}>
-              {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 600 }}>Learning Buddy</div>
+              <div style={{ fontSize: '12px', opacity: 0.8 }}>
+                {status === 'connected' ? 'Online' : status === 'connecting...' ? 'Connecting...' : 'Offline'}
+              </div>
             </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           {/* Toggle Buttons */}
-          <button
+        <button
             onClick={() => setShowChat(false)}
-            style={{
-              padding: '6px 12px',
+          style={{
+                  padding: '6px 12px',
               fontSize: '14px',
               fontWeight: 600,
               color: showChat ? '#ffffff' : '#3b82f6',
               backgroundColor: showChat ? 'rgba(255,255,255,0.2)' : '#ffffff',
               border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
+                  borderRadius: '6px',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
           >
             Avatar
           </button>
@@ -4659,8 +4908,8 @@ export default function Page() {
             }}
           >
             Chat
-          </button>
-        </div>
+        </button>
+            </div>
       </div>
 
       {/* Middle Section - Toggles between Avatar and Chat */}
@@ -4828,13 +5077,13 @@ export default function Page() {
                     animation: 'thinking 1.4s infinite 0.4s',
                   }}></span>
                 </span>
-              </div>
-            </div>
+        </div>
+      </div>
           )}
         </div>
         </div>
       )}
-      
+
       {/* Controls Section - Always visible at bottom */}
       <div style={{
         backgroundColor: '#f9fafb',
@@ -5168,9 +5417,9 @@ export default function Page() {
               : useSTTMode 
                 ? 'Connect' 
                 : 'Connect Realtime'}
-        </button>
+      </button>
         </div>
-        <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
+      <audio ref={audioRef} autoPlay style={{ display: 'none' }} />
         <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>Status: {status}</div>
         <div style={{ fontSize: 12, color: '#1a202c', textAlign: 'center' }}>
           {status === 'connected' ? 'Speak normally to chat!' : 'Click connect to start'}
