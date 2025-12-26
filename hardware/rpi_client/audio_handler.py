@@ -6,6 +6,8 @@ import logging
 import pyaudio
 import wave
 import io
+import queue
+import asyncio
 from typing import Optional, Callable, Generator
 from threading import Thread, Event
 
@@ -403,6 +405,23 @@ class AudioHandler:
             logger.error(f"Failed to play MP3 audio: {e}")
             raise
     
+    def start_streaming_playback(self, sample_rate: int = 48000) -> 'StreamingSpeaker':
+        """
+        Start streaming audio playback for PCM chunks.
+        
+        Args:
+            sample_rate: Sample rate for audio playback (default: 48000 for Deepgram TTS)
+        
+        Returns:
+            StreamingSpeaker instance for playing PCM chunks
+        """
+        return StreamingSpeaker(
+            audio=self.audio,
+            sample_rate=sample_rate,
+            chunk_size=self.chunk_size,
+            output_device=self.output_device
+        )
+    
     def close(self) -> None:
         """Close audio handler and cleanup resources."""
         self.stop_recording()
@@ -418,6 +437,143 @@ class AudioHandler:
             self.audio.terminate()
         except Exception:
             pass
+
+
+class StreamingSpeaker:
+    """
+    Plays PCM audio chunks from a queue in a background thread.
+    Used for streaming TTS (e.g., Deepgram Aura-2).
+    """
+    
+    def __init__(
+        self,
+        audio: pyaudio.PyAudio,
+        sample_rate: int = 48000,
+        chunk_size: int = 2048,
+        output_device: Optional[int] = None
+    ):
+        """
+        Initialize streaming speaker.
+        
+        Args:
+            audio: PyAudio instance
+            sample_rate: Audio sample rate in Hz
+            chunk_size: Audio buffer size in frames
+            output_device: Output device index (None for default)
+        """
+        self.audio = audio
+        self.sample_rate = sample_rate
+        self.chunk_size = chunk_size
+        self.output_device = output_device
+        self.q: queue.Queue[bytes] = queue.Queue()
+        self.exit = Event()
+        self.stream: Optional[pyaudio.Stream] = None
+        self.th: Optional[Thread] = None
+        self.is_playing = False
+    
+    def find_output_device(self) -> Optional[int]:
+        """Find output device if not specified."""
+        if self.output_device is not None:
+            return self.output_device
+        
+        for i in range(self.audio.get_device_count()):
+            info = self.audio.get_device_info_by_index(i)
+            if info.get("maxOutputChannels", 0) > 0:
+                return i
+        return None
+    
+    def start(self) -> None:
+        """Start the streaming speaker thread."""
+        if self.th and self.th.is_alive():
+            logger.warning("Streaming speaker already started")
+            return
+        
+        output_device = self.find_output_device()
+        if output_device is None:
+            raise Exception("No output device found")
+        
+        try:
+            self.stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=self.sample_rate,
+                output=True,
+                output_device_index=output_device,
+                frames_per_buffer=self.chunk_size
+            )
+            
+            self.exit.clear()
+            self.th = Thread(target=self._run, daemon=True)
+            self.th.start()
+            self.is_playing = True
+            logger.info(f"Started streaming speaker at {self.sample_rate}Hz")
+        except Exception as e:
+            logger.error(f"Failed to start streaming speaker: {e}")
+            raise
+    
+    def stop(self) -> None:
+        """Stop the streaming speaker thread."""
+        self.exit.set()
+        self.is_playing = False
+        
+        if self.th:
+            self.th.join(timeout=2.0)
+            self.th = None
+        
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+                self.stream.close()
+            except Exception:
+                pass
+            finally:
+                self.stream = None
+        
+        # Clear queue
+        while not self.q.empty():
+            try:
+                self.q.get_nowait()
+            except queue.Empty:
+                break
+        
+        logger.info("Stopped streaming speaker")
+    
+    def play(self, data: bytes) -> None:
+        """
+        Queue audio chunk for playback.
+        
+        Args:
+            data: PCM audio data as bytes (Int16, mono)
+        """
+        if not self.is_playing:
+            logger.warning("Streaming speaker not started, cannot play audio")
+            return
+        
+        try:
+            self.q.put(data, block=False)
+        except queue.Full:
+            logger.warning("Audio queue full, dropping chunk")
+    
+    def _run(self) -> None:
+        """Background thread that plays audio from queue."""
+        try:
+            while not self.exit.is_set():
+                try:
+                    audio_chunk = self.q.get(timeout=0.1)
+                    if self.stream:
+                        self.stream.write(audio_chunk)
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error playing audio chunk: {e}")
+        except Exception as e:
+            logger.error(f"Error in streaming speaker thread: {e}")
+        finally:
+            if self.stream:
+                try:
+                    self.stream.stop_stream()
+                except Exception:
+                    pass
 
 
 def resample_audio_to_16khz(audio_data: bytes, source_sample_rate: int) -> bytes:
