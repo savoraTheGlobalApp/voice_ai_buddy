@@ -246,6 +246,85 @@ class APIClient:
                 logger.error(f"Unexpected error in chat: {e}")
                 raise
     
+    async def chat_stream(
+        self,
+        messages: list[ChatMessage],
+        on_token: Callable[[str], Awaitable[None]],
+        model: Optional[str] = None
+    ) -> str:
+        """
+        Send streaming chat request and get response tokens as they arrive.
+        
+        Args:
+            messages: List of chat messages
+            on_token: Callback function called for each token received
+            model: Optional model override (default from config)
+        
+        Returns:
+            Full assistant response text
+        """
+        if not model:
+            model = await config.get_chat_model()
+        
+        full_response = ""
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                async with client.stream(
+                    'POST',
+                    f"{self.backend_url}/api/chat/stream",
+                    json={
+                        "messages": [
+                            {"role": msg.role, "content": msg.content}
+                            for msg in messages
+                        ],
+                        "model": model
+                    }
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        raise httpx.HTTPError(f"Chat stream API error: {error_text.decode()}")
+                    
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        
+                        # SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Remove "data: " prefix
+                            
+                            # Check for [DONE] marker
+                            if data_str.strip() == "[DONE]":
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                
+                                # Check for error
+                                if "error" in data:
+                                    raise Exception(f"Chat stream error: {data['error']}")
+                                
+                                # Get delta content
+                                delta = data.get("delta", "")
+                                if delta:
+                                    full_response += delta
+                                    await on_token(delta)
+                                
+                                # Check if done
+                                if data.get("done", False):
+                                    break
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON lines
+                                continue
+                
+                return full_response
+            except httpx.HTTPError as e:
+                logger.error(f"Chat stream API error: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error in chat stream: {e}")
+                raise
+    
     async def tts(self, text: str, voice: str = "nova", provider: Optional[str] = None) -> bytes:
         """
         Generate speech from text.
@@ -282,6 +361,86 @@ class APIClient:
             except Exception as e:
                 logger.error(f"Unexpected error in TTS: {e}", exc_info=True)
                 raise
+    
+    async def tts_stream_deepgram(
+        self,
+        on_audio_chunk: Callable[[bytes], Awaitable[None]],
+        on_finished: Optional[Callable[[], Awaitable[None]]] = None
+    ) -> AsyncGenerator[Callable[[str], Awaitable[None]], None]:
+        """
+        Connect to Deepgram streaming TTS WebSocket.
+        
+        Args:
+            on_audio_chunk: Callback function called when audio chunk is received
+            on_finished: Optional callback function called when playback finishes
+        
+        Yields:
+            A function to send text chunks to TTS
+        """
+        ws_endpoint = f"{self.ws_url}/api/tts/deepgram"
+        
+        try:
+            async with websockets.connect(
+                ws_endpoint,
+                ping_interval=20,
+                ping_timeout=10,
+                close_timeout=10
+            ) as ws:
+                logger.info("Connected to Deepgram TTS WebSocket")
+                
+                # Task to receive audio chunks
+                async def receive_audio():
+                    try:
+                        async for message in ws:
+                            if isinstance(message, bytes):
+                                # PCM audio data
+                                await on_audio_chunk(message)
+                            elif isinstance(message, str):
+                                # Control frame (JSON)
+                                try:
+                                    data = json.loads(message)
+                                    msg_type = data.get("type")
+                                    
+                                    if msg_type == "playback_finished":
+                                        if on_finished:
+                                            await on_finished()
+                                    elif msg_type == "error":
+                                        error_msg = data.get("message", "Unknown error")
+                                        logger.error(f"Deepgram TTS error: {error_msg}")
+                                except json.JSONDecodeError:
+                                    pass
+                    except Exception as e:
+                        logger.error(f"Error receiving audio from TTS: {e}", exc_info=True)
+                
+                # Start receiving audio
+                receive_task = asyncio.create_task(receive_audio())
+                
+                # Function to send text chunks
+                async def send_text(text: str):
+                    """Send text chunk to TTS."""
+                    if text.strip():
+                        await ws.send(json.dumps({
+                            "type": "speak",
+                            "text": text
+                        }))
+                
+                async def flush():
+                    """Flush current utterance."""
+                    await ws.send(json.dumps({"type": "flush"}))
+                
+                # Yield send function
+                try:
+                    yield send_text, flush
+                finally:
+                    receive_task.cancel()
+                    try:
+                        await receive_task
+                    except asyncio.CancelledError:
+                        pass
+        
+        except Exception as e:
+            logger.error(f"Failed to connect to Deepgram TTS WebSocket: {e}")
+            raise
     
     async def extract_memories(
         self,
