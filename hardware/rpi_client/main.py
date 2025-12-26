@@ -34,6 +34,8 @@ class VoiceAIBuddy:
         self.user_msg_counter = 0
         self.memory_extract_every_n = 5  # Extract memories every N user messages
         self.is_running = False
+        self.use_streaming = False  # Will be set based on TTS provider
+        self.streaming_speaker = None  # StreamingSpeaker instance for Deepgram TTS
     
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -67,6 +69,11 @@ class VoiceAIBuddy:
         sample_rate = await config.get_sample_rate()
         chunk_size = await config.get_chunk_size()
         
+        # Check if we should use streaming (when TTS provider is deepgram)
+        tts_provider = await config.get_tts_provider()
+        self.use_streaming = (tts_provider == "deepgram")
+        logger.info(f"TTS provider: {tts_provider}, streaming mode: {self.use_streaming}")
+        
         # Initialize audio handler with remote config
         self.audio_handler = AudioHandler(
             sample_rate=sample_rate,
@@ -74,6 +81,13 @@ class VoiceAIBuddy:
             input_device=config.AUDIO_INPUT_DEVICE,
             output_device=config.AUDIO_OUTPUT_DEVICE
         )
+        
+        # Initialize streaming speaker if using streaming TTS
+        if self.use_streaming:
+            # Deepgram TTS uses 48kHz sample rate
+            self.streaming_speaker = self.audio_handler.start_streaming_playback(sample_rate=48000)
+            self.streaming_speaker.start()
+            logger.info("Initialized streaming speaker for Deepgram TTS")
         
         # List available devices
         devices = self.audio_handler.list_devices()
@@ -218,23 +232,12 @@ class VoiceAIBuddy:
         
         # Get AI response
         try:
-            logger.info("Getting AI response...")
-            response_text = await self.api_client.chat(self.conversation_history)
-            logger.info(f"AI response: '{response_text}'")
-            
-            # Add AI response to conversation history
-            assistant_message = ChatMessage(role="assistant", content=response_text)
-            self.conversation_history.append(assistant_message)
-            
-            # Generate and play TTS
-            try:
-                logger.info(" Generating TTS audio...")
-                audio_data = await self.api_client.tts(response_text)
-                logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
-                self.audio_handler.play_audio(audio_data, format="mp3")
-                logger.info("TTS playback complete")
-            except Exception as e:
-                logger.error(f"Failed to play TTS: {e}", exc_info=True)
+            if self.use_streaming:
+                # Use streaming chat and TTS
+                await self._handle_streaming_response()
+            else:
+                # Use non-streaming chat and TTS
+                await self._handle_non_streaming_response()
             
             # Extract memories periodically
             if self.user_msg_counter % self.memory_extract_every_n == 0:
@@ -248,6 +251,101 @@ class VoiceAIBuddy:
         
         except Exception as e:
             logger.error(f"Error processing transcript: {e}", exc_info=True)
+    
+    async def _handle_non_streaming_response(self) -> None:
+        """Handle non-streaming chat and TTS response."""
+        logger.info("Getting AI response (non-streaming)...")
+        response_text = await self.api_client.chat(self.conversation_history)
+        logger.info(f"AI response: '{response_text}'")
+        
+        # Add AI response to conversation history
+        assistant_message = ChatMessage(role="assistant", content=response_text)
+        self.conversation_history.append(assistant_message)
+        
+        # Generate and play TTS
+        try:
+            logger.info("Generating TTS audio (non-streaming)...")
+            audio_data = await self.api_client.tts(response_text)
+            logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
+            self.audio_handler.play_audio(audio_data, format="mp3")
+            logger.info("TTS playback complete")
+        except Exception as e:
+            logger.error(f"Failed to play TTS: {e}", exc_info=True)
+    
+    async def _handle_streaming_response(self) -> None:
+        """Handle streaming chat and TTS response."""
+        logger.info("Getting AI response (streaming)...")
+        
+        # Buffer for accumulating response text
+        response_text = ""
+        text_buffer = ""
+        SEND_EVERY = 180  # Send text chunks every ~180 characters (about one sentence)
+        tts_finished = asyncio.Event()
+        send_text_func = None
+        flush_func = None
+        
+        # Callback for audio chunks
+        async def on_audio_chunk(audio_chunk: bytes) -> None:
+            """Play audio chunk as it arrives."""
+            if self.streaming_speaker:
+                self.streaming_speaker.play(audio_chunk)
+        
+        # Callback for TTS finished
+        async def on_tts_finished() -> None:
+            """Called when TTS playback finishes."""
+            tts_finished.set()
+        
+        # Callback for streaming chat tokens
+        async def on_chat_token(token: str) -> None:
+            nonlocal response_text, text_buffer, send_text_func
+            response_text += token
+            text_buffer += token
+            
+            # Send text chunks to TTS when buffer is large enough
+            if send_text_func and len(text_buffer) >= SEND_EVERY:
+                text_to_speak = text_buffer
+                text_buffer = ""
+                if text_to_speak.strip():
+                    await send_text_func(text_to_speak)
+        
+        # Connect to streaming TTS using async generator
+        async for tts_send, tts_flush in self.api_client.tts_stream_deepgram(
+            on_audio_chunk=on_audio_chunk,
+            on_finished=on_tts_finished
+        ):
+            send_text_func = tts_send
+            flush_func = tts_flush
+            
+            # Stream chat response (this will call on_chat_token for each token)
+            full_response = await self.api_client.chat_stream(
+                self.conversation_history,
+                on_token=on_chat_token
+            )
+            
+            # Send any remaining buffered text
+            if text_buffer.strip() and send_text_func:
+                await send_text_func(text_buffer)
+                text_buffer = ""
+            
+            # Flush TTS to finish current utterance
+            if flush_func:
+                await flush_func()
+            
+            logger.info(f"AI response (streaming): '{full_response}'")
+            
+            # Add AI response to conversation history
+            assistant_message = ChatMessage(role="assistant", content=full_response)
+            self.conversation_history.append(assistant_message)
+            
+            # Wait for TTS playback to finish
+            try:
+                await asyncio.wait_for(tts_finished.wait(), timeout=30.0)
+                logger.info("TTS playback complete (streaming)")
+            except asyncio.TimeoutError:
+                logger.warning("TTS playback timeout")
+            
+            # Break after first iteration (async generator yields once)
+            break
     
     async def _extract_and_save_memories(self) -> None:
         """Extract and save memories from conversation via backend."""
@@ -340,6 +438,11 @@ class VoiceAIBuddy:
     async def cleanup(self) -> None:
         """Cleanup resources."""
         logger.info("Cleaning up...")
+        
+        # Stop streaming speaker if active
+        if self.streaming_speaker:
+            self.streaming_speaker.stop()
+            self.streaming_speaker = None
         
         if self.audio_handler:
             self.audio_handler.close()
