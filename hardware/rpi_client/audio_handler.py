@@ -470,6 +470,16 @@ class StreamingSpeaker:
         self.stream: Optional[pyaudio.Stream] = None
         self.th: Optional[Thread] = None
         self.is_playing = False
+        self.last_audio_time = 0.0  # Timestamp of last audio chunk played
+        self.queue_empty_duration = 0.0  # Duration queue has been empty
+        
+        # Audio level tracking for definitive playback detection
+        self.audio_levels: list[float] = []  # Rolling window of recent audio levels (RMS)
+        self.max_audio_levels = 30  # Keep last 30 samples (~3 seconds at 100ms intervals)
+        self.silence_threshold_db = -40.0  # Audio level threshold for silence (dB)
+        self.last_audio_level_time = 0.0  # Timestamp of last non-silent audio
+        self.audio_level_silence_duration = 0.0  # Duration audio has been silent
+        self.total_audio_written = 0  # Total bytes written to stream (for buffer tracking)
     
     def find_output_device(self) -> Optional[int]:
         """Find output device if not specified."""
@@ -554,15 +564,94 @@ class StreamingSpeaker:
         except queue.Full:
             logger.warning("Audio queue full, dropping chunk")
     
+    def _calculate_rms_level(self, audio_data: bytes) -> float:
+        """
+        Calculate RMS (Root Mean Square) audio level in dB.
+        
+        Args:
+            audio_data: PCM audio data (Int16, mono)
+        
+        Returns:
+            RMS level in dB (negative values, -inf for silence)
+        """
+        try:
+            import numpy as np
+            # Convert bytes to numpy array (Int16)
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            
+            if len(audio_array) == 0:
+                return float('-inf')
+            
+            # Calculate RMS
+            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+            
+            # Convert to dB (avoid log(0))
+            if rms > 0:
+                db_level = 20 * np.log10(rms / 32768.0)  # Normalize to full scale
+            else:
+                db_level = float('-inf')
+            
+            return db_level
+        except Exception as e:
+            logger.debug(f"Error calculating RMS level: {e}")
+            return float('-inf')
+    
+    def _update_audio_levels(self, audio_chunk: bytes) -> None:
+        """
+        Update audio level tracking with new chunk.
+        
+        Args:
+            audio_chunk: Audio data chunk
+        """
+        import time
+        current_time = time.time()
+        level_db = self._calculate_rms_level(audio_chunk)
+        
+        # Add to rolling window
+        self.audio_levels.append(level_db)
+        if len(self.audio_levels) > self.max_audio_levels:
+            self.audio_levels.pop(0)
+        
+        # Track silence duration
+        if level_db > self.silence_threshold_db:
+            # Non-silent audio detected
+            self.last_audio_level_time = current_time
+            self.audio_level_silence_duration = 0.0
+        else:
+            # Silent audio
+            if self.last_audio_level_time > 0:
+                self.audio_level_silence_duration = current_time - self.last_audio_level_time
+            else:
+                self.audio_level_silence_duration = 0.0
+    
     def _run(self) -> None:
         """Background thread that plays audio from queue."""
+        import time
         try:
             while not self.exit.is_set():
                 try:
                     audio_chunk = self.q.get(timeout=0.1)
                     if self.stream:
+                        # Write audio to stream
                         self.stream.write(audio_chunk)
+                        self.total_audio_written += len(audio_chunk)
+                        
+                        # Update tracking
+                        self.last_audio_time = time.time()
+                        self.queue_empty_duration = 0.0
+                        
+                        # Update audio level tracking
+                        self._update_audio_levels(audio_chunk)
                 except queue.Empty:
+                    # Track how long queue has been empty
+                    current_time = time.time()
+                    if self.last_audio_time > 0:
+                        self.queue_empty_duration = current_time - self.last_audio_time
+                    
+                    # Update silence duration for audio levels
+                    if self.last_audio_level_time > 0:
+                        self.audio_level_silence_duration = current_time - self.last_audio_level_time
+                    
                     continue
                 except Exception as e:
                     logger.error(f"Error playing audio chunk: {e}")
@@ -574,6 +663,155 @@ class StreamingSpeaker:
                     self.stream.stop_stream()
                 except Exception:
                     pass
+    
+    def is_queue_empty(self) -> bool:
+        """Check if audio queue is empty."""
+        return self.q.empty()
+    
+    def get_queue_empty_duration(self) -> float:
+        """
+        Get duration (in seconds) that queue has been empty.
+        Returns 0.0 if queue is not empty or if no audio has been played yet.
+        """
+        return self.queue_empty_duration if self.is_queue_empty() else 0.0
+    
+    def is_audio_silent(self, silence_duration_threshold: float = 0.3) -> bool:
+        """
+        Check if audio has been silent for the threshold duration.
+        
+        Args:
+            silence_duration_threshold: Duration (seconds) of silence to consider playback finished
+        
+        Returns:
+            True if audio levels have been below threshold for the duration
+        """
+        if self.last_audio_level_time == 0:
+            # No audio has been played yet
+            return False
+        
+        return self.audio_level_silence_duration >= silence_duration_threshold
+    
+    def get_current_audio_level_db(self) -> float:
+        """
+        Get the current audio level in dB.
+        
+        Returns:
+            Current audio level in dB, or -inf if no audio data available
+        """
+        if not self.audio_levels:
+            return float('-inf')
+        return self.audio_levels[-1]
+    
+    def get_average_audio_level_db(self, window_size: int = 10) -> float:
+        """
+        Get average audio level over recent samples.
+        
+        Args:
+            window_size: Number of recent samples to average
+        
+        Returns:
+            Average audio level in dB
+        """
+        if not self.audio_levels:
+            return float('-inf')
+        
+        recent_levels = self.audio_levels[-window_size:]
+        # Filter out -inf values
+        valid_levels = [level for level in recent_levels if level != float('-inf')]
+        
+        if not valid_levels:
+            return float('-inf')
+        
+        return sum(valid_levels) / len(valid_levels)
+    
+    def is_stream_active(self) -> bool:
+        """
+        Check if PyAudio stream is active and has data in buffer.
+        
+        Returns:
+            True if stream is active and may have buffered data
+        """
+        if not self.stream:
+            return False
+        
+        try:
+            # Check if stream is active (not stopped)
+            # Note: PyAudio doesn't expose buffer state directly,
+            # but we can check if stream is active
+            return self.is_playing
+        except Exception:
+            return False
+    
+    def has_finished_playback(
+        self,
+        queue_silence_threshold: float = 0.8,
+        audio_silence_threshold: float = 0.3,
+        hardware_buffer_delay: float = 0.15
+    ) -> tuple[bool, dict[str, any]]:
+        """
+        Check if playback has finished using multi-factor detection.
+        
+        This method combines:
+        1. Queue state (empty for threshold duration)
+        2. Audio level analysis (silence detected)
+        3. Hardware buffer consideration (additional delay)
+        
+        Args:
+            queue_silence_threshold: Duration (seconds) queue must be empty
+            audio_silence_threshold: Duration (seconds) audio must be silent
+            hardware_buffer_delay: Additional delay (seconds) for hardware buffer drain
+        
+        Returns:
+            Tuple of (is_finished, detection_info_dict)
+        """
+        detection_info = {
+            "queue_empty": self.is_queue_empty(),
+            "queue_empty_duration": self.get_queue_empty_duration(),
+            "audio_silent": self.is_audio_silent(audio_silence_threshold),
+            "audio_silence_duration": self.audio_level_silence_duration,
+            "current_level_db": self.get_current_audio_level_db(),
+            "avg_level_db": self.get_average_audio_level_db(),
+            "stream_active": self.is_stream_active(),
+            "total_written": self.total_audio_written
+        }
+        
+        # All conditions must be met for definitive completion
+        queue_condition = (
+            self.is_queue_empty() and
+            self.get_queue_empty_duration() >= queue_silence_threshold
+        )
+        
+        audio_condition = self.is_audio_silent(audio_silence_threshold)
+        
+        # Add hardware buffer delay to queue condition
+        total_queue_duration = self.get_queue_empty_duration()
+        hardware_condition = total_queue_duration >= (queue_silence_threshold + hardware_buffer_delay)
+        
+        is_finished = queue_condition and audio_condition and hardware_condition
+        
+        detection_info["is_finished"] = is_finished
+        detection_info["queue_condition_met"] = queue_condition
+        detection_info["audio_condition_met"] = audio_condition
+        detection_info["hardware_condition_met"] = hardware_condition
+        
+        return is_finished, detection_info
+
+
+def generate_silence_chunk(chunk_size: int, sample_rate: int = 16000) -> bytes:
+    """
+    Generate a silence audio chunk for STT keepalive.
+    
+    Args:
+        chunk_size: Number of frames in the chunk
+        sample_rate: Sample rate in Hz (default: 16000 for STT)
+    
+    Returns:
+        Silence audio data as bytes (Int16 PCM, mono)
+    """
+    # Int16 PCM: 2 bytes per sample, mono channel
+    # Total bytes = chunk_size * 2 bytes per sample
+    num_samples = chunk_size
+    return b"\x00" * (num_samples * 2)
 
 
 def resample_audio_to_16khz(audio_data: bytes, source_sample_rate: int) -> bytes:
