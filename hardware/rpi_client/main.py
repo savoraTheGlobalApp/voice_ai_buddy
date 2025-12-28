@@ -5,6 +5,7 @@ Orchestrates audio capture, STT, TTT, TTS, and conversation management.
 import asyncio
 import logging
 import sys
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,6 +37,12 @@ class VoiceAIBuddy:
         self.is_running = False
         self.use_streaming = False  # Will be set based on TTS provider
         self.streaming_speaker = None  # StreamingSpeaker instance for Deepgram TTS
+        self._tts_connection_task: Optional[asyncio.Task] = None  # Task for persistent TTS connection
+        self._speaking_watchdog_task: Optional[asyncio.Task] = None  # Watchdog to ensure flag doesn't stay set
+        
+        # Speaking state management (thread-safe)
+        self.speaking = threading.Event()  # Set when TTS is active, cleared when finished
+        self.speaking_cooldown_ms = 300  # Cooldown period after TTS finishes (ms)
     
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -154,6 +161,15 @@ class VoiceAIBuddy:
         self.is_running = True
         logger.info("Starting Voice AI Buddy...")
         
+        # Start persistent TTS connection if using streaming
+        if self.use_streaming:
+            self._start_persistent_tts_connection()
+            # Wait a bit for connection to establish
+            await asyncio.sleep(0.5)
+        
+        # Start speaking flag watchdog
+        self._start_speaking_watchdog()
+        
         try:
             # Connect to STT WebSocket
             async for _ in self.api_client.connect_stt(self._on_transcript):
@@ -162,35 +178,51 @@ class VoiceAIBuddy:
                 
                 # Create async generator for audio chunks
                 async def audio_stream():
-                    """Stream audio chunks to STT."""
+                    """Stream audio chunks to STT, sending silence when TTS is active."""
                     chunk_count = 0
                     bytes_sent = 0
+                    silence_chunks_sent = 0
                     try:
                         logger.info("Audio stream started, reading chunks...")
                         logger.info(f"Recording at {self.audio_handler.sample_rate}Hz, will resample to 16kHz for STT")
                         
-                        # Import resampling function
-                        from .audio_handler import resample_audio_to_16khz
+                        # Import resampling function and silence generator
+                        from .audio_handler import resample_audio_to_16khz, generate_silence_chunk
+                        
+                        # Generate silence chunk for STT keepalive (16kHz, Int16 PCM)
+                        silence_chunk = generate_silence_chunk(
+                            chunk_size=self.audio_handler.chunk_size,
+                            sample_rate=16000
+                        )
                         
                         for chunk in self.audio_handler.start_recording():
                             if not self.is_running:
                                 break
                             chunk_count += 1
                             
-                            # Resample audio to 16kHz if needed (STT expects 16kHz)
-                            if self.audio_handler.sample_rate != 16000:
-                                chunk = resample_audio_to_16khz(chunk, self.audio_handler.sample_rate)
+                            # Check if TTS is speaking - send silence instead of real audio
+                            if self.speaking.is_set():
+                                # Send silence chunk to keep STT connection alive
+                                await self.api_client.send_audio_chunk(silence_chunk)
+                                silence_chunks_sent += 1
+                                if silence_chunks_sent % 100 == 0:  # Log every 100 silence chunks
+                                    logger.debug(f"Sent {silence_chunks_sent} silence chunks (TTS active, speaking flag is set)")
+                            else:
+                                # Resample audio to 16kHz if needed (STT expects 16kHz)
+                                if self.audio_handler.sample_rate != 16000:
+                                    chunk = resample_audio_to_16khz(chunk, self.audio_handler.sample_rate)
+                                
+                                bytes_sent += len(chunk)
+                                if chunk_count % 100 == 0:  # Log every 100 chunks
+                                    logger.info(f"Sent {chunk_count} audio chunks ({bytes_sent} bytes) to STT (speaking flag is clear)")
+                                
+                                await self.api_client.send_audio_chunk(chunk)
                             
-                            bytes_sent += len(chunk)
-                            if chunk_count % 100 == 0:  # Log every 100 chunks
-                                logger.info(f"Sent {chunk_count} audio chunks ({bytes_sent} bytes) to STT")
-                            
-                            await self.api_client.send_audio_chunk(chunk)
                             await asyncio.sleep(0)  # Yield control
                     except Exception as e:
                         logger.error(f"Error in audio stream: {e}", exc_info=True)
                     finally:
-                        logger.info(f"Audio stream ended. Total: {chunk_count} chunks, {bytes_sent} bytes sent")
+                        logger.info(f"Audio stream ended. Total: {chunk_count} chunks, {bytes_sent} bytes sent, {silence_chunks_sent} silence chunks")
                 
                 # Run audio streaming
                 audio_task = asyncio.create_task(audio_stream())
@@ -202,6 +234,12 @@ class VoiceAIBuddy:
                     logger.info("Audio streaming cancelled")
                 finally:
                     self.audio_handler.stop_recording()
+        
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+            raise
         
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -267,13 +305,69 @@ class VoiceAIBuddy:
             logger.info("Generating TTS audio (non-streaming)...")
             audio_data = await self.api_client.tts(response_text)
             logger.info(f"Playing TTS audio ({len(audio_data)} bytes)...")
-            self.audio_handler.play_audio(audio_data, format="mp3")
-            logger.info("TTS playback complete")
+            
+            # Set speaking flag before TTS playback
+            self.speaking.set()
+            logger.info("Speaking flag set (non-streaming TTS started)")
+            
+            try:
+                self.audio_handler.play_audio(audio_data, format="mp3")
+                logger.info("TTS playback complete")
+            finally:
+                # Clear speaking flag after cooldown period
+                await self._clear_speaking_after_cooldown()
         except Exception as e:
             logger.error(f"Failed to play TTS: {e}", exc_info=True)
+            # Ensure speaking flag is cleared even on error
+            self.speaking.clear()
+    
+    def _start_persistent_tts_connection(self) -> None:
+        """Start persistent TTS WebSocket connection."""
+        if self._tts_connection_task and not self._tts_connection_task.done():
+            logger.warning("TTS connection already started")
+            return
+        
+        async def tts_connection_loop():
+            """Maintain persistent TTS connection."""
+            # Callback for audio chunks
+            async def on_audio_chunk(audio_chunk: bytes) -> None:
+                """Play audio chunk as it arrives."""
+                if self.streaming_speaker:
+                    self.streaming_speaker.play(audio_chunk)
+                    # Set speaking flag on first audio chunk
+                    if not self.speaking.is_set():
+                        self.speaking.set()
+                        logger.info("Speaking flag set (streaming TTS started - first audio chunk received)")
+            
+            # Callback for TTS finished (from Deepgram message)
+            async def on_tts_finished() -> None:
+                """Called when TTS playback finishes (from Deepgram message)."""
+                # This is a backup - queue-based detection is primary
+                logger.debug("Received PlaybackFinished message from Deepgram")
+                await self._clear_speaking_after_cooldown()
+            
+            try:
+                # Keep connection alive indefinitely
+                # The async generator yields continuously to keep connection open
+                async for _ in self.api_client.connect_tts_deepgram(
+                    on_audio_chunk=on_audio_chunk,
+                    on_finished=on_tts_finished
+                ):
+                    # Just pass - the generator keeps yielding to maintain connection
+                    if not self.is_running:
+                        break
+            except Exception as e:
+                logger.error(f"TTS connection error: {e}", exc_info=True)
+                # Try to reconnect after a delay
+                await asyncio.sleep(2.0)
+                if self.is_running:
+                    self._start_persistent_tts_connection()
+        
+        self._tts_connection_task = asyncio.create_task(tts_connection_loop())
+        logger.info("Started persistent TTS connection")
     
     async def _handle_streaming_response(self) -> None:
-        """Handle streaming chat and TTS response."""
+        """Handle streaming chat and TTS response using persistent connection."""
         logger.info("Getting AI response (streaming)...")
         
         # Buffer for accumulating response text
@@ -281,71 +375,234 @@ class VoiceAIBuddy:
         text_buffer = ""
         SEND_EVERY = 180  # Send text chunks every ~180 characters (about one sentence)
         tts_finished = asyncio.Event()
-        send_text_func = None
-        flush_func = None
-        
-        # Callback for audio chunks
-        async def on_audio_chunk(audio_chunk: bytes) -> None:
-            """Play audio chunk as it arrives."""
-            if self.streaming_speaker:
-                self.streaming_speaker.play(audio_chunk)
-        
-        # Callback for TTS finished
-        async def on_tts_finished() -> None:
-            """Called when TTS playback finishes."""
-            tts_finished.set()
         
         # Callback for streaming chat tokens
         async def on_chat_token(token: str) -> None:
-            nonlocal response_text, text_buffer, send_text_func
+            nonlocal response_text, text_buffer
             response_text += token
             text_buffer += token
             
             # Send text chunks to TTS when buffer is large enough
-            if send_text_func and len(text_buffer) >= SEND_EVERY:
+            if len(text_buffer) >= SEND_EVERY:
                 text_to_speak = text_buffer
                 text_buffer = ""
                 if text_to_speak.strip():
-                    await send_text_func(text_to_speak)
+                    try:
+                        await self.api_client.send_tts_text(text_to_speak)
+                    except RuntimeError as e:
+                        logger.error(f"Failed to send TTS text: {e}")
         
-        # Connect to streaming TTS using async generator
-        async for tts_send, tts_flush in self.api_client.tts_stream_deepgram(
-            on_audio_chunk=on_audio_chunk,
-            on_finished=on_tts_finished
-        ):
-            send_text_func = tts_send
-            flush_func = tts_flush
-            
-            # Stream chat response (this will call on_chat_token for each token)
-            full_response = await self.api_client.chat_stream(
-                self.conversation_history,
-                on_token=on_chat_token
-            )
-            
-            # Send any remaining buffered text
-            if text_buffer.strip() and send_text_func:
-                await send_text_func(text_buffer)
-                text_buffer = ""
-            
-            # Flush TTS to finish current utterance
-            if flush_func:
-                await flush_func()
-            
-            logger.info(f"AI response (streaming): '{full_response}'")
-            
-            # Add AI response to conversation history
-            assistant_message = ChatMessage(role="assistant", content=full_response)
-            self.conversation_history.append(assistant_message)
-            
-            # Wait for TTS playback to finish
+        # Stream chat response (this will call on_chat_token for each token)
+        full_response = await self.api_client.chat_stream(
+            self.conversation_history,
+            on_token=on_chat_token
+        )
+        
+        # Send any remaining buffered text
+        if text_buffer.strip():
             try:
-                await asyncio.wait_for(tts_finished.wait(), timeout=30.0)
-                logger.info("TTS playback complete (streaming)")
-            except asyncio.TimeoutError:
-                logger.warning("TTS playback timeout")
+                await self.api_client.send_tts_text(text_buffer)
+            except RuntimeError as e:
+                logger.error(f"Failed to send remaining TTS text: {e}")
+        
+        # Flush TTS to finish current utterance
+        try:
+            await self.api_client.flush_tts()
+        except RuntimeError as e:
+            logger.error(f"Failed to flush TTS: {e}")
+        
+        logger.info(f"AI response (streaming): '{full_response}'")
+        
+        # Add AI response to conversation history
+        assistant_message = ChatMessage(role="assistant", content=full_response)
+        self.conversation_history.append(assistant_message)
+        
+        # Wait for TTS playback to finish using queue-based detection
+        await self._wait_for_tts_completion(tts_finished)
+    
+    async def _wait_for_tts_completion(self, tts_finished: asyncio.Event) -> None:
+        """
+        Wait for TTS playback to complete using multi-factor definitive detection.
+        
+        Detection methods (in priority order):
+        1. Hardware detection (queue state + audio levels + stream state) - PRIMARY
+        2. Deepgram "PlaybackFinished" message - CONFIRMATION
+        3. Time-based timeout - SAFETY FALLBACK
+        
+        Args:
+            tts_finished: Event that will be set when TTS finishes (from Deepgram message)
+        """
+        if not self.streaming_speaker:
+            logger.warning("No streaming speaker available for completion detection")
+            return
+        
+        # Detection thresholds (optimized for RPi OS)
+        QUEUE_SILENCE_THRESHOLD = 0.8  # Queue empty for 0.8s (reduced from 1.5s)
+        AUDIO_SILENCE_THRESHOLD = 0.3  # Audio silent for 0.3s
+        HARDWARE_BUFFER_DELAY = 0.15  # Additional 150ms for hardware buffer drain
+        MIN_PLAYBACK_DURATION = 0.3  # Minimum duration before considering completion
+        TIMEOUT = 15.0  # Safety timeout (increased since hardware detection should catch it)
+        CHECK_INTERVAL = 0.05  # Check every 50ms for faster response
+        LOG_INTERVAL = 0.5  # Log detection state every 0.5s
+        
+        start_time = asyncio.get_event_loop().time()
+        playback_start_time = None
+        last_log_time = start_time
+        last_detection_state = None
+        
+        try:
+            while True:
+                current_time = asyncio.get_event_loop().time()
+                elapsed = current_time - start_time
+                
+                # Track when playback actually started (first time queue is not empty)
+                is_queue_empty = self.streaming_speaker.is_queue_empty()
+                if not is_queue_empty and playback_start_time is None:
+                    playback_start_time = current_time
+                    logger.debug("TTS playback started (queue not empty, first audio chunk)")
+                
+                # Only check for completion if minimum playback duration has passed
+                if playback_start_time is not None:
+                    playback_duration = current_time - playback_start_time
+                    
+                    if playback_duration >= MIN_PLAYBACK_DURATION:
+                        # PRIMARY: Hardware-based definitive detection
+                        is_finished, detection_info = self.streaming_speaker.has_finished_playback(
+                            queue_silence_threshold=QUEUE_SILENCE_THRESHOLD,
+                            audio_silence_threshold=AUDIO_SILENCE_THRESHOLD,
+                            hardware_buffer_delay=HARDWARE_BUFFER_DELAY
+                        )
+                        
+                        # Log detection state periodically
+                        if current_time - last_log_time >= LOG_INTERVAL:
+                            detection_state = (
+                                f"queue_empty={detection_info['queue_empty']}, "
+                                f"queue_duration={detection_info['queue_empty_duration']:.2f}s, "
+                                f"audio_silent={detection_info['audio_silent']}, "
+                                f"audio_silence_duration={detection_info['audio_silence_duration']:.2f}s, "
+                                f"level_db={detection_info['current_level_db']:.1f}dB"
+                            )
+                            if detection_state != last_detection_state:
+                                logger.debug(f"TTS detection state: {detection_state}")
+                                last_detection_state = detection_state
+                            last_log_time = current_time
+                        
+                        if is_finished:
+                            logger.info(
+                                f"TTS playback complete (hardware detection): "
+                                f"queue_empty={detection_info['queue_empty_duration']:.2f}s, "
+                                f"audio_silent={detection_info['audio_silence_duration']:.2f}s, "
+                                f"level={detection_info['current_level_db']:.1f}dB"
+                            )
+                            await self._clear_speaking_after_cooldown()
+                            return
+                
+                # SECONDARY: Deepgram "PlaybackFinished" message (confirmation)
+                if tts_finished.is_set():
+                    # Still verify with hardware detection if available
+                    if playback_start_time is not None:
+                        is_finished, detection_info = self.streaming_speaker.has_finished_playback(
+                            queue_silence_threshold=0.5,  # Lower threshold since Deepgram confirmed
+                            audio_silence_threshold=0.2,
+                            hardware_buffer_delay=0.1
+                        )
+                        if is_finished:
+                            logger.info(
+                                f"TTS playback complete (Deepgram message + hardware confirmation): "
+                                f"queue_duration={detection_info['queue_empty_duration']:.2f}s, "
+                                f"audio_silence={detection_info['audio_silence_duration']:.2f}s"
+                            )
+                        else:
+                            logger.info(
+                                "TTS playback complete (Deepgram message, hardware still processing): "
+                                f"queue_duration={detection_info['queue_empty_duration']:.2f}s"
+                            )
+                    else:
+                        logger.info("TTS playback complete (Deepgram message)")
+                    await self._clear_speaking_after_cooldown()
+                    return
+                
+                # FALLBACK: Time-based timeout (safety net)
+                if elapsed >= TIMEOUT:
+                    is_finished, detection_info = self.streaming_speaker.has_finished_playback(
+                        queue_silence_threshold=0.5,
+                        audio_silence_threshold=0.2,
+                        hardware_buffer_delay=0.1
+                    )
+                    logger.warning(
+                        f"TTS playback timeout after {TIMEOUT}s - clearing speaking flag. "
+                        f"Detection state: queue_empty={detection_info['queue_empty']}, "
+                        f"queue_duration={detection_info['queue_empty_duration']:.2f}s, "
+                        f"audio_silent={detection_info['audio_silent']}, "
+                        f"level={detection_info['current_level_db']:.1f}dB"
+                    )
+                    await self._clear_speaking_after_cooldown()
+                    return
+                
+                await asyncio.sleep(CHECK_INTERVAL)
+        except Exception as e:
+            logger.error(f"Error waiting for TTS completion: {e}", exc_info=True)
+            # Ensure speaking flag is cleared on error
+            await self._clear_speaking_after_cooldown()
+    
+    def _start_speaking_watchdog(self) -> None:
+        """Start watchdog to ensure speaking flag doesn't stay set indefinitely."""
+        if self._speaking_watchdog_task and not self._speaking_watchdog_task.done():
+            return
+        
+        async def watchdog_loop():
+            """Monitor speaking flag and clear if stuck."""
+            MAX_SPEAKING_DURATION = 30.0  # Maximum time speaking flag can be set (30 seconds)
+            CHECK_INTERVAL = 2.0  # Check every 2 seconds
             
-            # Break after first iteration (async generator yields once)
-            break
+            speaking_start_time = None
+            
+            while self.is_running:
+                try:
+                    if self.speaking.is_set():
+                        if speaking_start_time is None:
+                            speaking_start_time = asyncio.get_event_loop().time()
+                            logger.debug("Speaking flag watchdog: flag is set, starting timer")
+                        else:
+                            duration = asyncio.get_event_loop().time() - speaking_start_time
+                            if duration >= MAX_SPEAKING_DURATION:
+                                logger.warning(
+                                    f"Speaking flag has been set for {duration:.1f}s (max: {MAX_SPEAKING_DURATION}s). "
+                                    "Clearing flag to prevent blocking."
+                                )
+                                self.speaking.clear()
+                                speaking_start_time = None
+                    else:
+                        if speaking_start_time is not None:
+                            duration = asyncio.get_event_loop().time() - speaking_start_time
+                            logger.debug(f"Speaking flag cleared after {duration:.1f}s")
+                            speaking_start_time = None
+                    
+                    await asyncio.sleep(CHECK_INTERVAL)
+                except Exception as e:
+                    logger.error(f"Error in speaking flag watchdog: {e}", exc_info=True)
+                    await asyncio.sleep(CHECK_INTERVAL)
+        
+        self._speaking_watchdog_task = asyncio.create_task(watchdog_loop())
+        logger.debug("Started speaking flag watchdog")
+    
+    async def _clear_speaking_after_cooldown(self) -> None:
+        """
+        Clear speaking flag after cooldown period to prevent echo.
+        This allows a brief delay after TTS finishes before accepting new input.
+        
+        Cooldown is reduced to 100-150ms for faster response while still preventing echo.
+        """
+        if not self.speaking.is_set():
+            logger.debug("Speaking flag already cleared, skipping cooldown")
+            return
+        
+        # Reduced cooldown for faster response (100-150ms instead of 300ms)
+        cooldown_ms = min(self.speaking_cooldown_ms, 150)  # Cap at 150ms
+        logger.info(f"Starting speaking flag cooldown ({cooldown_ms}ms)...")
+        await asyncio.sleep(cooldown_ms / 1000.0)
+        self.speaking.clear()
+        logger.info(f"Speaking flag cleared (cooldown: {cooldown_ms}ms) - ready for new input")
     
     async def _extract_and_save_memories(self) -> None:
         """Extract and save memories from conversation via backend."""
@@ -438,6 +695,26 @@ class VoiceAIBuddy:
     async def cleanup(self) -> None:
         """Cleanup resources."""
         logger.info("Cleaning up...")
+        
+        # Stop speaking flag watchdog
+        if self._speaking_watchdog_task:
+            self._speaking_watchdog_task.cancel()
+            try:
+                await self._speaking_watchdog_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._speaking_watchdog_task = None
+        
+        # Stop persistent TTS connection
+        if self._tts_connection_task:
+            self._tts_connection_task.cancel()
+            try:
+                await self._tts_connection_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._tts_connection_task = None
         
         # Stop streaming speaker if active
         if self.streaming_speaker:
