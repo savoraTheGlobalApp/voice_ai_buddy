@@ -11,6 +11,17 @@ import asyncio
 from typing import Optional, Callable, Generator
 from threading import Thread, Event
 
+from .constants import (
+    AUDIO_LEVELS_MAX_SAMPLES,
+    AUDIO_SILENCE_THRESHOLD_DB,
+    AUDIO_LEVEL_AVERAGE_WINDOW,
+    STREAMING_SPEAKER_QUEUE_TIMEOUT,
+    STREAMING_SPEAKER_STOP_TIMEOUT,
+    QUEUE_SILENCE_THRESHOLD,
+    AUDIO_SILENCE_THRESHOLD,
+    HARDWARE_BUFFER_DELAY,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -475,8 +486,8 @@ class StreamingSpeaker:
         
         # Audio level tracking for definitive playback detection
         self.audio_levels: list[float] = []  # Rolling window of recent audio levels (RMS)
-        self.max_audio_levels = 30  # Keep last 30 samples (~3 seconds at 100ms intervals)
-        self.silence_threshold_db = -40.0  # Audio level threshold for silence (dB)
+        self.max_audio_levels = AUDIO_LEVELS_MAX_SAMPLES
+        self.silence_threshold_db = AUDIO_SILENCE_THRESHOLD_DB
         self.last_audio_level_time = 0.0  # Timestamp of last non-silent audio
         self.audio_level_silence_duration = 0.0  # Duration audio has been silent
         self.total_audio_written = 0  # Total bytes written to stream (for buffer tracking)
@@ -527,7 +538,7 @@ class StreamingSpeaker:
         self.is_playing = False
         
         if self.th:
-            self.th.join(timeout=2.0)
+            self.th.join(timeout=STREAMING_SPEAKER_STOP_TIMEOUT)
             self.th = None
         
         if self.stream:
@@ -630,7 +641,7 @@ class StreamingSpeaker:
         try:
             while not self.exit.is_set():
                 try:
-                    audio_chunk = self.q.get(timeout=0.1)
+                    audio_chunk = self.q.get(timeout=STREAMING_SPEAKER_QUEUE_TIMEOUT)
                     if self.stream:
                         # Write audio to stream
                         self.stream.write(audio_chunk)
@@ -675,7 +686,7 @@ class StreamingSpeaker:
         """
         return self.queue_empty_duration if self.is_queue_empty() else 0.0
     
-    def is_audio_silent(self, silence_duration_threshold: float = 0.3) -> bool:
+    def is_audio_silent(self, silence_duration_threshold: float = AUDIO_SILENCE_THRESHOLD) -> bool:
         """
         Check if audio has been silent for the threshold duration.
         
@@ -702,7 +713,7 @@ class StreamingSpeaker:
             return float('-inf')
         return self.audio_levels[-1]
     
-    def get_average_audio_level_db(self, window_size: int = 10) -> float:
+    def get_average_audio_level_db(self, window_size: int = AUDIO_LEVEL_AVERAGE_WINDOW) -> float:
         """
         Get average audio level over recent samples.
         
@@ -744,9 +755,9 @@ class StreamingSpeaker:
     
     def has_finished_playback(
         self,
-        queue_silence_threshold: float = 0.8,
-        audio_silence_threshold: float = 0.3,
-        hardware_buffer_delay: float = 0.15
+        queue_silence_threshold: float = QUEUE_SILENCE_THRESHOLD,
+        audio_silence_threshold: float = AUDIO_SILENCE_THRESHOLD,
+        hardware_buffer_delay: float = HARDWARE_BUFFER_DELAY
     ) -> tuple[bool, dict[str, any]]:
         """
         Check if playback has finished using multi-factor detection.
