@@ -665,6 +665,8 @@ AUDIO_OUTPUT_DEVICE=2  # Speaker device index
 
 ### Run Manually
 
+For testing or development:
+
 ```bash
 # Activate virtual environment
 source venv/bin/activate
@@ -673,9 +675,58 @@ source venv/bin/activate
 python3 -m rpi_client.main
 ```
 
-### Run as Systemd Service (Recommended)
+### Auto-Start on Boot (Recommended for Production)
 
-Create a systemd service file:
+To automatically start the Voice AI Buddy client when the Raspberry Pi boots (e.g., when UPS button is turned on):
+
+#### Quick Setup
+
+```bash
+cd hardware
+chmod +x install_service.sh
+./install_service.sh
+```
+
+The installation script will:
+- Verify your virtual environment and configuration
+- Create and install a systemd service file
+- Enable the service to start automatically on boot
+- Optionally start the service immediately
+
+#### Service Management
+
+```bash
+# Start service
+sudo systemctl start voice-ai-buddy.service
+
+# Stop service
+sudo systemctl stop voice-ai-buddy.service
+
+# Restart service
+sudo systemctl restart voice-ai-buddy.service
+
+# Check status
+sudo systemctl status voice-ai-buddy.service
+
+# View logs (follow in real-time)
+sudo journalctl -u voice-ai-buddy.service -f
+
+# Disable auto-start
+sudo systemctl disable voice-ai-buddy.service
+```
+
+#### Uninstall Service
+
+```bash
+cd hardware
+./uninstall_service.sh
+```
+
+For detailed information, see [SERVICE_SETUP.md](SERVICE_SETUP.md).
+
+#### Manual Systemd Setup (Alternative)
+
+If you prefer to set up the service manually, create a systemd service file:
 
 ```bash
 sudo nano /etc/systemd/system/voice-ai-buddy.service
@@ -701,18 +752,12 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-Enable and start the service:
+Then enable and start:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable voice-ai-buddy.service
 sudo systemctl start voice-ai-buddy.service
-
-# Check status
-sudo systemctl status voice-ai-buddy.service
-
-# View logs
-sudo journalctl -u voice-ai-buddy.service -f
 ```
 
 ---
