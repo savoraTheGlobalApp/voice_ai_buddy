@@ -12,7 +12,11 @@ from typing import List, Optional
 from .config import config
 from .audio_handler import AudioHandler
 from .api_client import APIClient, ChatMessage, MemoryCandidate
-from .instruction_builder import build_socratic_tutor_instructions, UserMemory
+from .instruction_builder import (
+    build_socratic_tutor_instructions,
+    build_greeting_prompt,
+    UserMemory
+)
 from .constants import (
     MEMORY_EXTRACT_EVERY_N,
     MEMORY_EXTRACTION_TOP_K,
@@ -69,6 +73,7 @@ class VoiceAIBuddy:
         self._tts_connection_task: Optional[asyncio.Task] = None  # Task for persistent TTS connection
         self._speaking_watchdog_task: Optional[asyncio.Task] = None  # Watchdog to ensure flag doesn't stay set
         self._tts_finished_event: Optional[asyncio.Event] = None  # Event for Deepgram PlaybackFinished message
+        self._greeting_sent = False  # Flag to track if initial greeting has been sent
         
         # Speaking state management (thread-safe)
         self.speaking = threading.Event()  # Set when TTS is active, cleared when finished
@@ -200,6 +205,9 @@ class VoiceAIBuddy:
         # Start speaking flag watchdog
         self._start_speaking_watchdog()
         
+        # Send initial greeting before starting STT listening
+        await self._send_initial_greeting()
+        
         try:
             # Connect to STT WebSocket
             async for _ in self.api_client.connect_stt(self._on_transcript):
@@ -313,6 +321,202 @@ class VoiceAIBuddy:
         
         except Exception as e:
             logger.error(f"Error processing transcript: {e}", exc_info=True)
+    
+    async def _send_initial_greeting(self) -> None:
+        """
+        Send initial greeting from AI before user starts speaking.
+        This makes the AI speak first, creating a more engaging experience.
+        """
+        if self._greeting_sent:
+            logger.debug("Initial greeting already sent, skipping")
+            return
+        
+        logger.info("Generating initial greeting...")
+        
+        try:
+            # Build greeting prompt with user info and memories
+            top_memories_count = await config.get_top_memories_count()
+            memories: List[UserMemory] = []
+            if config.USER_UID and self.api_client:
+                try:
+                    memory_dicts = await self.api_client.get_top_memories(
+                        config.USER_UID,
+                        top_memories_count
+                    )
+                    memories = [
+                        UserMemory(
+                            id=mem.get("id"),
+                            text=mem.get("text", ""),
+                            type=mem.get("type", "facts"),
+                            importance=mem.get("importance", 3)
+                        )
+                        for mem in memory_dicts
+                    ]
+                except Exception as e:
+                    logger.warning(f"Failed to fetch memories for greeting: {e}")
+            
+            greeting_prompt = build_greeting_prompt(
+                user_name=config.USER_NAME,
+                user_age=config.USER_AGE,
+                top_memories=memories,
+                top_memories_count=top_memories_count
+            )
+            
+            # Add greeting prompt to conversation history temporarily
+            greeting_user_message = ChatMessage(role="user", content=greeting_prompt)
+            self.conversation_history.append(greeting_user_message)
+            
+            # Generate greeting using chat API
+            if self.use_streaming:
+                await self._handle_streaming_greeting()
+            else:
+                await self._handle_non_streaming_greeting()
+            
+            # Remove greeting prompt from history (keep only system + assistant greeting)
+            # Find and remove the greeting prompt
+            greeting_prompt_index = -1
+            for i, msg in enumerate(self.conversation_history):
+                if msg.role == "user" and msg.content == greeting_prompt:
+                    greeting_prompt_index = i
+                    break
+            
+            if greeting_prompt_index >= 0:
+                self.conversation_history.pop(greeting_prompt_index)
+                logger.debug("Removed greeting prompt from conversation history")
+            
+            self._greeting_sent = True
+            logger.info("Initial greeting sent and spoken successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to send initial greeting: {e}", exc_info=True)
+            # Use fallback greeting
+            fallback_greeting = (
+                f"Hi {config.USER_NAME}! I'm your learning buddy! What would you like to explore today?"
+                if config.USER_NAME
+                else "Hi! I'm your learning buddy! What would you like to explore today?"
+            )
+            
+            # Add fallback greeting to history
+            assistant_message = ChatMessage(role="assistant", content=fallback_greeting)
+            self.conversation_history.append(assistant_message)
+            
+            # Speak fallback greeting
+            try:
+                if self.use_streaming:
+                    await self._speak_greeting_streaming(fallback_greeting)
+                else:
+                    await self._speak_greeting_non_streaming(fallback_greeting)
+                self._greeting_sent = True
+                logger.info("Fallback greeting sent successfully")
+            except Exception as e2:
+                logger.error(f"Failed to speak fallback greeting: {e2}", exc_info=True)
+                # Continue anyway - don't block startup
+    
+    async def _handle_streaming_greeting(self) -> None:
+        """Handle streaming greeting generation and TTS."""
+        logger.info("Getting AI greeting (streaming)...")
+        
+        # Buffer for accumulating response text
+        response_text = ""
+        text_buffer = ""
+        tts_finished = asyncio.Event()
+        self._tts_finished_event = tts_finished
+        
+        # Callback for streaming chat tokens
+        async def on_chat_token(token: str) -> None:
+            nonlocal response_text, text_buffer
+            response_text += token
+            text_buffer += token
+            
+            # Send text chunks to TTS when buffer is large enough
+            if len(text_buffer) >= TTS_TEXT_CHUNK_SIZE:
+                text_to_speak = text_buffer
+                text_buffer = ""
+                if text_to_speak.strip():
+                    try:
+                        await self.api_client.send_tts_text(text_to_speak)
+                    except RuntimeError as e:
+                        logger.error(f"Failed to send TTS text: {e}")
+        
+        # Stream chat response
+        full_response = await self.api_client.chat_stream(
+            self.conversation_history,
+            on_token=on_chat_token
+        )
+        
+        # Send any remaining buffered text
+        if text_buffer.strip():
+            try:
+                await self.api_client.send_tts_text(text_buffer)
+            except RuntimeError as e:
+                logger.error(f"Failed to send remaining TTS text: {e}")
+        
+        # Flush TTS to finish current utterance
+        try:
+            await self.api_client.flush_tts()
+        except RuntimeError as e:
+            logger.error(f"Failed to flush TTS: {e}")
+        
+        logger.info(f"AI greeting (streaming): '{full_response}'")
+        
+        # Add AI response to conversation history
+        assistant_message = ChatMessage(role="assistant", content=full_response)
+        self.conversation_history.append(assistant_message)
+        
+        # Wait for TTS playback to finish
+        await self._wait_for_tts_completion(tts_finished)
+        self._tts_finished_event = None
+    
+    async def _handle_non_streaming_greeting(self) -> None:
+        """Handle non-streaming greeting generation and TTS."""
+        logger.info("Getting AI greeting (non-streaming)...")
+        response_text = await self.api_client.chat(self.conversation_history)
+        logger.info(f"AI greeting: '{response_text}'")
+        
+        # Add AI response to conversation history
+        assistant_message = ChatMessage(role="assistant", content=response_text)
+        self.conversation_history.append(assistant_message)
+        
+        # Speak the greeting
+        await self._speak_greeting_non_streaming(response_text)
+    
+    async def _speak_greeting_streaming(self, text: str) -> None:
+        """Speak greeting using streaming TTS."""
+        try:
+            await self.api_client.send_tts_text(text)
+            await self.api_client.flush_tts()
+            
+            # Wait for TTS to complete
+            tts_finished = asyncio.Event()
+            self._tts_finished_event = tts_finished
+            await self._wait_for_tts_completion(tts_finished)
+            self._tts_finished_event = None
+        except Exception as e:
+            logger.error(f"Failed to speak greeting via streaming TTS: {e}", exc_info=True)
+            raise
+    
+    async def _speak_greeting_non_streaming(self, text: str) -> None:
+        """Speak greeting using non-streaming TTS."""
+        try:
+            logger.info("Generating TTS audio for greeting (non-streaming)...")
+            audio_data = await self.api_client.tts(text)
+            logger.info(f"Playing greeting TTS audio ({len(audio_data)} bytes)...")
+            
+            # Set speaking flag before TTS playback
+            self.speaking.set()
+            logger.info("Speaking flag set (greeting TTS started)")
+            
+            try:
+                self.audio_handler.play_audio(audio_data, format="mp3")
+                logger.info("Greeting TTS playback complete")
+            finally:
+                # Clear speaking flag after cooldown period
+                await self._clear_speaking_after_cooldown()
+        except Exception as e:
+            logger.error(f"Failed to play greeting TTS: {e}", exc_info=True)
+            # Ensure speaking flag is cleared even on error
+            self.speaking.clear()
+            raise
     
     async def _handle_non_streaming_response(self) -> None:
         """Handle non-streaming chat and TTS response."""
