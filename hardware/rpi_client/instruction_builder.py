@@ -63,7 +63,7 @@ def build_socratic_tutor_instructions(
 
 """
     
-    return f"""You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
+    return f"""Your name is Kitty. You are a warm, friendly Socratic tutor for Indian children aged 3-10 years. You are like a wise friend 
 who helps kids think deeply, be creative, and develop critical thinking skills. You speak with warmth, enthusiasm and 
 always in a playful, friendly like a peer and curious tone.
 
@@ -148,6 +148,76 @@ You: "That's a cool question! Hmm, what do you think happens when sunlight reach
 If child seems confused:
 You: "Great thinking! Let me give you a hint - think about how a rainbow has many colors. When sunlight comes to 
       Earth, something special happens to make the sky look blue. Can you guess what that might be?"""
+
+
+def build_greeting_prompt(
+    user_name: Optional[str] = None,
+    user_age: Optional[int] = None,
+    top_memories: Optional[List[UserMemory]] = None,
+    top_memories_count: int = 10
+) -> str:
+    """
+    Build a greeting prompt that includes user info and memories context.
+    This prompt is used to trigger the AI to generate an initial greeting.
+    
+    The prompt includes:
+    - User information section (name, age)
+    - User memories section (top memories)
+    - Instructions for greeting (from the main instructions)
+    
+    Args:
+        user_name: Child's name
+        user_age: Child's age
+        top_memories: List of user memories
+        top_memories_count: Number of top memories to include
+    
+    Returns:
+        Greeting prompt string that will trigger AI to generate a personalized greeting
+    """
+    # Build user info section (same as in build_socratic_tutor_instructions)
+    user_info_section = ""
+    if user_name and user_age:
+        user_info_section = f"""# USER INFORMATION
+- The child's name is {user_name} and they are {user_age} years old.
+- ALWAYS use ({user_name}) in your FIRST greeting to make it feel natural and personal.
+- Match your language complexity to their age.
+
+"""
+    elif user_name:
+        user_info_section = f"""# USER INFORMATION
+- The child's name is {user_name}
+- ALWAYS use ({user_name}) in your FIRST greeting to make it feel natural and personal.
+
+"""
+    
+    # Build memories section (same as in build_socratic_tutor_instructions)
+    memories_section = ""
+    if top_memories and len(top_memories) > 0:
+        items = "\n".join([
+            f"- ({m.importance}) [{m.type}] {m.text}"
+            for m in top_memories[:top_memories_count]
+        ])
+        memories_section = f"""# USER MEMORIES (Top {min(len(top_memories), top_memories_count)})
+{items}
+
+"""
+    
+    # Build greeting instructions
+    greeting_instructions = """# Beginning of the conversation
+- Start with a warm, personalized, and age-appropriate greeting.
+- Keep the first message short, sweet, friendly, and varied - use different conversation starters but use only one at a time.
+- Vary your greeting style each time. Avoid repeating the same one.
+- Make the greeting age-appropriate and warm, suitable for a child
+- If they don't respond, follow up with something fun and engaging like a story, joke, poem, or a simple question about their day
+
+"""
+    
+    # Combine all sections
+    prompt = f"""{user_info_section}{memories_section}{greeting_instructions}
+
+Please greet me and start our conversation in a warm and engaging way."""
+    
+    return prompt
 
 
 def crispify_memory_text(text: str, user_name: Optional[str] = None) -> str:
