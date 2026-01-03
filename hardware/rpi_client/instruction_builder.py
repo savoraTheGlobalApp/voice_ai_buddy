@@ -211,6 +211,7 @@ and position your greeting around it only: (1) Any interesting fact which is chi
 question which is child safe, (3) Asking about how was their day, (4) Asking about their favorite game, 
 (5) Asking about their favorite food, (6) Asking about their favorite subject, etc.
 - Make the greeting age-appropriate and warm, suitable for a child
+- Keep the greeting under 20 words.
 
 """
     
