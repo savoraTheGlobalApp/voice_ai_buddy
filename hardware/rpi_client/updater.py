@@ -1,0 +1,437 @@
+"""
+Update daemon for automatic code updates from GitHub.
+Handles checking, downloading, and staging updates for next boot.
+"""
+import asyncio
+import logging
+import subprocess
+import json
+import time
+from pathlib import Path
+from typing import Optional, Dict, Any
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+
+class UpdateState(Enum):
+    """Update state enumeration."""
+    IDLE = "idle"
+    CHECKING = "checking"
+    DOWNLOADING = "downloading"
+    READY_TO_APPLY = "ready_to_apply"
+    APPLYING = "applying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class UpdateManager:
+    """
+    Manages automatic updates from GitHub.
+    
+    Features:
+    - Background update checking and downloading
+    - Atomic update application on next boot
+    - State tracking and recovery
+    - Git-based version management
+    """
+    
+    def __init__(
+        self,
+        production_dir: Path,
+        staging_dir: Path,
+        state_dir: Path,
+        repo_url: str,
+        branch: str = "main"
+    ):
+        """
+        Initialize update manager.
+        
+        Args:
+            production_dir: Path to production application directory
+            staging_dir: Path to staging directory for updates
+            state_dir: Path to state directory for tracking files
+            repo_url: GitHub repository URL (SSH or HTTPS)
+            branch: Git branch to track (default: main)
+        """
+        self.production_dir = Path(production_dir)
+        self.staging_dir = Path(staging_dir)
+        self.state_dir = Path(state_dir)
+        self.repo_url = repo_url
+        self.branch = branch
+        
+        # State file paths
+        self.state_file = self.state_dir / "update_state.txt"
+        self.version_file = self.state_dir / "current_version.txt"
+        self.lock_file = self.state_dir / "update_lock"
+        self.log_file = self.state_dir / "update.log"
+        
+        # Ensure directories exist
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Update check interval (seconds)
+        self.check_interval = 3600  # 1 hour default
+        self.initial_delay = 60  # Wait 60 seconds after boot before first check
+        
+        self.is_running = False
+        self._check_task: Optional[asyncio.Task] = None
+    
+    def get_current_state(self) -> UpdateState:
+        """Get current update state from file."""
+        try:
+            if self.state_file.exists():
+                state_str = self.state_file.read_text().strip()
+                return UpdateState(state_str)
+        except Exception as e:
+            logger.warning(f"Failed to read state file: {e}")
+        return UpdateState.IDLE
+    
+    def set_state(self, state: UpdateState) -> None:
+        """Set update state in file."""
+        try:
+            self.state_file.write_text(state.value)
+            self._log(f"State changed to: {state.value}")
+        except Exception as e:
+            logger.error(f"Failed to write state file: {e}")
+    
+    def get_current_version(self) -> Optional[str]:
+        """Get current version (Git commit hash) from file."""
+        try:
+            if self.version_file.exists():
+                return self.version_file.read_text().strip()
+        except Exception as e:
+            logger.warning(f"Failed to read version file: {e}")
+        return None
+    
+    def set_version(self, version: str) -> None:
+        """Set current version in file."""
+        try:
+            self.version_file.write_text(version)
+            self._log(f"Version updated to: {version}")
+        except Exception as e:
+            logger.error(f"Failed to write version file: {e}")
+    
+    def _log(self, message: str) -> None:
+        """Log message to file and logger."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}\n"
+        try:
+            with open(self.log_file, "a") as f:
+                f.write(log_entry)
+        except Exception as e:
+            logger.warning(f"Failed to write to log file: {e}")
+        logger.info(message)
+    
+    def _acquire_lock(self) -> bool:
+        """Acquire update lock to prevent concurrent operations."""
+        try:
+            if self.lock_file.exists():
+                # Check if lock is stale (older than 1 hour)
+                lock_age = time.time() - self.lock_file.stat().st_mtime
+                if lock_age > 3600:
+                    logger.warning(f"Removing stale lock file (age: {lock_age:.0f}s)")
+                    self.lock_file.unlink()
+                else:
+                    return False
+            
+            self.lock_file.write_text(str(int(time.time())))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to acquire lock: {e}")
+            return False
+    
+    def _release_lock(self) -> None:
+        """Release update lock."""
+        try:
+            if self.lock_file.exists():
+                self.lock_file.unlink()
+        except Exception as e:
+            logger.warning(f"Failed to release lock: {e}")
+    
+    async def _run_git_command(
+        self,
+        command: list[str],
+        cwd: Path,
+        timeout: int = 300
+    ) -> tuple[int, str, str]:
+        """
+        Run git command and return exit code, stdout, stderr.
+        
+        Args:
+            command: Git command as list (e.g., ["git", "pull"])
+            cwd: Working directory for command
+            timeout: Command timeout in seconds
+        
+        Returns:
+            Tuple of (exit_code, stdout, stderr)
+        """
+        try:
+            process = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=str(cwd),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                ),
+                timeout=timeout
+            )
+            stdout, stderr = await process.communicate()
+            return (
+                process.returncode,
+                stdout.decode("utf-8", errors="ignore"),
+                stderr.decode("utf-8", errors="ignore")
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Git command timed out: {' '.join(command)}")
+            return (1, "", "Command timed out")
+        except Exception as e:
+            logger.error(f"Failed to run git command: {e}")
+            return (1, "", str(e))
+    
+    async def _get_latest_commit_hash(self) -> Optional[str]:
+        """Get latest commit hash from GitHub repository."""
+        try:
+            # Use git ls-remote to get latest commit without cloning
+            command = [
+                "git",
+                "ls-remote",
+                self.repo_url,
+                f"refs/heads/{self.branch}"
+            ]
+            
+            exit_code, stdout, stderr = await self._run_git_command(
+                command,
+                cwd=Path("/tmp"),  # Any directory works for ls-remote
+                timeout=30
+            )
+            
+            if exit_code == 0 and stdout:
+                # Output format: "hash\trefs/heads/branch"
+                parts = stdout.strip().split()
+                if parts:
+                    return parts[0]
+            else:
+                logger.warning(f"Failed to get latest commit: {stderr}")
+        except Exception as e:
+            logger.error(f"Error getting latest commit hash: {e}")
+        
+        return None
+    
+    async def _clone_or_update_staging(self) -> bool:
+        """
+        Clone repository to staging or update if exists.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if self.staging_dir.exists():
+                # Update existing staging directory
+                self._log("Updating staging directory...")
+                
+                # Fetch latest changes
+                exit_code, stdout, stderr = await self._run_git_command(
+                    ["git", "fetch", "origin", self.branch],
+                    cwd=self.staging_dir,
+                    timeout=120
+                )
+                
+                if exit_code != 0:
+                    logger.error(f"Git fetch failed: {stderr}")
+                    return False
+                
+                # Reset to latest commit
+                exit_code, stdout, stderr = await self._run_git_command(
+                    ["git", "reset", "--hard", f"origin/{self.branch}"],
+                    cwd=self.staging_dir,
+                    timeout=60
+                )
+                
+                if exit_code != 0:
+                    logger.error(f"Git reset failed: {stderr}")
+                    return False
+            else:
+                # Clone fresh
+                self._log("Cloning repository to staging...")
+                self.staging_dir.parent.mkdir(parents=True, exist_ok=True)
+                
+                exit_code, stdout, stderr = await self._run_git_command(
+                    ["git", "clone", "--branch", self.branch, "--depth", "1", self.repo_url, str(self.staging_dir)],
+                    cwd=self.staging_dir.parent,
+                    timeout=300
+                )
+                
+                if exit_code != 0:
+                    logger.error(f"Git clone failed: {stderr}")
+                    return False
+            
+            # Verify staging directory has the hardware/rpi_client structure
+            hardware_dir = self.staging_dir / "hardware"
+            if not hardware_dir.exists():
+                logger.error("Staging directory missing hardware/ directory")
+                return False
+            
+            self._log("Staging directory updated successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error cloning/updating staging: {e}", exc_info=True)
+            return False
+    
+    async def _get_staging_version(self) -> Optional[str]:
+        """Get commit hash from staging directory."""
+        try:
+            if not self.staging_dir.exists():
+                return None
+            
+            exit_code, stdout, stderr = await self._run_git_command(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.staging_dir,
+                timeout=10
+            )
+            
+            if exit_code == 0 and stdout:
+                return stdout.strip()
+        except Exception as e:
+            logger.error(f"Error getting staging version: {e}")
+        
+        return None
+    
+    async def check_for_updates(self) -> bool:
+        """
+        Check for updates and download if available.
+        
+        Returns:
+            True if update is available and downloaded, False otherwise
+        """
+        if not self._acquire_lock():
+            logger.debug("Update lock already held, skipping check")
+            return False
+        
+        try:
+            current_state = self.get_current_state()
+            
+            # Handle interrupted states
+            if current_state == UpdateState.APPLYING:
+                logger.warning("Previous update was interrupted during application")
+                # Clean up and reset to idle
+                self._cleanup_staging()
+                self.set_state(UpdateState.IDLE)
+            
+            if current_state == UpdateState.READY_TO_APPLY:
+                logger.info("Update already staged, waiting for next boot")
+                return True
+            
+            # Get current version
+            current_version = self.get_current_version()
+            if not current_version:
+                # First run - get version from production directory
+                if self.production_dir.exists():
+                    exit_code, stdout, stderr = await self._run_git_command(
+                        ["git", "rev-parse", "HEAD"],
+                        cwd=self.production_dir,
+                        timeout=10
+                    )
+                    if exit_code == 0 and stdout:
+                        current_version = stdout.strip()
+                        self.set_version(current_version)
+                        self._log(f"Initialized version: {current_version}")
+            
+            # Get latest version from GitHub
+            self.set_state(UpdateState.CHECKING)
+            latest_version = await self._get_latest_commit_hash()
+            
+            if not latest_version:
+                logger.warning("Failed to get latest version from GitHub")
+                self.set_state(UpdateState.IDLE)
+                return False
+            
+            # Compare versions
+            if current_version == latest_version:
+                logger.debug(f"Already up to date (version: {current_version[:8]})")
+                self.set_state(UpdateState.IDLE)
+                return False
+            
+            # Update available - download to staging
+            logger.info(f"Update available: {current_version[:8] if current_version else 'unknown'} -> {latest_version[:8]}")
+            self.set_state(UpdateState.DOWNLOADING)
+            
+            success = await self._clone_or_update_staging()
+            
+            if not success:
+                logger.error("Failed to download update")
+                self.set_state(UpdateState.FAILED)
+                return False
+            
+            # Verify staging version matches expected
+            staging_version = await self._get_staging_version()
+            if staging_version != latest_version:
+                logger.error(f"Staging version mismatch: expected {latest_version[:8]}, got {staging_version[:8] if staging_version else 'none'}")
+                self.set_state(UpdateState.FAILED)
+                return False
+            
+            # Mark as ready to apply
+            self.set_state(UpdateState.READY_TO_APPLY)
+            self._log(f"Update staged successfully: {latest_version[:8]}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking for updates: {e}", exc_info=True)
+            self.set_state(UpdateState.FAILED)
+            return False
+        finally:
+            self._release_lock()
+    
+    def _cleanup_staging(self) -> None:
+        """Clean up staging directory on failure."""
+        try:
+            if self.staging_dir.exists():
+                import shutil
+                shutil.rmtree(self.staging_dir)
+                self._log("Cleaned up staging directory")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup staging: {e}")
+    
+    async def start(self) -> None:
+        """Start the update daemon."""
+        if self.is_running:
+            logger.warning("Update daemon already running")
+            return
+        
+        self.is_running = True
+        self._log("Update daemon started")
+        
+        # Wait initial delay before first check
+        await asyncio.sleep(self.initial_delay)
+        
+        # Start periodic checking
+        self._check_task = asyncio.create_task(self._check_loop())
+    
+    async def stop(self) -> None:
+        """Stop the update daemon."""
+        self.is_running = False
+        
+        if self._check_task:
+            self._check_task.cancel()
+            try:
+                await self._check_task
+            except asyncio.CancelledError:
+                pass
+        
+        self._log("Update daemon stopped")
+    
+    async def _check_loop(self) -> None:
+        """Main loop for periodic update checks."""
+        while self.is_running:
+            try:
+                await self.check_for_updates()
+            except Exception as e:
+                logger.error(f"Error in update check loop: {e}", exc_info=True)
+            
+            # Wait before next check
+            await asyncio.sleep(self.check_interval)
+    
+    def is_update_ready(self) -> bool:
+        """Check if update is ready to be applied."""
+        return self.get_current_state() == UpdateState.READY_TO_APPLY
+
