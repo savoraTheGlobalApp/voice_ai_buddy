@@ -20,7 +20,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Source and destination paths
-SOURCE_DIR="$HOME/Documents/startupWorld/voice_ai_buddy"
+SOURCE_DIR="~/Documents/startupWorld/voice_ai_buddy"
 DEST_DIR="/opt/voice_ai_buddy"
 STATE_DIR="/var/lib/voice_ai_buddy"
 
