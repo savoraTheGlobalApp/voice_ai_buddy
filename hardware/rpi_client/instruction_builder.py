@@ -206,7 +206,10 @@ def build_greeting_prompt(
     greeting_instructions = """# Beginning of the conversation
 - Start with a warm, personalized, and age-appropriate greeting.
 - Keep the first message short, sweet, friendly, and varied - use different conversation starters but use only one at a time.
-- Vary your greeting style each time. Avoid repeating the same one.
+- Vary your greeting style each time. Avoid repeating the same one. For example, choose only one of the following at random 
+and position your greeting around it only: (1) Any interesting fact which is child safe, (2) Any interesting 
+question which is child safe, (3) Asking about how was their day, (4) Asking about their favorite game, 
+(5) Asking about their favorite food, (6) Asking about their favorite subject, etc.
 - Make the greeting age-appropriate and warm, suitable for a child
 
 """
