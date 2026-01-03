@@ -11,6 +11,8 @@ User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=REPLACE_HARDWARE_DIR
 Environment="PATH=REPLACE_VENV_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Apply updates before starting (non-blocking, continues even if update fails)
+ExecStartPre=/usr/bin/python3 /opt/voice_ai_buddy/hardware/apply_update.py || true
 ExecStart=REPLACE_VENV_BIN/python -m rpi_client.main
 Restart=always
 RestartSec=10
