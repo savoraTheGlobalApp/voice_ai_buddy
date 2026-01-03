@@ -12,8 +12,19 @@ NC='\033[0m' # No Color
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HARDWARE_DIR="$SCRIPT_DIR"
-PROJECT_ROOT="$(dirname "$HARDWARE_DIR")"
+
+# Determine if we're using /opt/ or local installation
+if [ -d "/opt/voice_ai_buddy" ]; then
+    # Using /opt/ installation
+    PRODUCTION_DIR="/opt/voice_ai_buddy"
+    HARDWARE_DIR="$PRODUCTION_DIR/hardware"
+    echo "Detected /opt/ installation"
+else
+    # Using local installation (legacy)
+    HARDWARE_DIR="$SCRIPT_DIR"
+    PRODUCTION_DIR="$(dirname "$HARDWARE_DIR")"
+    echo "Using local installation (legacy mode)"
+fi
 
 echo -e "${GREEN}=== Voice AI Buddy Service Installation ===${NC}"
 echo ""
@@ -29,7 +40,7 @@ CURRENT_USER="$USER"
 CURRENT_HOME="$HOME"
 
 echo "Installing service for user: $CURRENT_USER"
-echo "Project directory: $PROJECT_ROOT"
+echo "Production directory: $PRODUCTION_DIR"
 echo "Hardware directory: $HARDWARE_DIR"
 echo ""
 
