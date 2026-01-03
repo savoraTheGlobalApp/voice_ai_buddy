@@ -208,7 +208,6 @@ def build_greeting_prompt(
 - Keep the first message short, sweet, friendly, and varied - use different conversation starters but use only one at a time.
 - Vary your greeting style each time. Avoid repeating the same one.
 - Make the greeting age-appropriate and warm, suitable for a child
-- If they don't respond, follow up with something fun and engaging like a story, joke, poem, or a simple question about their day
 
 """
     
