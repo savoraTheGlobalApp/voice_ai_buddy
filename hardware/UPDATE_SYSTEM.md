@@ -134,6 +134,32 @@ Set in systemd service file or environment:
 - `GITHUB_REPO_URL`: Repository URL (required)
 - `GITHUB_BRANCH`: Branch to track (default: `main`)
 
+### Changing the Tracked Branch
+
+To change which branch is tracked after installation:
+
+1. Edit the systemd service file:
+   ```bash
+   sudo nano /etc/systemd/system/voice-ai-buddy-updater.service
+   ```
+
+2. Update the `GITHUB_BRANCH` environment variable:
+   ```ini
+   Environment="GITHUB_BRANCH=dev"  # Change to your desired branch
+   ```
+
+3. Reload and restart:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl restart voice-ai-buddy-updater.service
+   ```
+
+4. Verify:
+   ```bash
+   sudo systemctl status voice-ai-buddy-updater.service
+   sudo journalctl -u voice-ai-buddy-updater.service -n 20
+   ```
+
 ### Update Check Interval
 
 Default: 1 hour (3600 seconds)

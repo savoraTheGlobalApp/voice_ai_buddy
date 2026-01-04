@@ -154,6 +154,42 @@ This will:
    - Handles interruptions gracefully
    - Non-blocking startup
 
+## Changing the Tracked Branch
+
+If you want to track a different branch (e.g., switch from `main` to `dev` or `staging`):
+
+1. **Edit the systemd service file:**
+   ```bash
+   sudo nano /etc/systemd/system/voice-ai-buddy-updater.service
+   ```
+
+2. **Find the line with `GITHUB_BRANCH` and change it:**
+   ```ini
+   Environment="GITHUB_BRANCH=dev"  # Change from "main" to your desired branch
+   ```
+
+3. **Reload systemd and restart the service:**
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl restart voice-ai-buddy-updater.service
+   ```
+
+4. **Verify the change:**
+   ```bash
+   sudo systemctl status voice-ai-buddy-updater.service
+   # Check logs to confirm it's tracking the new branch
+   sudo journalctl -u voice-ai-buddy-updater.service -n 20
+   ```
+
+**Note:** The update daemon will now check the new branch for updates. If you want to immediately switch to code from the new branch, you can manually trigger an update check:
+
+```bash
+sudo systemctl restart voice-ai-buddy-updater.service
+# Wait for update to be staged, then reboot or manually apply
+sudo /usr/bin/python3 /opt/voice_ai_buddy/hardware/apply_update.py
+sudo systemctl restart voice-ai-buddy.service
+```
+
 ## Making Code Changes
 
 1. **On your development machine:**
@@ -161,7 +197,7 @@ This will:
    # Make changes
    git add .
    git commit -m "Your changes"
-   git push origin main
+   git push origin main  # Or your tracked branch
    ```
 
 2. **On Raspberry Pi:**
