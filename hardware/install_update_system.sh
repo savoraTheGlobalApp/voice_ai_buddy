@@ -80,6 +80,35 @@ echo "Enter Git branch to track (default: main):"
 read -r BRANCH
 BRANCH=${BRANCH:-main}
 
+# Get SSH key path if using SSH
+GIT_SSH_COMMAND=""
+if [[ "$REPO_URL" == git@* ]]; then
+    echo ""
+    echo "SSH Key Configuration"
+    echo "===================="
+    echo "Enter path to SSH private key for GitHub (or press Enter to use default ~/.ssh/id_rsa):"
+    echo "Example: ~/.ssh/id_rsa or /home/laddu/.ssh/id_ed25519_rpi_voice_toy"
+    read -r SSH_KEY_PATH
+    SSH_KEY_PATH=${SSH_KEY_PATH:-~/.ssh/id_rsa}
+    # Expand ~ to home directory
+    SSH_KEY_PATH=$(echo "$SSH_KEY_PATH" | sed "s|^~|$HOME|")
+    
+    # Verify key exists
+    if [ ! -f "$SSH_KEY_PATH" ]; then
+        echo -e "${YELLOW}Warning: SSH key not found at $SSH_KEY_PATH${NC}"
+        echo "The service may not be able to authenticate with GitHub."
+        echo "Continue anyway? (y/n)"
+        read -r response
+        if [ "$response" != "y" ] && [ "$response" != "Y" ]; then
+            exit 1
+        fi
+    fi
+    
+    # Set GIT_SSH_COMMAND environment variable
+    GIT_SSH_COMMAND="ssh -i $SSH_KEY_PATH"
+    echo "Using SSH key: $SSH_KEY_PATH"
+fi
+
 # Ensure directories exist
 echo ""
 echo "Creating directories..."
@@ -114,13 +143,31 @@ echo ""
 echo "Creating systemd service file for updater..."
 
 # Replace placeholders in service file
-sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
-    -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
-    -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
-    -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
-    -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
-    -e "s|REPLACE_BRANCH|$BRANCH|g" \
-    "$SERVICE_FILE" > "$TEMP_SERVICE_FILE"
+# Escape special characters in GIT_SSH_COMMAND for sed
+ESCAPED_GIT_SSH_COMMAND=$(echo "$GIT_SSH_COMMAND" | sed 's/[[\.*^$()+?{|]/\\&/g')
+
+# If GIT_SSH_COMMAND is empty (HTTPS), remove the entire Environment line
+if [ -z "$GIT_SSH_COMMAND" ]; then
+    # Remove the GIT_SSH_COMMAND line for HTTPS URLs
+    sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
+        -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
+        -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
+        -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
+        -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
+        -e "s|REPLACE_BRANCH|$BRANCH|g" \
+        -e "/REPLACE_GIT_SSH_COMMAND/d" \
+        "$SERVICE_FILE" > "$TEMP_SERVICE_FILE"
+else
+    # Include GIT_SSH_COMMAND for SSH URLs
+    sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
+        -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
+        -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
+        -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
+        -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
+        -e "s|REPLACE_BRANCH|$BRANCH|g" \
+        -e "s|REPLACE_GIT_SSH_COMMAND|$ESCAPED_GIT_SSH_COMMAND|g" \
+        "$SERVICE_FILE" > "$TEMP_SERVICE_FILE"
+fi
 
 # Copy service file to systemd directory
 SYSTEMD_SERVICE="/etc/systemd/system/voice-ai-buddy-updater.service"
