@@ -11,21 +11,48 @@ This guide walks you through setting up Voice AI Buddy on Raspberry Pi with auto
 
 ## Step-by-Step Setup
 
-### Step 1: Initial Installation
+### Option A: Direct Installation to /opt/ (Recommended for New Installations)
 
-1. **Clone or copy your repository to the Pi:**
+This is the recommended approach for new Raspberry Pi installations. It installs directly to `/opt/` without intermediate steps.
+
+1. **Clone repository directly to /opt/:**
 
    ```bash
-   cd ~/Documents/startupWorld
-   git clone <your-repo-url> voice_ai_buddy
-   # Or if you already have it:
-   cd voice_ai_buddy
+   # Clone the repository to /opt/voice_ai_buddy
+   sudo git clone <your-repo-url> /opt/voice_ai_buddy
+   
+   # Or clone a specific branch:
+   sudo git clone -b <branch-name> <your-repo-url> /opt/voice_ai_buddy
    ```
 
-2. **Run initial setup:**
+   **Example:**
+   ```bash
+   # Using SSH
+   sudo git clone git@github.com:username/voice_ai_buddy.git /opt/voice_ai_buddy
+   
+   # Using HTTPS
+   sudo git clone https://github.com/username/voice_ai_buddy.git /opt/voice_ai_buddy
+   
+   # Clone specific branch
+   sudo git clone -b dev https://github.com/username/voice_ai_buddy.git /opt/voice_ai_buddy
+   ```
+
+2. **Run post-installation setup:**
 
    ```bash
-   cd hardware
+   cd /opt/voice_ai_buddy/hardware
+   sudo ./setup_opt_installation.sh
+   ```
+
+   This will:
+   - Set proper ownership of the cloned repository
+   - Create state and staging directories
+   - Initialize version tracking
+
+3. **Run initial setup:**
+
+   ```bash
+   cd /opt/voice_ai_buddy/hardware
    ./setup.sh
    ```
 
@@ -47,20 +74,6 @@ This guide walks you through setting up Voice AI Buddy on Raspberry Pi with auto
    - `USER_NAME`: Child's name
    - `USER_AGE`: Child's age
 
-### Step 2: Migrate to /opt/ (Recommended)
-
-For production installations, use `/opt/` directory:
-
-```bash
-cd hardware
-sudo ./migrate_to_opt.sh
-```
-
-This will:
-- Copy installation to `/opt/voice_ai_buddy`
-- Create state and staging directories
-- Initialize version tracking
-
 ### Step 3: Set Up Automatic Updates
 
 1. **Install update system:**
@@ -74,7 +87,7 @@ This will:
    - GitHub repository URL (SSH or HTTPS)
    - Git branch to track (default: `main`)
 
-2. **Configure Git credentials:**
+2. **Configure Git credentials (before cloning):**
 
    **Option A: SSH (Recommended)**
    
@@ -93,8 +106,8 @@ This will:
    **Option B: HTTPS with Personal Access Token**
    
    ```bash
-   # Use token in repository URL
-   # Format: https://TOKEN@github.com/username/repo.git
+   # Use token in repository URL when cloning
+   # Format: sudo git clone https://TOKEN@github.com/username/repo.git /opt/voice_ai_buddy
    ```
 
 ### Step 4: Install Main Application Service
