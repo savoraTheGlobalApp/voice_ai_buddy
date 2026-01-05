@@ -30,12 +30,12 @@ def apply_update():
     # Check if update is ready
     if not state_file.exists():
         logger.info("No update state file found, skipping update")
-        return False
+        return True  # No update is a normal condition, not an error
     
     current_state = state_file.read_text().strip()
     if current_state != "ready_to_apply":
         logger.info(f"Update not ready (state: {current_state}), skipping")
-        return False
+        return True  # No update is a normal condition, not an error
     
     if not STAGING_DIR.exists():
         logger.error("Staging directory not found, cannot apply update")
@@ -130,6 +130,7 @@ def apply_update():
 
 
 if __name__ == "__main__":
+    # apply_update() returns True for success or no-update-needed, False only for actual errors
     success = apply_update()
     sys.exit(0 if success else 1)
 
