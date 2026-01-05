@@ -1,6 +1,6 @@
 [Unit]
 Description=Voice AI Buddy RPi Client
-Documentation=https://github.com/yourusername/voice_ai_buddy
+Documentation=https://github.com/savoraTheGlobalApp/voice_ai_buddy
 After=network-online.target sound.target
 Wants=network-online.target
 
