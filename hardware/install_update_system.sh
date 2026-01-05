@@ -36,7 +36,8 @@ echo ""
 # Check if production directory exists
 if [ ! -d "$PRODUCTION_DIR" ]; then
     echo -e "${RED}Error: Production directory not found: $PRODUCTION_DIR${NC}"
-    echo "Please run migrate_to_opt.sh first to migrate your installation."
+    echo "Please clone the repository to /opt/voice_ai_buddy first."
+    echo "Example: sudo git clone <your-repo-url> /opt/voice_ai_buddy"
     exit 1
 fi
 
