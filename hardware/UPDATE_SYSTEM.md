@@ -56,21 +56,53 @@ The update system automatically fetches code changes from GitHub and applies the
 
 ## Installation
 
-### Step 1: Migrate to /opt/ (if needed)
+### Step 1: Install to /opt/
 
-If your installation is currently in `~/Documents/startupWorld/`, migrate it:
+**Option A: Direct Installation (Recommended for New Installations)**
+
+For new Raspberry Pi installations, clone directly to `/opt/`:
 
 ```bash
-cd hardware
-sudo ./migrate_to_opt.sh
+# Clone the repository to /opt/voice_ai_buddy
+sudo git clone <your-repo-url> /opt/voice_ai_buddy
+
+# Or clone a specific branch:
+sudo git clone -b <branch-name> <your-repo-url> /opt/voice_ai_buddy
+```
+
+**Example:**
+```bash
+# Using SSH
+sudo git clone git@github.com:username/voice_ai_buddy.git /opt/voice_ai_buddy
+
+# Using HTTPS
+sudo git clone https://github.com/username/voice_ai_buddy.git /opt/voice_ai_buddy
+```
+
+Then run the post-installation setup script:
+
+```bash
+cd /opt/voice_ai_buddy/hardware
+sudo ./setup_opt_installation.sh
 ```
 
 This will:
-- Copy your installation to `/opt/voice_ai_buddy`
+- Set proper ownership of the cloned repository
 - Create state and staging directories
 - Initialize version tracking
 
-### Step 2: Install Update System
+### Step 2: Run Setup
+
+After installation (Option A or B), run setup:
+
+```bash
+cd /opt/voice_ai_buddy/hardware
+./setup.sh
+```
+
+This installs system dependencies, creates virtual environment, and installs Python packages.
+
+### Step 3: Install Update System
 
 ```bash
 cd /opt/voice_ai_buddy/hardware
@@ -81,7 +113,7 @@ You'll be prompted for:
 - GitHub repository URL (SSH or HTTPS)
 - Git branch to track (default: `main`)
 
-### Step 3: Reinstall Main Service
+### Step 4: Install Main Service
 
 ```bash
 cd /opt/voice_ai_buddy/hardware
