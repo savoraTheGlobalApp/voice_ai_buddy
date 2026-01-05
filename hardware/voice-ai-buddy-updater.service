@@ -9,7 +9,7 @@ Type=simple
 # User and paths will be replaced by install_service.sh
 User=REPLACE_USER
 Group=REPLACE_USER
-WorkingDirectory=REPLACE_PRODUCTION_DIR
+WorkingDirectory=REPLACE_HARDWARE_DIR
 Environment="PATH=REPLACE_VENV_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="GITHUB_REPO_URL=REPLACE_REPO_URL"
 Environment="GITHUB_BRANCH=REPLACE_BRANCH"

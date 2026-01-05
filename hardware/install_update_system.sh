@@ -115,6 +115,7 @@ echo "Creating systemd service file for updater..."
 
 # Replace placeholders in service file
 sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
+    -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
     -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
     -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
     -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
