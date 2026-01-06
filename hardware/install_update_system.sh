@@ -102,11 +102,22 @@ if [[ "$REPO_URL" == git@* ]]; then
         if [ "$response" != "y" ] && [ "$response" != "Y" ]; then
             exit 1
         fi
+    else
+        # Check and fix SSH key permissions (should be 600)
+        KEY_PERMS=$(stat -c "%a" "$SSH_KEY_PATH" 2>/dev/null || stat -f "%OLp" "$SSH_KEY_PATH" 2>/dev/null || echo "")
+        if [ "$KEY_PERMS" != "600" ] && [ "$KEY_PERMS" != "0600" ]; then
+            echo -e "${YELLOW}Warning: SSH key permissions are $KEY_PERMS (should be 600)${NC}"
+            echo "Fixing permissions..."
+            chmod 600 "$SSH_KEY_PATH"
+            echo "Permissions updated to 600"
+        fi
     fi
     
     # Set GIT_SSH_COMMAND environment variable
-    GIT_SSH_COMMAND="ssh -i $SSH_KEY_PATH"
-    echo "Using SSH key: $SSH_KEY_PATH"
+    # Use absolute path to avoid issues
+    ABS_SSH_KEY_PATH=$(readlink -f "$SSH_KEY_PATH" 2>/dev/null || realpath "$SSH_KEY_PATH" 2>/dev/null || echo "$SSH_KEY_PATH")
+    GIT_SSH_COMMAND="ssh -i $ABS_SSH_KEY_PATH -o StrictHostKeyChecking=no"
+    echo "Using SSH key: $ABS_SSH_KEY_PATH"
 fi
 
 # Ensure directories exist
