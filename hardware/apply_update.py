@@ -33,6 +33,53 @@ def apply_update():
         return True  # No update is a normal condition, not an error
     
     current_state = state_file.read_text().strip()
+    
+    # Handle interrupted update (power loss during application)
+    if current_state == "applying":
+        logger.warning("Previous update was interrupted during application, attempting recovery...")
+        
+        # Check if production exists
+        if not PRODUCTION_DIR.exists():
+            # Production was removed but move didn't complete
+            if BACKUP_DIR.exists():
+                logger.info("Production missing but backup exists, restoring from backup...")
+                try:
+                    shutil.move(str(BACKUP_DIR), str(PRODUCTION_DIR))
+                    logger.info("Successfully restored production from backup")
+                    state_file.write_text("idle")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to restore from backup: {e}")
+                    state_file.write_text("failed")
+                    return False
+            elif STAGING_DIR.exists():
+                # Backup doesn't exist, but staging does - move staging to production
+                logger.info("Production missing, moving staging to production...")
+                try:
+                    shutil.move(str(STAGING_DIR), str(PRODUCTION_DIR))
+                    logger.info("Successfully moved staging to production")
+                    state_file.write_text("idle")
+                    return True
+                except Exception as e:
+                    logger.error(f"Failed to move staging to production: {e}")
+                    state_file.write_text("failed")
+                    return False
+            else:
+                logger.error("Production missing and no backup or staging available!")
+                state_file.write_text("failed")
+                return False
+        else:
+            # Production exists - update was likely completed but state wasn't updated
+            logger.info("Production exists, update likely completed. Cleaning up...")
+            if BACKUP_DIR.exists():
+                logger.info("Removing old backup...")
+                shutil.rmtree(BACKUP_DIR)
+            if STAGING_DIR.exists():
+                logger.info("Removing staging directory...")
+                shutil.rmtree(STAGING_DIR)
+            state_file.write_text("idle")
+            return True
+    
     if current_state != "ready_to_apply":
         logger.info(f"Update not ready (state: {current_state}), skipping")
         return True  # No update is a normal condition, not an error
