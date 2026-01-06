@@ -1,6 +1,6 @@
 # Raspberry Pi Voice AI Buddy Client
 
-Screen-free voice AI interaction client for Raspberry Pi hardware
+Screen-free voice AI interaction client for Raspberry Pi hardware.
 
 ## Table of Contents
 
