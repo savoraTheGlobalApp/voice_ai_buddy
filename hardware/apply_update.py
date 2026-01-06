@@ -108,9 +108,9 @@ def apply_update():
             logger.info("Removing old production directory...")
             shutil.rmtree(PRODUCTION_DIR)
         
-        # Move staging to production (atomic operation)
-        logger.info("Moving staging to production...")
-        shutil.move(str(STAGING_DIR), str(PRODUCTION_DIR))
+        # Copy staging to production (keep staging directory for future updates)
+        logger.info("Copying staging to production...")
+        shutil.copytree(str(STAGING_DIR), str(PRODUCTION_DIR))
         
         # Get new version
         try:
