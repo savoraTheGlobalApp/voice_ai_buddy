@@ -327,14 +327,112 @@ export async function setupRealtimeMode(
     } catch (permErr) {
       console.warn('[realtime] mic permission not granted yet or blocked', permErr);
     }
-    // Get backend URL from environment variable or use default
+    // Handle user speech transcription
+    let userMsgCounter = 0;
+    const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+    
+    // Get backend URL from environment variable or use default
     const resp = await fetch(`${backendUrl}/api/realtime-token`, { method: 'GET' });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`Failed to obtain realtime token: ${text}`);
     }
     const { token } = await resp.json();
+    
+    /**
+     * Save conversation chunk to Firebase.
+     * Independent of memory extraction - always runs after message exchange.
+     */
+    const saveConversationChunk = async (): Promise<void> => {
+        if (!uid || !conversationSessionId) {
+          console.warn('[conv] Cannot save conversation: missing uid or sessionId');
+          return;
+        }
+
+        try {
+          // Get new messages since last save
+          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+            .filter(msg => msg.role !== 'system'); // Exclude system messages
+          
+          if (newChunk.length === 0) {
+            return; // Nothing new to save
+          }
+
+          const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+          
+          // Update sessionId if document was split
+          if (result.wasSplit) {
+            conversationSessionId = result.sessionId;
+            console.log('[conv] Realtime session split, continuing in:', conversationSessionId);
+          }
+          
+          lastSavedMessageIndex = conversationHistory.length;
+          console.log('[conv] Realtime session saved', newChunk.length, 'messages');
+        } catch (e) {
+          console.error('[conv] Failed to save conversation chunk:', e);
+          // Don't throw - conversation saving failures shouldn't break the app
+        }
+      };
+
+      /**
+       * Extract and save memories from recent conversation.
+       * Independent of conversation saving - runs periodically.
+       */
+      const extractMemories = async (): Promise<void> => {
+        if (!uid) {
+          console.warn('[conv] Cannot extract memories: missing uid');
+          return;
+        }
+
+        try {
+          // Fetch existing memories (texts only) to help backend avoid duplicates
+          // Handle failures gracefully - use empty array as fallback
+          let existingTexts: string[] = [];
+          try {
+            const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+            existingTexts = existing.map(m => m.text);
+          } catch (fetchError) {
+            console.warn('[memories] Failed to fetch existing memories, continuing without them:', fetchError);
+            // Continue with empty existing memories - backend will still work
+          }
+
+          const resp = await fetch(`${backendUrl}/api/memories/extract`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              messages: conversationHistory, 
+              top_k: 5, 
+              existing_memories: existingTexts // make top_k configurable from the environment variable
+            }),
+          });
+
+          if (!resp.ok) {
+            const errorText = await resp.text().catch(() => 'Unknown error');
+            console.error('[memories] Memory extraction API failed:', resp.status, errorText);
+            return; // Exit early but don't throw - memory extraction is optional
+          }
+
+          const data = await resp.json();
+          const memories = (data.memories || []).map((m: any) => ({ 
+            text: crispifyMemoryText(m.text, userName), 
+            type: m.type, 
+            importance: m.importance 
+          }));
+
+          if (memories.length > 0) {
+            try {
+              await addMemoriesWithLimit(uid, memories);
+              console.log('[memories] Extracted and saved', memories.length, 'memories');
+            } catch (saveErr) {
+              console.error('[memories] Failed to save memories:', saveErr);
+            }
+          }
+        } catch (e) {
+          console.error('[memories] Memory extraction failed:', e);
+          // Don't throw - memory extraction failures shouldn't break the app
+        }
+      };
 
     // Initialize Web Speech API for STT to transcribe user speech (free, parallel to Realtime API)
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -346,50 +444,6 @@ export async function setupRealtimeMode(
       recognition.interimResults = false;
       recognition.lang = 'en-US';
       
-      // Handle user speech transcription
-      let userMsgCounter = 0;
-      const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-      const maybeExtractMemories = async () => {
-        if (!uid) return;
-        try {
-          // Fetch existing memories (texts only) to help backend avoid duplicates
-          const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
-          const existingTexts = existing.map(m => m.text);
-          const resp = await fetch(`${backendUrl}/api/memories/extract`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
-            // todo: make top_k configurable from the environment variable
-            // top_k: Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_TOP_K || 5),
-          });
-          if (!resp.ok) return;
-          const data = await resp.json();
-          const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
-          try {
-            await addMemoriesWithLimit(uid, memories);
-          } catch (saveErr) {}
-
-          // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
-          try {
-            const newChunk = conversationHistory.slice(lastSavedMessageIndex)
-              .filter(msg => msg.role !== 'system'); // Exclude system messages
-            if (newChunk.length > 0) {
-              const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
-              // Update sessionId if document was split
-              if (result.wasSplit) {
-                conversationSessionId = result.sessionId;
-                console.log('[conv] Realtime session split, continuing in:', conversationSessionId);
-              }
-              lastSavedMessageIndex = conversationHistory.length;
-              console.log('[conv] Realtime session appended', newChunk.length, 'messages');
-            }
-          } catch (e) {
-            console.error('[conv] Realtime append failed', e);
-          }
-        } catch (e) {}
-      };
-
       recognition.onresult = (event: any) => {
         const transcript = event.results[event.results.length - 1][0].transcript.trim();
         if (!transcript) return;
@@ -399,13 +453,15 @@ export async function setupRealtimeMode(
         // Add to conversation history
         conversationHistory.push({ role: 'user', content: transcript });
         userMsgCounter += 1;
-        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          maybeExtractMemories();
-        }
         
         // Update UI
         if (onConversationUpdate) {
           onConversationUpdate([...conversationHistory]);
+        }
+        
+        // Extract memories periodically (independent of conversation saving)
+        if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
+          extractMemories();
         }
       };
       
@@ -553,6 +609,9 @@ export async function setupRealtimeMode(
                   if (onConversationUpdate) {
                     onConversationUpdate([...conversationHistory]);
                   }
+                  
+                  // Save conversation after assistant message (independent of memory extraction)
+                  saveConversationChunk();
                 }
               }
             }
@@ -1168,6 +1227,9 @@ export async function setupSTTMode(
                 // Get streaming chat response (this will call sendTextChunk as chunks arrive)
                 const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
                 
+                // Save conversation after assistant response (independent of memory extraction)
+                saveConversationChunk();
+                
                 // Send remaining buffer and flush signal after streaming completes
                 if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
                   deepgramTtsWs.send(JSON.stringify({
@@ -1563,6 +1625,9 @@ export async function setupSTTMode(
                 }
 
                 const assistantMessage = await getChatResponseStream(transcriptObj.text, sendTextChunk);
+                
+                // Save conversation after assistant response (independent of memory extraction)
+                saveConversationChunk();
                 
                 if (textBuffer.length > 0 && deepgramTtsWs.readyState === WebSocket.OPEN) {
                   deepgramTtsWs.send(JSON.stringify({
@@ -3384,41 +3449,99 @@ export async function setupSTTMode(
     let userMsgCounter = 0;
     const extractEveryN = Number(process.env.NEXT_PUBLIC_MEMORY_EXTRACT_EVERY_N || 5);
     const backendUrlMem = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-    const maybeExtractMemories = async () => {
-      if (!uid) return;
+    
+    /**
+     * Save conversation chunk to Firebase.
+     * Independent of memory extraction - always runs after message exchange.
+     */
+    const saveConversationChunk = async (): Promise<void> => {
+      if (!uid || !conversationSessionId) {
+        console.warn('[conv] Cannot save conversation: missing uid or sessionId');
+        return;
+      }
+
       try {
-        const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
-        const existingTexts = existing.map(m => m.text);
+        // Get new messages since last save
+        const newChunk = conversationHistory.slice(lastSavedMessageIndex)
+          .filter(msg => msg.role !== 'system'); // Exclude system messages
+        
+        if (newChunk.length === 0) {
+          return; // Nothing new to save
+        }
+
+        const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
+        
+        // Update sessionId if document was split
+        if (result.wasSplit) {
+          conversationSessionId = result.sessionId;
+          console.log('[conv] STT session split, continuing in:', conversationSessionId);
+        }
+        
+        lastSavedMessageIndex = conversationHistory.length;
+        console.log('[conv] STT session saved', newChunk.length, 'messages');
+      } catch (e) {
+        console.error('[conv] Failed to save conversation chunk:', e);
+        // Don't throw - conversation saving failures shouldn't break the app
+      }
+    };
+
+    /**
+     * Extract and save memories from recent conversation.
+     * Independent of conversation saving - runs periodically.
+     */
+    const extractMemories = async (): Promise<void> => {
+      if (!uid) {
+        console.warn('[conv] Cannot extract memories: missing uid');
+        return;
+      }
+
+      try {
+        // Fetch existing memories (texts only) to help backend avoid duplicates
+        // Handle failures gracefully - use empty array as fallback
+        let existingTexts: string[] = [];
+        try {
+          const existing = await fetchTopMemories(uid, Number(process.env.NEXT_PUBLIC_MEMORY_LIMIT || 100));
+          existingTexts = existing.map(m => m.text);
+        } catch (fetchError) {
+          console.warn('[memories] Failed to fetch existing memories, continuing without them:', fetchError);
+          // Continue with empty existing memories - backend will still work
+        }
+
         const resp = await fetch(`${backendUrlMem}/api/memories/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: conversationHistory, top_k: 5, existing_memories: existingTexts }),
+          body: JSON.stringify({ 
+            messages: conversationHistory, 
+            top_k: 5, 
+            existing_memories: existingTexts 
+          }),
         });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const memories = (data.memories || []).map((m: any) => ({ text: crispifyMemoryText(m.text, userName), type: m.type, importance: m.importance }));
-        try {
-          await addMemoriesWithLimit(uid, memories);
-        } catch (saveErr) {}
 
-        // Append conversation chunk used for extraction (both user and assistant messages, exclude system)
-        try {
-          const newChunk = conversationHistory.slice(lastSavedMessageIndex)
-            .filter(msg => msg.role !== 'system'); // Exclude system messages
-          if (newChunk.length > 0) {
-            const result = await appendConversationChunk(uid, conversationSessionId, newChunk as any);
-            // Update sessionId if document was split
-            if (result.wasSplit) {
-              conversationSessionId = result.sessionId;
-              console.log('[conv] STT session split, continuing in:', conversationSessionId);
-            }
-            lastSavedMessageIndex = conversationHistory.length;
-            console.log('[conv] STT session appended', newChunk.length, 'messages');
-          }
-        } catch (e) {
-          console.error('[conv] STT append failed', e);
+        if (!resp.ok) {
+          const errorText = await resp.text().catch(() => 'Unknown error');
+          console.error('[memories] Memory extraction API failed:', resp.status, errorText);
+          return; // Exit early but don't throw - memory extraction is optional
         }
-      } catch (e) {}
+
+        const data = await resp.json();
+        const memories = (data.memories || []).map((m: any) => ({ 
+          text: crispifyMemoryText(m.text, userName), 
+          type: m.type, 
+          importance: m.importance 
+        }));
+
+        if (memories.length > 0) {
+          try {
+            await addMemoriesWithLimit(uid, memories);
+            console.log('[memories] Extracted and saved', memories.length, 'memories');
+          } catch (saveErr) {
+            console.error('[memories] Failed to save memories:', saveErr);
+          }
+        }
+      } catch (e) {
+        console.error('[memories] Memory extraction failed:', e);
+        // Don't throw - memory extraction failures shouldn't break the app
+      }
     };
 
     // Promise to wait for recognition to be ready (for greeting)
@@ -3628,9 +3751,12 @@ export async function setupSTTMode(
         const response = await getChatResponse(transcript);
         console.log('[TTT] Assistant response:', response);
 
-        // Check if we should extract memories after user message is processed
+        // Save conversation after assistant response (independent of memory extraction)
+        saveConversationChunk();
+
+        // Extract memories periodically (independent of conversation saving)
         if (extractEveryN > 0 && userMsgCounter % extractEveryN === 0) {
-          maybeExtractMemories();
+          extractMemories();
         }
 
         // Hide thinking indicator if using Deepgram TTS
