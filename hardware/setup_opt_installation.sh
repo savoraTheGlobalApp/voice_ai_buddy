@@ -57,10 +57,105 @@ echo "Creating state directory: $STATE_DIR..."
 mkdir -p "$STATE_DIR"
 chown -R "$CURRENT_USER:$CURRENT_USER" "$STATE_DIR"
 
-# Create staging directory
-echo "Creating staging directory: $STAGING_DIR..."
-mkdir -p "$STAGING_DIR"
-chown -R "$CURRENT_USER:$CURRENT_USER" "$STAGING_DIR"
+# Create staging directory and clone repository
+echo "Setting up staging directory: $STAGING_DIR..."
+
+# Check if staging directory already exists and has content
+if [ -d "$STAGING_DIR/.git" ]; then
+    echo "Staging directory already contains a git repository, skipping initial clone."
+    chown -R "$CURRENT_USER:$CURRENT_USER" "$STAGING_DIR"
+else
+    # Get repository URL from production directory
+    REPO_URL=""
+    if [ -d "$PRODUCTION_DIR/.git" ]; then
+        cd "$PRODUCTION_DIR"
+        REPO_URL=$(git remote get-url origin 2>/dev/null || echo "")
+        BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    fi
+    
+    if [ -n "$REPO_URL" ]; then
+        echo "Cloning repository to staging directory..."
+        echo "Repository: $REPO_URL"
+        echo "Branch: $BRANCH"
+        
+        # Remove staging directory if it exists but is empty/invalid
+        if [ -d "$STAGING_DIR" ]; then
+            rm -rf "$STAGING_DIR"
+        fi
+        
+        # Clone to staging (as root, but use user's SSH config if SSH URL)
+        if [[ "$REPO_URL" == git@* ]]; then
+            # For SSH URLs, we need to use the user's SSH keys
+            # Try to find SSH key in user's home directory
+            USER_HOME=$(eval echo ~$CURRENT_USER)
+            SSH_KEY=""
+            
+            # First, check for deploy keys (keys with "rpi", "voice", "deploy" in name)
+            # These are likely the correct keys for this use case
+            if [ -d "$USER_HOME/.ssh" ]; then
+                for key in "$USER_HOME/.ssh"/*; do
+                    if [ -f "$key" ] && [[ ! "$key" =~ \.(pub|bak)$ ]]; then
+                        keyname=$(basename "$key")
+                        if [[ "$keyname" =~ (rpi|voice|deploy) ]]; then
+                            SSH_KEY="$key"
+                            echo "Found deploy key: $keyname"
+                            break
+                        fi
+                    fi
+                done
+            fi
+            
+            # If no deploy key found, check for common SSH key locations
+            if [ -z "$SSH_KEY" ]; then
+                for key in "$USER_HOME/.ssh/id_ed25519_rpi_voice_toy" "$USER_HOME/.ssh/id_ed25519" "$USER_HOME/.ssh/id_rsa"; do
+                    if [ -f "$key" ]; then
+                        SSH_KEY="$key"
+                        break
+                    fi
+                done
+            fi
+            
+            if [ -n "$SSH_KEY" ]; then
+                echo "Using SSH key: $SSH_KEY"
+                # Clone using user's SSH key
+                GIT_SSH_COMMAND="ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
+                    git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$STAGING_DIR" 2>&1 || {
+                    echo -e "${YELLOW}Warning: Could not clone to staging directory automatically.${NC}"
+                    echo "SSH authentication may have failed. Error details above."
+                    echo "This is okay - the update service will clone it on first run."
+                    echo "Creating empty staging directory instead..."
+                    mkdir -p "$STAGING_DIR"
+                }
+            else
+                echo -e "${YELLOW}Warning: No SSH key found for user $CURRENT_USER.${NC}"
+                echo "Trying to clone anyway (may fail if SSH key is required)..."
+                git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$STAGING_DIR" 2>&1 || {
+                    echo -e "${YELLOW}Could not clone to staging directory automatically.${NC}"
+                    echo "This is okay - the update service will clone it on first run."
+                    echo "Creating empty staging directory instead..."
+                    mkdir -p "$STAGING_DIR"
+                }
+            fi
+        else
+            # For HTTPS URLs, clone normally
+            git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$STAGING_DIR" 2>&1 || {
+                echo -e "${YELLOW}Warning: Could not clone to staging directory automatically.${NC}"
+                echo "This is okay - the update service will clone it on first run."
+                echo "Creating empty staging directory instead..."
+                mkdir -p "$STAGING_DIR"
+            }
+        fi
+        
+        # Set ownership
+        chown -R "$CURRENT_USER:$CURRENT_USER" "$STAGING_DIR"
+        echo "Staging directory initialized."
+    else
+        echo -e "${YELLOW}Warning: Could not detect repository URL from production directory.${NC}"
+        echo "Creating empty staging directory - update service will clone on first run."
+        mkdir -p "$STAGING_DIR"
+        chown -R "$CURRENT_USER:$CURRENT_USER" "$STAGING_DIR"
+    fi
+fi
 
 # Initialize version file if production has git
 if [ -d "$PRODUCTION_DIR/.git" ]; then
