@@ -286,7 +286,56 @@ class UpdateManager:
             if self.staging_dir.exists():
                 self._log("Removing invalid staging directory for fresh clone...")
                 import shutil
-                shutil.rmtree(self.staging_dir)
+                import os
+                import stat
+                
+                # Try to fix permissions before removal
+                try:
+                    # Get current user (service user)
+                    current_uid = os.getuid()
+                    current_gid = os.getgid()
+                    
+                    # Change ownership recursively to current user
+                    for root, dirs, files in os.walk(self.staging_dir):
+                        try:
+                            os.chown(root, current_uid, current_gid)
+                        except (OSError, PermissionError):
+                            pass
+                        for d in dirs:
+                            try:
+                                os.chown(os.path.join(root, d), current_uid, current_gid)
+                            except (OSError, PermissionError):
+                                pass
+                        for f in files:
+                            try:
+                                file_path = os.path.join(root, f)
+                                os.chown(file_path, current_uid, current_gid)
+                                # Make files writable
+                                os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                            except (OSError, PermissionError):
+                                pass
+                    
+                    # Make directories writable
+                    os.chmod(self.staging_dir, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                except Exception as e:
+                    logger.warning(f"Could not fix permissions before removal: {e}")
+                
+                # Try to remove
+                try:
+                    shutil.rmtree(self.staging_dir)
+                except PermissionError as e:
+                    logger.error(f"Permission denied removing staging directory: {e}")
+                    import pwd
+                    try:
+                        username = pwd.getpwuid(os.getuid()).pw_name
+                        logger.error(f"Please manually fix permissions: sudo chown -R {username}:{username} {self.staging_dir}")
+                    except Exception:
+                        logger.error(f"Please manually fix permissions: sudo chown -R $(whoami):$(whoami) {self.staging_dir}")
+                    logger.error(f"Or remove manually: sudo rm -rf {self.staging_dir}")
+                    return False
+                except Exception as e:
+                    logger.error(f"Failed to remove staging directory: {e}")
+                    return False
             
             self._log("Cloning repository to staging...")
             self.staging_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -423,8 +472,42 @@ class UpdateManager:
         try:
             if self.staging_dir.exists():
                 import shutil
+                import os
+                import stat
+                
+                # Try to fix permissions before removal
+                try:
+                    current_uid = os.getuid()
+                    current_gid = os.getgid()
+                    
+                    # Change ownership recursively
+                    for root, dirs, files in os.walk(self.staging_dir):
+                        try:
+                            os.chown(root, current_uid, current_gid)
+                        except (OSError, PermissionError):
+                            pass
+                        for d in dirs:
+                            try:
+                                os.chown(os.path.join(root, d), current_uid, current_gid)
+                            except (OSError, PermissionError):
+                                pass
+                        for f in files:
+                            try:
+                                file_path = os.path.join(root, f)
+                                os.chown(file_path, current_uid, current_gid)
+                                os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                            except (OSError, PermissionError):
+                                pass
+                    
+                    os.chmod(self.staging_dir, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                except Exception:
+                    pass  # Ignore permission fix errors during cleanup
+                
                 shutil.rmtree(self.staging_dir)
                 self._log("Cleaned up staging directory")
+        except PermissionError as e:
+            logger.warning(f"Permission denied cleaning up staging directory: {e}")
+            logger.warning(f"Please manually fix: sudo chown -R $(whoami):$(whoami) {self.staging_dir}")
         except Exception as e:
             logger.warning(f"Failed to cleanup staging: {e}")
     
