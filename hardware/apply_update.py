@@ -53,15 +53,15 @@ def apply_update():
                     state_file.write_text("failed")
                     return False
             elif STAGING_DIR.exists():
-                # Backup doesn't exist, but staging does - move staging to production
-                logger.info("Production missing, moving staging to production...")
+                # Backup doesn't exist, but staging does - copy staging to production
+                logger.info("Production missing, copying staging to production...")
                 try:
-                    shutil.move(str(STAGING_DIR), str(PRODUCTION_DIR))
-                    logger.info("Successfully moved staging to production")
+                    shutil.copytree(str(STAGING_DIR), str(PRODUCTION_DIR))
+                    logger.info("Successfully copied staging to production")
                     state_file.write_text("idle")
                     return True
                 except Exception as e:
-                    logger.error(f"Failed to move staging to production: {e}")
+                    logger.error(f"Failed to copy staging to production: {e}")
                     state_file.write_text("failed")
                     return False
             else:
@@ -74,9 +74,7 @@ def apply_update():
             if BACKUP_DIR.exists():
                 logger.info("Removing old backup...")
                 shutil.rmtree(BACKUP_DIR)
-            if STAGING_DIR.exists():
-                logger.info("Removing staging directory...")
-                shutil.rmtree(STAGING_DIR)
+            # Don't remove staging directory - it's persistent and needed for future updates
             state_file.write_text("idle")
             return True
     
