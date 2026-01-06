@@ -165,11 +165,20 @@ class UpdateManager:
         Returns:
             Tuple of (exit_code, stdout, stderr)
         """
+        import os
+        
+        # Get environment variables, ensuring GIT_SSH_COMMAND is passed through
+        env = os.environ.copy()
+        git_ssh_command = env.get("GIT_SSH_COMMAND", "")
+        if git_ssh_command:
+            logger.debug(f"Using GIT_SSH_COMMAND: {git_ssh_command}")
+        
         try:
             process = await asyncio.wait_for(
                 asyncio.create_subprocess_exec(
                     *command,
                     cwd=str(cwd),
+                    env=env,  # Explicitly pass environment
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 ),
@@ -225,7 +234,21 @@ class UpdateManager:
             True if successful, False otherwise
         """
         try:
+            # Check if staging directory exists and is a valid git repository
+            is_valid_git_repo = False
             if self.staging_dir.exists():
+                git_dir = self.staging_dir / ".git"
+                if git_dir.exists() and git_dir.is_dir():
+                    # Verify it's actually a git repo by checking for HEAD or config
+                    if (git_dir / "HEAD").exists() or (git_dir / "config").exists():
+                        is_valid_git_repo = True
+                        self._log("Staging directory exists and is a valid git repository")
+                    else:
+                        logger.warning("Staging directory exists but .git is invalid, will clone fresh")
+                else:
+                    logger.warning("Staging directory exists but is not a git repository, will clone fresh")
+            
+            if is_valid_git_repo:
                 # Update existing staging directory
                 self._log("Updating staging directory...")
                 
@@ -238,32 +261,45 @@ class UpdateManager:
                 
                 if exit_code != 0:
                     logger.error(f"Git fetch failed: {stderr}")
-                    return False
+                    # If fetch fails, try cloning fresh
+                    logger.info("Attempting to clone fresh due to fetch failure...")
+                    import shutil
+                    shutil.rmtree(self.staging_dir)
+                    is_valid_git_repo = False
                 
-                # Reset to latest commit
-                exit_code, stdout, stderr = await self._run_git_command(
-                    ["git", "reset", "--hard", f"origin/{self.branch}"],
-                    cwd=self.staging_dir,
-                    timeout=60
-                )
-                
-                if exit_code != 0:
-                    logger.error(f"Git reset failed: {stderr}")
-                    return False
-            else:
-                # Clone fresh
-                self._log("Cloning repository to staging...")
-                self.staging_dir.parent.mkdir(parents=True, exist_ok=True)
-                
-                exit_code, stdout, stderr = await self._run_git_command(
-                    ["git", "clone", "--branch", self.branch, "--depth", "1", self.repo_url, str(self.staging_dir)],
-                    cwd=self.staging_dir.parent,
-                    timeout=300
-                )
-                
-                if exit_code != 0:
-                    logger.error(f"Git clone failed: {stderr}")
-                    return False
+                if is_valid_git_repo:
+                    # Reset to latest commit
+                    exit_code, stdout, stderr = await self._run_git_command(
+                        ["git", "reset", "--hard", f"origin/{self.branch}"],
+                        cwd=self.staging_dir,
+                        timeout=60
+                    )
+                    
+                    if exit_code != 0:
+                        logger.error(f"Git reset failed: {stderr}")
+                        return False
+                    else:
+                        # Successfully updated
+                        return True
+            
+            # Clone fresh (either doesn't exist or is invalid)
+            if self.staging_dir.exists():
+                self._log("Removing invalid staging directory for fresh clone...")
+                import shutil
+                shutil.rmtree(self.staging_dir)
+            
+            self._log("Cloning repository to staging...")
+            self.staging_dir.parent.mkdir(parents=True, exist_ok=True)
+            
+            exit_code, stdout, stderr = await self._run_git_command(
+                ["git", "clone", "--branch", self.branch, "--depth", "1", self.repo_url, str(self.staging_dir)],
+                cwd=self.staging_dir.parent,
+                timeout=300
+            )
+            
+            if exit_code != 0:
+                logger.error(f"Git clone failed: {stderr}")
+                return False
             
             # Verify staging directory has the hardware/rpi_client structure
             hardware_dir = self.staging_dir / "hardware"
