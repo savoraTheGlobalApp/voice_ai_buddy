@@ -110,6 +110,41 @@ def apply_update():
         logger.info("Copying staging to production...")
         shutil.copytree(str(STAGING_DIR), str(PRODUCTION_DIR))
         
+        # Fix ownership and permissions of production directory
+        # Get the user who will run the service (from environment or current user)
+        import os
+        import pwd
+        try:
+            # Try to get the service user from environment or current process
+            service_user = os.getenv("SUDO_USER") or os.getenv("USER")
+            if not service_user:
+                # Get from current process
+                service_user = pwd.getpwuid(os.getuid()).pw_name
+            service_uid = pwd.getpwnam(service_user).pw_uid
+            service_gid = pwd.getpwnam(service_user).pw_gid
+            
+            logger.info(f"Setting ownership of production directory to {service_user}...")
+            # Recursively change ownership
+            for root, dirs, files in os.walk(PRODUCTION_DIR):
+                try:
+                    os.chown(root, service_uid, service_gid)
+                except (OSError, PermissionError):
+                    pass
+                for d in dirs:
+                    try:
+                        os.chown(os.path.join(root, d), service_uid, service_gid)
+                    except (OSError, PermissionError):
+                        pass
+                for f in files:
+                    try:
+                        os.chown(os.path.join(root, f), service_uid, service_gid)
+                    except (OSError, PermissionError):
+                        pass
+            logger.info("Ownership set successfully")
+        except Exception as e:
+            logger.warning(f"Could not set ownership automatically: {e}")
+            logger.warning(f"Please manually fix: sudo chown -R {service_user}:{service_user} {PRODUCTION_DIR}")
+        
         # Get new version
         try:
             result = subprocess.run(
