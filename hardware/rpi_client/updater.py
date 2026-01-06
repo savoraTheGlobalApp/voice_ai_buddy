@@ -261,11 +261,10 @@ class UpdateManager:
                 
                 if exit_code != 0:
                     logger.error(f"Git fetch failed: {stderr}")
-                    # If fetch fails, try cloning fresh
+                    # If fetch fails, try cloning fresh (clear contents, not directory)
                     logger.info("Attempting to clone fresh due to fetch failure...")
-                    import shutil
-                    shutil.rmtree(self.staging_dir)
                     is_valid_git_repo = False
+                    # Clear contents will be handled below
                 
                 if is_valid_git_repo:
                     # Reset to latest commit
@@ -283,71 +282,144 @@ class UpdateManager:
                         return True
             
             # Clone fresh (either doesn't exist or is invalid)
-            if self.staging_dir.exists():
-                self._log("Removing invalid staging directory for fresh clone...")
-                import shutil
+            # Note: We can't create/delete directories in /opt/, so we work with existing directory
+            if not self.staging_dir.exists():
                 import os
-                import stat
-                
-                # Try to fix permissions before removal
+                import pwd
                 try:
-                    # Get current user (service user)
-                    current_uid = os.getuid()
-                    current_gid = os.getgid()
-                    
-                    # Change ownership recursively to current user
-                    for root, dirs, files in os.walk(self.staging_dir):
-                        try:
-                            os.chown(root, current_uid, current_gid)
-                        except (OSError, PermissionError):
-                            pass
-                        for d in dirs:
-                            try:
-                                os.chown(os.path.join(root, d), current_uid, current_gid)
-                            except (OSError, PermissionError):
-                                pass
-                        for f in files:
-                            try:
-                                file_path = os.path.join(root, f)
-                                os.chown(file_path, current_uid, current_gid)
-                                # Make files writable
-                                os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-                            except (OSError, PermissionError):
-                                pass
-                    
-                    # Make directories writable
+                    username = pwd.getpwuid(os.getuid()).pw_name
+                except Exception:
+                    username = "service_user"
+                logger.error(f"Staging directory {self.staging_dir} does not exist")
+                logger.error(f"Please create it manually: sudo mkdir -p {self.staging_dir}")
+                logger.error(f"Then set ownership: sudo chown -R {username}:{username} {self.staging_dir}")
+                return False
+            
+            # Staging directory exists - remove contents instead of directory itself
+            # (we can't delete the directory in /opt/, but we can remove its contents)
+            self._log("Clearing staging directory contents for fresh clone...")
+            import shutil
+            import os
+            import stat
+            
+            # Try to fix permissions and remove contents
+            try:
+                current_uid = os.getuid()
+                current_gid = os.getgid()
+                
+                # Change ownership of directory itself
+                try:
+                    os.chown(self.staging_dir, current_uid, current_gid)
                     os.chmod(self.staging_dir, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-                except Exception as e:
-                    logger.warning(f"Could not fix permissions before removal: {e}")
+                except (OSError, PermissionError):
+                    pass
                 
-                # Try to remove
-                try:
-                    shutil.rmtree(self.staging_dir)
-                except PermissionError as e:
-                    logger.error(f"Permission denied removing staging directory: {e}")
-                    import pwd
+                # Remove all contents
+                for item in self.staging_dir.iterdir():
                     try:
-                        username = pwd.getpwuid(os.getuid()).pw_name
-                        logger.error(f"Please manually fix permissions: sudo chown -R {username}:{username} {self.staging_dir}")
-                    except Exception:
-                        logger.error(f"Please manually fix permissions: sudo chown -R $(whoami):$(whoami) {self.staging_dir}")
-                    logger.error(f"Or remove manually: sudo rm -rf {self.staging_dir}")
-                    return False
-                except Exception as e:
-                    logger.error(f"Failed to remove staging directory: {e}")
-                    return False
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                    except (PermissionError, OSError) as e:
+                        # Try to fix permissions first
+                        try:
+                            if item.is_dir():
+                                for root, dirs, files in os.walk(item):
+                                    try:
+                                        os.chown(root, current_uid, current_gid)
+                                    except (OSError, PermissionError):
+                                        pass
+                                    for d in dirs:
+                                        try:
+                                            os.chown(os.path.join(root, d), current_uid, current_gid)
+                                        except (OSError, PermissionError):
+                                            pass
+                                    for f in files:
+                                        try:
+                                            file_path = os.path.join(root, f)
+                                            os.chown(file_path, current_uid, current_gid)
+                                            os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                                        except (OSError, PermissionError):
+                                            pass
+                                shutil.rmtree(item)
+                            else:
+                                os.chown(item, current_uid, current_gid)
+                                os.chmod(item, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                                item.unlink()
+                        except Exception:
+                            logger.warning(f"Could not remove {item}, will try to clone over it")
+            except Exception as e:
+                logger.warning(f"Could not clear staging directory contents: {e}")
+                # Continue anyway - git clone might work if directory is empty enough
             
             self._log("Cloning repository to staging...")
-            self.staging_dir.parent.mkdir(parents=True, exist_ok=True)
+            # Since we can't create/delete directories in /opt/, we use git init + fetch
+            # instead of git clone, working within the existing staging directory
             
+            # Clear existing staging directory contents
+            try:
+                for item in self.staging_dir.iterdir():
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                    except Exception as e:
+                        logger.warning(f"Could not remove {item}: {e}")
+            except Exception as e:
+                logger.warning(f"Could not clear staging directory: {e}")
+            
+            # Initialize git repository in staging directory
             exit_code, stdout, stderr = await self._run_git_command(
-                ["git", "clone", "--branch", self.branch, "--depth", "1", self.repo_url, str(self.staging_dir)],
-                cwd=self.staging_dir.parent,
-                timeout=300
+                ["git", "init"],
+                cwd=self.staging_dir,
+                timeout=30
             )
             
             if exit_code != 0:
-                logger.error(f"Git clone failed: {stderr}")
+                logger.error(f"Git init failed: {stderr}")
+                return False
+            
+            # Add remote
+            exit_code, stdout, stderr = await self._run_git_command(
+                ["git", "remote", "add", "origin", self.repo_url],
+                cwd=self.staging_dir,
+                timeout=10
+            )
+            
+            # If remote already exists, set URL instead
+            if exit_code != 0 and "already exists" in stderr.lower():
+                exit_code, stdout, stderr = await self._run_git_command(
+                    ["git", "remote", "set-url", "origin", self.repo_url],
+                    cwd=self.staging_dir,
+                    timeout=10
+                )
+            
+            if exit_code != 0:
+                logger.error(f"Failed to set remote: {stderr}")
+                return False
+            
+            # Fetch and checkout
+            exit_code, stdout, stderr = await self._run_git_command(
+                ["git", "fetch", "origin", self.branch, "--depth", "1"],
+                cwd=self.staging_dir,
+                timeout=120
+            )
+            
+            if exit_code != 0:
+                logger.error(f"Git fetch failed: {stderr}")
+                return False
+            
+            # Checkout the branch
+            exit_code, stdout, stderr = await self._run_git_command(
+                ["git", "checkout", "-f", f"origin/{self.branch}"],
+                cwd=self.staging_dir,
+                timeout=60
+            )
+            
+            if exit_code != 0:
+                logger.error(f"Git checkout failed: {stderr}")
                 return False
             
             # Verify staging directory has the hardware/rpi_client structure
