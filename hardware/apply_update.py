@@ -69,6 +69,11 @@ def _ensure_venv_and_dependencies(production_dir: Path) -> bool:
     """
     Ensure a virtualenv exists under hardware/venv and that requirements are installed.
 
+    This function:
+    - Creates venv if it doesn't exist
+    - Always runs pip install to sync dependencies with requirements.txt
+    - Handles venv corruption by recreating if needed
+
     Returns:
         True on success, False on hard failure (e.g. venv creation or pip install fails).
     """
@@ -76,14 +81,41 @@ def _ensure_venv_and_dependencies(production_dir: Path) -> bool:
     requirements_file = hardware_dir / "requirements.txt"
     venv_dir = hardware_dir / "venv"
     venv_bin = venv_dir / "bin" / "pip"
+    venv_python = venv_dir / "bin" / "python"
 
     if not requirements_file.exists():
         logger.info("requirements.txt not found, skipping dependency installation")
         return True
 
-    # Create venv if missing
-    if not venv_bin.exists():
-        logger.info("Virtual environment not found, creating new one...")
+    # Create venv if missing or corrupted
+    venv_needs_creation = False
+    if not venv_bin.exists() or not venv_python.exists():
+        venv_needs_creation = True
+        logger.info("Virtual environment not found or corrupted, creating new one...")
+    else:
+        # Verify venv is actually working by checking if pip can run
+        try:
+            result = subprocess.run(
+                [str(venv_bin), "--version"],
+                cwd=hardware_dir,
+                timeout=10,
+                capture_output=True,
+                check=True,
+            )
+            logger.debug(f"Existing venv verified: {result.stdout.decode().strip()}")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            logger.warning("Existing venv appears corrupted, will recreate")
+            venv_needs_creation = True
+
+    if venv_needs_creation:
+        # Remove corrupted venv if it exists
+        if venv_dir.exists():
+            try:
+                shutil.rmtree(venv_dir)
+                logger.debug("Removed corrupted venv directory")
+            except Exception as e:
+                logger.warning(f"Could not remove corrupted venv: {e}")
+        
         try:
             subprocess.run(
                 ["python3", "-m", "venv", str(venv_dir)],
@@ -99,14 +131,17 @@ def _ensure_venv_and_dependencies(production_dir: Path) -> bool:
             logger.error(f"Failed to create virtual environment: {e}")
             return False
 
-    # Install / update dependencies
+    # Always install/update dependencies to sync with requirements.txt
+    # This ensures new dependencies are installed and versions match requirements
     logger.info("Installing/updating dependencies from requirements.txt...")
     try:
-        subprocess.run(
+        result = subprocess.run(
             [str(venv_bin), "install", "-r", str(requirements_file), "--quiet"],
             cwd=hardware_dir,
             timeout=300,
             check=True,
+            capture_output=True,
+            text=True,
         )
         logger.info("Dependencies updated successfully")
         return True
@@ -115,10 +150,12 @@ def _ensure_venv_and_dependencies(production_dir: Path) -> bool:
         return False
     except subprocess.CalledProcessError as e:
         logger.error(f"Dependency installation failed: {e}")
+        if e.stderr:
+            logger.error(f"Error output: {e.stderr}")
         return False
 
 
-def _clear_directory_contents(directory: Path) -> None:
+def _clear_directory_contents(directory: Path, preserve_patterns: list[str] = None) -> None:
     """
     Remove all contents of a directory without deleting the directory itself.
     
@@ -127,11 +164,46 @@ def _clear_directory_contents(directory: Path) -> None:
     
     Args:
         directory: Path to directory whose contents should be cleared
+        preserve_patterns: List of relative paths/patterns to preserve (e.g., ['hardware/venv', 'hardware/.env'])
     """
     if not directory.exists() or not directory.is_dir():
         return
     
     import stat
+    
+    # Default patterns to preserve (venv and common local files)
+    if preserve_patterns is None:
+        preserve_patterns = [
+            'hardware/venv',
+            'hardware/.env',
+            'hardware/.env.local',
+        ]
+    
+    def should_preserve(item_path: Path) -> bool:
+        """Check if an item should be preserved based on preserve_patterns."""
+        # Get relative path from directory
+        try:
+            rel_path = item_path.relative_to(directory)
+            rel_path_str = str(rel_path).replace('\\', '/')  # Normalize path separators
+            
+            # Check if any preserve pattern matches
+            for pattern in preserve_patterns:
+                # Exact match
+                if rel_path_str == pattern:
+                    return True
+                # Prefix match (e.g., 'hardware/venv' matches 'hardware/venv/bin/python')
+                if rel_path_str.startswith(pattern + '/'):
+                    return True
+                # Check parent directories (e.g., 'hardware/venv' matches 'hardware/venv')
+                pattern_parts = pattern.split('/')
+                rel_parts = rel_path_str.split('/')
+                if len(rel_parts) >= len(pattern_parts):
+                    if '/'.join(rel_parts[:len(pattern_parts)]) == pattern:
+                        return True
+        except ValueError:
+            # Path not relative to directory, don't preserve
+            pass
+        return False
     
     try:
         # Get current user for permission fixing
@@ -145,8 +217,12 @@ def _clear_directory_contents(directory: Path) -> None:
         except (OSError, PermissionError):
             pass
         
-        # Remove all contents
+        # Remove all contents (except preserved items)
         for item in directory.iterdir():
+            # Skip preserved items
+            if should_preserve(item):
+                logger.debug(f"Preserving {item} during directory clear")
+                continue
             try:
                 if item.is_dir():
                     shutil.rmtree(item)
@@ -342,9 +418,13 @@ def apply_update():
             logger.info("Backup created")
         
         # Clear production directory contents (cannot delete directory itself in /opt/)
+        # Preserve venv and local config files during clear
         if PRODUCTION_DIR.exists():
-            logger.info("Clearing production directory contents...")
-            _clear_directory_contents(PRODUCTION_DIR)
+            logger.info("Clearing production directory contents (preserving venv and local files)...")
+            _clear_directory_contents(
+                PRODUCTION_DIR,
+                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
+            )
         
         # Ensure production directory exists (should already exist, but check)
         if not PRODUCTION_DIR.exists():
@@ -363,7 +443,10 @@ def apply_update():
             if BACKUP_DIR.exists():
                 logger.info("Rolling back: Restoring production from backup...")
                 try:
-                    _clear_directory_contents(PRODUCTION_DIR)
+                    _clear_directory_contents(
+                PRODUCTION_DIR,
+                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
+            )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful - production restored")
                 except Exception as rollback_error:
@@ -409,7 +492,10 @@ def apply_update():
                 logger.info("Rolling back due to venv/deps failure...")
                 try:
                     if PRODUCTION_DIR.exists():
-                        _clear_directory_contents(PRODUCTION_DIR)
+                        _clear_directory_contents(
+                PRODUCTION_DIR,
+                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
+            )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful - production restored")
                 except Exception as rollback_error:
@@ -438,7 +524,10 @@ def apply_update():
             else:
                 logger.info("Rolling back to previous version...")
                 try:
-                    _clear_directory_contents(PRODUCTION_DIR)
+                    _clear_directory_contents(
+                PRODUCTION_DIR,
+                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
+            )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful")
                 except Exception as rollback_error:
