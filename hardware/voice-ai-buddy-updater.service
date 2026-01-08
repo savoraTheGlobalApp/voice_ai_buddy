@@ -10,11 +10,11 @@ Type=simple
 User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=REPLACE_HARDWARE_DIR
-Environment="PATH=REPLACE_VENV_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="GITHUB_REPO_URL=REPLACE_REPO_URL"
 Environment="GITHUB_BRANCH=REPLACE_BRANCH"
 Environment="GIT_SSH_COMMAND=REPLACE_GIT_SSH_COMMAND"
-ExecStart=REPLACE_VENV_BIN/python -m rpi_client.update_daemon
+ExecStart=/usr/bin/python3 -m rpi_client.update_daemon
 Restart=always
 RestartSec=30
 StandardOutput=journal
