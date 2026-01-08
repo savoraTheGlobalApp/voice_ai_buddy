@@ -41,19 +41,22 @@ if [ ! -d "$PRODUCTION_DIR" ]; then
     exit 1
 fi
 
-# Check if virtual environment exists
-if [ ! -d "$HARDWARE_DIR/venv" ]; then
-    echo -e "${RED}Error: Virtual environment not found at $HARDWARE_DIR/venv${NC}"
-    echo "Please run setup.sh first to create the virtual environment."
+# Check if system Python is available
+echo "Verifying system Python installation..."
+if ! /usr/bin/python3 --version > /dev/null 2>&1; then
+    echo -e "${RED}Error: System Python3 not found at /usr/bin/python3${NC}"
+    echo "Please install Python3: sudo apt-get install python3"
     exit 1
 fi
 
-# Check if Python module can be imported
-echo "Verifying Python installation..."
-if ! "$HARDWARE_DIR/venv/bin/python" -c "import rpi_client" 2>/dev/null; then
-    echo -e "${RED}Error: Cannot import rpi_client module${NC}"
-    echo "Please ensure the virtual environment is set up correctly."
-    exit 1
+# Check if rpi_client module can be imported (using system Python)
+echo "Verifying rpi_client module..."
+# Add hardware directory to PYTHONPATH for import check
+export PYTHONPATH="$HARDWARE_DIR:$PYTHONPATH"
+if ! /usr/bin/python3 -c "import rpi_client" 2>/dev/null; then
+    echo -e "${YELLOW}Warning: Cannot import rpi_client module with system Python${NC}"
+    echo "This is okay - the updater only needs standard library modules."
+    echo "The rpi_client module will be available after the update is applied."
 fi
 
 # Get GitHub repository URL
@@ -148,7 +151,6 @@ fi
 # Create systemd service file for updater
 SERVICE_FILE="$HARDWARE_DIR/voice-ai-buddy-updater.service"
 TEMP_SERVICE_FILE="/tmp/voice-ai-buddy-updater.service.$$"
-VENV_BIN="$HARDWARE_DIR/venv/bin"
 
 echo ""
 echo "Creating systemd service file for updater..."
@@ -162,8 +164,6 @@ if [ -z "$GIT_SSH_COMMAND" ]; then
     # Remove the GIT_SSH_COMMAND line for HTTPS URLs
     sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
         -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
-        -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
-        -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
         -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
         -e "s|REPLACE_BRANCH|$BRANCH|g" \
         -e "/REPLACE_GIT_SSH_COMMAND/d" \
@@ -172,8 +172,6 @@ else
     # Include GIT_SSH_COMMAND for SSH URLs
     sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
         -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
-        -e "s|REPLACE_PRODUCTION_DIR|$PRODUCTION_DIR|g" \
-        -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
         -e "s|REPLACE_REPO_URL|$REPO_URL|g" \
         -e "s|REPLACE_BRANCH|$BRANCH|g" \
         -e "s|REPLACE_GIT_SSH_COMMAND|$ESCAPED_GIT_SSH_COMMAND|g" \
