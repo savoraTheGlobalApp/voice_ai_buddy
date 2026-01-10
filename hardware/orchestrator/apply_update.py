@@ -186,6 +186,9 @@ def _swap_version(new_version: Path) -> bool:
 
 def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> None:
     """Copy directory contents excluding specified patterns."""
+    # Ensure destination directory exists
+    dest.mkdir(parents=True, exist_ok=True)
+    
     def should_exclude(item_path: Path) -> bool:
         try:
             rel_path = item_path.relative_to(source)
@@ -211,11 +214,23 @@ def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> No
             else:
                 dest_item.unlink()
         
+        # Ensure parent directory exists (especially for nested files)
+        if item.is_file():
+            dest_item.parent.mkdir(parents=True, exist_ok=True)
+        
         # Copy item
-        if item.is_dir():
-            shutil.copytree(item, dest_item)
-        else:
-            shutil.copy2(item, dest_item)
+        try:
+            if item.is_dir():
+                shutil.copytree(item, dest_item)
+            else:
+                shutil.copy2(item, dest_item)
+        except FileNotFoundError as e:
+            # If parent directory still doesn't exist, create it and retry
+            dest_item.parent.mkdir(parents=True, exist_ok=True)
+            if item.is_dir():
+                shutil.copytree(item, dest_item)
+            else:
+                shutil.copy2(item, dest_item)
 
 
 def _ensure_shared_venv() -> bool:
@@ -361,14 +376,26 @@ def _apply_update() -> bool:
     # Remove target version if exists
     if target_version.exists():
         logger.info(f"Removing old {target_version.name}...")
-        shutil.rmtree(target_version)
+        try:
+            shutil.rmtree(target_version)
+        except Exception as e:
+            logger.warning(f"Error removing old {target_version.name}: {e}, continuing anyway")
+    
+    # Ensure target version directory exists and is empty
+    target_version.mkdir(parents=True, exist_ok=True)
     
     # Copy staging to target version (excluding venv and .env)
     logger.info(f"Copying staging to {target_version.name}...")
     try:
         _copy_excluding(STAGING_DIR, target_version, ['hardware/venv', 'hardware/.env'])
     except Exception as e:
-        logger.error(f"Failed to copy staging: {e}")
+        logger.error(f"Failed to copy staging: {e}", exc_info=True)
+        # Clean up partial copy
+        if target_version.exists():
+            try:
+                shutil.rmtree(target_version)
+            except Exception:
+                pass
         _atomic_write_state("failed")
         return False
     
