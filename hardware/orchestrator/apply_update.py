@@ -189,6 +189,19 @@ def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> No
     # Ensure destination directory exists
     dest.mkdir(parents=True, exist_ok=True)
     
+    # Fix ownership of destination directory if possible
+    try:
+        import os
+        import pwd
+        service_user = _detect_service_user()
+        try:
+            user_info = pwd.getpwnam(service_user)
+            os.chown(dest, user_info.pw_uid, user_info.pw_gid)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    
     def should_exclude(item_path: Path) -> bool:
         try:
             rel_path = item_path.relative_to(source)
@@ -200,6 +213,55 @@ def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> No
             pass
         return False
     
+    def remove_with_permissions(path: Path) -> None:
+        """Remove file/directory, fixing permissions if needed."""
+        if not path.exists():
+            return
+        
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except PermissionError:
+            # Try to fix permissions first
+            try:
+                import os
+                import pwd
+                import stat
+                service_user = _detect_service_user()
+                try:
+                    user_info = pwd.getpwnam(service_user)
+                    if path.is_dir():
+                        # Fix permissions recursively
+                        for root, dirs, files in os.walk(path):
+                            os.chown(root, user_info.pw_uid, user_info.pw_gid)
+                            os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                            for d in dirs:
+                                os.chown(os.path.join(root, d), user_info.pw_uid, user_info.pw_gid)
+                                os.chmod(os.path.join(root, d), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                            for f in files:
+                                file_path = os.path.join(root, f)
+                                os.chown(file_path, user_info.pw_uid, user_info.pw_gid)
+                                os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                    else:
+                        os.chown(path, user_info.pw_uid, user_info.pw_gid)
+                        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                    # Retry removal
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+                except Exception:
+                    # If we can't fix permissions, try as root
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+            except Exception as e:
+                logger.warning(f"Could not remove {path}: {e}, will try to overwrite")
+                # Continue - we'll try to overwrite it
+    
     for item in source.iterdir():
         if should_exclude(item):
             logger.debug(f"Skipping {item.name} (excluded pattern)")
@@ -207,16 +269,25 @@ def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> No
         
         dest_item = dest / item.name
         
-        # Remove destination if exists
+        # Remove destination if exists (with permission handling)
         if dest_item.exists():
-            if dest_item.is_dir():
-                shutil.rmtree(dest_item)
-            else:
-                dest_item.unlink()
+            remove_with_permissions(dest_item)
         
         # Ensure parent directory exists (especially for nested files)
         if item.is_file():
             dest_item.parent.mkdir(parents=True, exist_ok=True)
+            # Fix ownership of parent
+            try:
+                import os
+                import pwd
+                service_user = _detect_service_user()
+                try:
+                    user_info = pwd.getpwnam(service_user)
+                    os.chown(dest_item.parent, user_info.pw_uid, user_info.pw_gid)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         
         # Copy item
         try:
@@ -224,6 +295,27 @@ def _copy_excluding(source: Path, dest: Path, exclude_patterns: list[str]) -> No
                 shutil.copytree(item, dest_item)
             else:
                 shutil.copy2(item, dest_item)
+            
+            # Fix ownership after copy
+            try:
+                import os
+                import pwd
+                service_user = _detect_service_user()
+                try:
+                    user_info = pwd.getpwnam(service_user)
+                    if dest_item.is_dir():
+                        for root, dirs, files in os.walk(dest_item):
+                            os.chown(root, user_info.pw_uid, user_info.pw_gid)
+                            for d in dirs:
+                                os.chown(os.path.join(root, d), user_info.pw_uid, user_info.pw_gid)
+                            for f in files:
+                                os.chown(os.path.join(root, f), user_info.pw_uid, user_info.pw_gid)
+                    else:
+                        os.chown(dest_item, user_info.pw_uid, user_info.pw_gid)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         except FileNotFoundError as e:
             # If parent directory still doesn't exist, create it and retry
             dest_item.parent.mkdir(parents=True, exist_ok=True)
@@ -388,6 +480,35 @@ def _apply_update() -> bool:
     if target_version.exists():
         logger.info(f"Removing old {target_version.name}...")
         try:
+            # Fix permissions before removing
+            import os
+            import pwd
+            import stat
+            service_user = _detect_service_user()
+            try:
+                user_info = pwd.getpwnam(service_user)
+                # Fix permissions recursively
+                for root, dirs, files in os.walk(target_version):
+                    try:
+                        os.chown(root, user_info.pw_uid, user_info.pw_gid)
+                        os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                    except Exception:
+                        pass
+                    for d in dirs:
+                        try:
+                            os.chown(os.path.join(root, d), user_info.pw_uid, user_info.pw_gid)
+                            os.chmod(os.path.join(root, d), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                        except Exception:
+                            pass
+                    for f in files:
+                        try:
+                            file_path = os.path.join(root, f)
+                            os.chown(file_path, user_info.pw_uid, user_info.pw_gid)
+                            os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             shutil.rmtree(target_version)
         except Exception as e:
             logger.warning(f"Error removing old {target_version.name}: {e}, continuing anyway")
