@@ -254,17 +254,23 @@ class UpdateManager:
                 
                 # First, fetch all branches to ensure we have the latest refs
                 # This is important when switching branches
+                # Use explicit refspec to ensure all remote refs are updated
                 exit_code, stdout, stderr = await self._run_git_command(
-                    ["git", "fetch", "origin", "--prune"],
+                    ["git", "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "--prune"],
                     cwd=self.staging_dir,
                     timeout=120
                 )
                 
                 if exit_code != 0:
                     logger.warning(f"Git fetch all failed: {stderr}, trying specific branch...")
-                    # Continue to try specific branch fetch
+                    # Fallback to simple fetch
+                    exit_code, stdout, stderr = await self._run_git_command(
+                        ["git", "fetch", "origin", "--prune"],
+                        cwd=self.staging_dir,
+                        timeout=120
+                    )
                 
-                # Fetch the specific branch
+                # Also fetch the specific branch to ensure it's up to date
                 exit_code, stdout, stderr = await self._run_git_command(
                     ["git", "fetch", "origin", self.branch],
                     cwd=self.staging_dir,
