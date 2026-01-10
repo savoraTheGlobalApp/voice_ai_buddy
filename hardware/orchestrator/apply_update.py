@@ -441,6 +441,23 @@ def main():
     # Ensure directories exist
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     
+    # Ensure v2 directory exists (needed for hybrid system)
+    if not PRODUCTION_V2.exists():
+        logger.info("Creating v2 directory...")
+        PRODUCTION_V2.mkdir(parents=True, exist_ok=True)
+        # Set ownership if possible
+        try:
+            import os
+            import pwd
+            service_user = _detect_service_user()
+            try:
+                user_info = pwd.getpwnam(service_user)
+                os.chown(PRODUCTION_V2, user_info.pw_uid, user_info.pw_gid)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    
     # Log current state for debugging
     current_state = _read_state()
     logger.info(f"Current update state: {current_state}")
@@ -453,6 +470,22 @@ def main():
             sys.exit(1)
         logger.info("Recovery successful")
         return
+    
+    # Handle failed state - check if staging is valid and can be applied
+    if current_state == "failed":
+        logger.info("State is 'failed', checking if staging is valid...")
+        if STAGING_DIR.exists() and _is_version_valid(STAGING_DIR):
+            staging_version = _get_version_commit(STAGING_DIR)
+            if staging_version:
+                logger.info(f"Staging is valid (version: {staging_version[:8]}), resetting state to ready_to_apply")
+                _atomic_write_state("ready_to_apply")
+                current_state = "ready_to_apply"
+            else:
+                logger.warning("Staging exists but version cannot be determined, keeping failed state")
+                return
+        else:
+            logger.info("Staging is invalid or missing, keeping failed state")
+            return
     
     # Check if update is ready
     if current_state != "ready_to_apply":
