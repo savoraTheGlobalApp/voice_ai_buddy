@@ -304,8 +304,49 @@ class UpdateManager:
                         is_valid_git_repo = False
                         # Will fall through to fresh clone
                     else:
-                        # Successfully updated
-                        return True
+                        # Verify the reset worked by checking HEAD matches the remote
+                        verify_exit_code, verify_stdout, verify_stderr = await self._run_git_command(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=self.staging_dir,
+                            timeout=10
+                        )
+                        if verify_exit_code == 0:
+                            head_commit = verify_stdout.strip()
+                            # Get the expected commit from remote
+                            remote_exit_code, remote_stdout, remote_stderr = await self._run_git_command(
+                                ["git", "rev-parse", f"origin/{self.branch}"],
+                                cwd=self.staging_dir,
+                                timeout=10
+                            )
+                            if remote_exit_code == 0:
+                                remote_commit = remote_stdout.strip()
+                                if head_commit == remote_commit:
+                                    # Successfully updated and verified
+                                    self._log(f"Staging reset to {head_commit[:8]}")
+                                    return True
+                                else:
+                                    logger.warning(f"Reset verification failed: HEAD={head_commit[:8]}, expected={remote_commit[:8]}")
+                                    # Try checkout instead
+                                    logger.info("Attempting checkout instead...")
+                                    checkout_exit_code, checkout_stdout, checkout_stderr = await self._run_git_command(
+                                        ["git", "checkout", "-f", f"origin/{self.branch}"],
+                                        cwd=self.staging_dir,
+                                        timeout=60
+                                    )
+                                    if checkout_exit_code == 0:
+                                        self._log("Staging updated via checkout")
+                                        return True
+                                    else:
+                                        logger.error(f"Checkout also failed: {checkout_stderr}")
+                                        is_valid_git_repo = False
+                            else:
+                                logger.warning(f"Could not verify remote commit: {remote_stderr}")
+                                # Assume it worked
+                                return True
+                        else:
+                            logger.warning(f"Could not verify HEAD: {verify_stderr}")
+                            # Assume it worked
+                            return True
             
             # Clone fresh (either doesn't exist or is invalid)
             # Note: We can't create/delete directories in /opt/, so we work with existing directory
@@ -529,6 +570,17 @@ class UpdateManager:
                 self.set_state(UpdateState.IDLE)
                 return False
             
+            # If state is failed, check if staging is valid and reset to idle
+            if current_state == UpdateState.FAILED:
+                staging_version = await self._get_staging_version()
+                if staging_version and staging_version == latest_version:
+                    logger.info("Staging is valid, resetting failed state to idle")
+                    self.set_state(UpdateState.IDLE)
+                    current_state = UpdateState.IDLE
+                else:
+                    logger.info("Staging is invalid or outdated, will attempt fresh download")
+                    # Continue to download logic below
+            
             # Compare versions
             if current_version == latest_version:
                 logger.debug(f"Already up to date (version: {current_version[:8]})")
@@ -549,9 +601,23 @@ class UpdateManager:
             # Verify staging version matches expected
             staging_version = await self._get_staging_version()
             if staging_version != latest_version:
-                logger.error(f"Staging version mismatch: expected {latest_version[:8]}, got {staging_version[:8] if staging_version else 'none'}")
-                self.set_state(UpdateState.FAILED)
-                return False
+                logger.warning(f"Staging version mismatch: expected {latest_version[:8]}, got {staging_version[:8] if staging_version else 'none'}")
+                # Try to fix by forcing a fresh update
+                logger.info("Attempting to fix staging version mismatch...")
+                # Clear staging and try again
+                success_retry = await self._clone_or_update_staging()
+                if success_retry:
+                    staging_version_retry = await self._get_staging_version()
+                    if staging_version_retry == latest_version:
+                        logger.info("Staging version fixed after retry")
+                    else:
+                        logger.error(f"Staging version still mismatch after retry: expected {latest_version[:8]}, got {staging_version_retry[:8] if staging_version_retry else 'none'}")
+                        self.set_state(UpdateState.FAILED)
+                        return False
+                else:
+                    logger.error("Failed to fix staging version mismatch")
+                    self.set_state(UpdateState.FAILED)
+                    return False
             
             # Mark as ready to apply
             self.set_state(UpdateState.READY_TO_APPLY)
