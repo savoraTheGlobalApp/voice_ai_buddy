@@ -330,6 +330,17 @@ def _recover_from_interruption() -> bool:
                 shutil.rmtree(target_version)
             _copy_excluding(STAGING_DIR, target_version, ['hardware/venv', 'hardware/.env'])
             
+            # Create symlink to shared .env
+            hardware_dir = target_version / "hardware"
+            env_link = hardware_dir / ".env"
+            if env_link.exists() or env_link.is_symlink():
+                env_link.unlink()
+            try:
+                env_link.symlink_to(SHARED_ENV)
+                logger.info("Created symlink to shared .env")
+            except Exception as e:
+                logger.warning(f"Failed to create .env symlink: {e}")
+            
             if _is_version_valid(target_version):
                 _swap_version(target_version)
                 _atomic_write_state("idle")
@@ -414,6 +425,18 @@ def _apply_update() -> bool:
             shutil.rmtree(target_version)
         _atomic_write_state("failed")
         return False
+    
+    # Create symlink to shared .env
+    hardware_dir = target_version / "hardware"
+    env_link = hardware_dir / ".env"
+    if env_link.exists() or env_link.is_symlink():
+        env_link.unlink()
+    try:
+        env_link.symlink_to(SHARED_ENV)
+        logger.info("Created symlink to shared .env")
+    except Exception as e:
+        logger.warning(f"Failed to create .env symlink: {e}")
+        # Continue anyway - app might work without it
     
     # Update shared venv
     if not _ensure_shared_venv():
