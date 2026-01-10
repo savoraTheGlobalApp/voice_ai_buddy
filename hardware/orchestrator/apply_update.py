@@ -436,16 +436,22 @@ def _apply_update() -> bool:
 
 def main():
     """Main orchestrator entry point."""
+    logger.info("Orchestrator started")
+    
     # Ensure directories exist
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     
+    # Log current state for debugging
     current_state = _read_state()
+    logger.info(f"Current update state: {current_state}")
     
     # Handle interrupted update
     if current_state == "applying":
+        logger.warning("Detected interrupted update, attempting recovery...")
         if not _recover_from_interruption():
             logger.error("Recovery failed")
             sys.exit(1)
+        logger.info("Recovery successful")
         return
     
     # Check if update is ready
@@ -462,6 +468,7 @@ def main():
         if not success:
             logger.error("Update failed")
             sys.exit(1)
+        logger.info("Update completed successfully")
     except Exception as e:
         logger.error(f"Update failed with exception: {e}", exc_info=True)
         _atomic_write_state("failed")
