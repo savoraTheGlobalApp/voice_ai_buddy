@@ -252,7 +252,19 @@ class UpdateManager:
                 # Update existing staging directory
                 self._log("Updating staging directory...")
                 
-                # Fetch latest changes
+                # First, fetch all branches to ensure we have the latest refs
+                # This is important when switching branches
+                exit_code, stdout, stderr = await self._run_git_command(
+                    ["git", "fetch", "origin", "--prune"],
+                    cwd=self.staging_dir,
+                    timeout=120
+                )
+                
+                if exit_code != 0:
+                    logger.warning(f"Git fetch all failed: {stderr}, trying specific branch...")
+                    # Continue to try specific branch fetch
+                
+                # Fetch the specific branch
                 exit_code, stdout, stderr = await self._run_git_command(
                     ["git", "fetch", "origin", self.branch],
                     cwd=self.staging_dir,
@@ -267,6 +279,17 @@ class UpdateManager:
                     # Clear contents will be handled below
                 
                 if is_valid_git_repo:
+                    # Check if the branch exists in remote
+                    exit_code, stdout, stderr = await self._run_git_command(
+                        ["git", "ls-remote", "--heads", "origin", self.branch],
+                        cwd=self.staging_dir,
+                        timeout=30
+                    )
+                    
+                    if exit_code != 0 or not stdout.strip():
+                        logger.error(f"Branch {self.branch} not found in remote repository")
+                        return False
+                    
                     # Reset to latest commit
                     exit_code, stdout, stderr = await self._run_git_command(
                         ["git", "reset", "--hard", f"origin/{self.branch}"],
@@ -276,7 +299,10 @@ class UpdateManager:
                     
                     if exit_code != 0:
                         logger.error(f"Git reset failed: {stderr}")
-                        return False
+                        # If reset fails, the branch might have changed - reinitialize
+                        logger.info("Reset failed, branch may have changed. Reinitializing staging...")
+                        is_valid_git_repo = False
+                        # Will fall through to fresh clone
                     else:
                         # Successfully updated
                         return True
