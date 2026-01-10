@@ -176,7 +176,6 @@ def _clear_directory_contents(directory: Path, preserve_patterns: list[str] = No
         preserve_patterns = [
             'hardware/venv',
             'hardware/.env',
-            'hardware/.env.local',
         ]
     
     def should_preserve(item_path: Path) -> bool:
@@ -423,7 +422,7 @@ def apply_update():
             logger.info("Clearing production directory contents (preserving venv and local files)...")
             _clear_directory_contents(
                 PRODUCTION_DIR,
-                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
+                preserve_patterns=['hardware/venv', 'hardware/.env']
             )
         
         # Ensure production directory exists (should already exist, but check)
@@ -444,9 +443,9 @@ def apply_update():
                 logger.info("Rolling back: Restoring production from backup...")
                 try:
                     _clear_directory_contents(
-                PRODUCTION_DIR,
-                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
-            )
+                        PRODUCTION_DIR,
+                        preserve_patterns=['hardware/venv', 'hardware/.env']
+                    )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful - production restored")
                 except Exception as rollback_error:
@@ -493,9 +492,9 @@ def apply_update():
                 try:
                     if PRODUCTION_DIR.exists():
                         _clear_directory_contents(
-                PRODUCTION_DIR,
-                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
-            )
+                            PRODUCTION_DIR,
+                            preserve_patterns=['hardware/venv', 'hardware/.env']
+                        )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful - production restored")
                 except Exception as rollback_error:
@@ -525,9 +524,9 @@ def apply_update():
                 logger.info("Rolling back to previous version...")
                 try:
                     _clear_directory_contents(
-                PRODUCTION_DIR,
-                preserve_patterns=['hardware/venv', 'hardware/.env', 'hardware/.env.local']
-            )
+                        PRODUCTION_DIR,
+                        preserve_patterns=['hardware/venv', 'hardware/.env']
+                    )
                     _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
                     logger.info("Rollback successful")
                 except Exception as rollback_error:
