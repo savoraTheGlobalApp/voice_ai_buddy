@@ -53,10 +53,37 @@ def _atomic_write_state(state: str) -> None:
     try:
         temp_file.write_text(state)
         temp_file.replace(STATE_FILE)  # Atomic on Linux
+        
+        # Fix ownership after writing (orchestrator runs as root, but updater needs write access)
+        try:
+            import os
+            import pwd
+            service_user = _detect_service_user()
+            try:
+                user_info = pwd.getpwnam(service_user)
+                os.chown(STATE_FILE, user_info.pw_uid, user_info.pw_gid)
+                os.chmod(STATE_FILE, 0o644)  # rw-r--r--
+            except Exception:
+                pass
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Failed to write state atomically: {e}")
         # Fallback to direct write
         STATE_FILE.write_text(state)
+        # Fix ownership
+        try:
+            import os
+            import pwd
+            service_user = _detect_service_user()
+            try:
+                user_info = pwd.getpwnam(service_user)
+                os.chown(STATE_FILE, user_info.pw_uid, user_info.pw_gid)
+                os.chmod(STATE_FILE, 0o644)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
 
 def _read_state() -> str:
@@ -588,6 +615,19 @@ def _apply_update() -> bool:
     # Update version file
     try:
         VERSION_FILE.write_text(staging_version)
+        # Fix ownership
+        try:
+            import os
+            import pwd
+            service_user = _detect_service_user()
+            try:
+                user_info = pwd.getpwnam(service_user)
+                os.chown(VERSION_FILE, user_info.pw_uid, user_info.pw_gid)
+                os.chmod(VERSION_FILE, 0o644)
+            except Exception:
+                pass
+        except Exception:
+            pass
         logger.info(f"Version updated to: {staging_version[:8]}")
     except Exception as e:
         logger.warning(f"Failed to update version file: {e}")
@@ -611,6 +651,28 @@ def main():
     
     # Ensure directories exist
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Ensure state directory has correct ownership (orchestrator runs as root)
+    try:
+        import os
+        import pwd
+        service_user = _detect_service_user()
+        try:
+            user_info = pwd.getpwnam(service_user)
+            os.chown(STATE_DIR, user_info.pw_uid, user_info.pw_gid)
+            os.chmod(STATE_DIR, 0o755)  # rwxr-xr-x
+            # Fix ownership of existing files
+            for file in STATE_DIR.iterdir():
+                if file.is_file():
+                    try:
+                        os.chown(file, user_info.pw_uid, user_info.pw_gid)
+                        os.chmod(file, 0o644)  # rw-r--r--
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    except Exception:
+        pass
     
     # Ensure v2 directory exists (needed for hybrid system)
     if not PRODUCTION_V2.exists():
