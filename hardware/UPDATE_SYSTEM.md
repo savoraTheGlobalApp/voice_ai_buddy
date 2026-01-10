@@ -21,7 +21,8 @@ The update system automatically fetches code changes from GitHub and applies the
   ├── current_version.txt          # Current Git commit hash
   ├── update_state.txt             # Current update state
   ├── update_lock                  # Lock file for concurrent operations
-  └── update.log                   # Update operation logs
+  ├── update.log                   # Update operation logs
+  └── backup/                      # Temporary backup during updates (auto-cleaned)
 ```
 
 ### Components
@@ -93,7 +94,7 @@ This will:
 
 ### Step 2: Run Setup
 
-After installation (Option A or B), run setup:
+After installation, run setup:
 
 ```bash
 cd /opt/voice_ai_buddy/hardware
@@ -112,6 +113,9 @@ cd /opt/voice_ai_buddy/hardware
 You'll be prompted for:
 - GitHub repository URL (SSH or HTTPS)
 - Git branch to track (default: `main`)
+- SSH private key path (if using SSH URL)
+  - The script will automatically check and fix key permissions (should be 600)
+  - Uses absolute path to avoid issues
 
 ### Step 4: Install Main Service
 
@@ -139,11 +143,16 @@ The main service will now:
 2. **Boot Sequence** (Main Service)
    - `ExecStartPre` runs `apply_update.py`
    - If state is `ready_to_apply`:
-     - Creates backup of current production
-     - Moves staging to production (atomic)
+     - Creates backup of current production → `/var/lib/voice_ai_buddy/backup/`
+     - Clears production directory (preserves `venv` and `.env`)
+     - Copies staging contents to production (atomic)
+     - Restores local files (`.env`) from backup
+     - Fixes ownership of production directory
+     - Creates/updates virtual environment if needed
+     - Installs/updates dependencies from `requirements.txt`
      - Updates version file
-     - Installs/updates dependencies
      - Sets state to `completed`
+     - Cleans up backup
    - Starts main application
 
 3. **Error Handling**
@@ -296,6 +305,10 @@ cat ~/.ssh/id_ed25519.pub
 ssh -T git@github.com
 ```
 
+**Important:** If your SSH key has a passphrase, the update daemon will not be able to use it automatically. For deploy keys used by automated services, it's recommended to:
+- Remove the passphrase from the deploy key (Option 1 - Recommended for deploy keys)
+- Or use a passphrase-less deploy key specifically for this purpose
+
 **HTTPS Method:**
 ```bash
 # Use personal access token in URL
@@ -324,7 +337,12 @@ If update causes issues:
 
 2. Restore from backup (if exists):
    ```bash
-   sudo mv /opt/voice_ai_buddy_backup /opt/voice_ai_buddy
+   # Backup is located at /var/lib/voice_ai_buddy/backup/
+   # Note: This is only available if an update was in progress
+   # If backup exists, manually copy it back:
+   sudo rm -rf /opt/voice_ai_buddy/*
+   sudo cp -r /var/lib/voice_ai_buddy/backup/* /opt/voice_ai_buddy/
+   sudo chown -R <service-user>:<service-user> /opt/voice_ai_buddy
    ```
 
 3. Reset state:
@@ -358,8 +376,10 @@ If update causes issues:
 
 ### Clean Up Old Backups
 
+Backups are automatically cleaned up after successful updates. If you need to manually clean up:
+
 ```bash
-sudo rm -rf /opt/voice_ai_buddy_backup
+sudo rm -rf /var/lib/voice_ai_buddy/backup
 ```
 
 ### Clear Update Logs
@@ -398,4 +418,6 @@ sudo systemctl disable voice-ai-buddy-updater.service
 - Main application starts immediately, updates happen silently
 - Failed updates automatically rollback
 - Interrupted updates are detected and recovered on next boot
+- **Preserved during updates**: Virtual environment (`hardware/venv`) and local configuration (`hardware/.env`) are preserved to avoid recreation and maintain settings
+- **Dependencies**: Dependencies are automatically synced with `requirements.txt` after each update
 
