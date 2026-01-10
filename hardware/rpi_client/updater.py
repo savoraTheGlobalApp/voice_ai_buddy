@@ -602,20 +602,36 @@ class UpdateManager:
             staging_version = await self._get_staging_version()
             if staging_version != latest_version:
                 logger.warning(f"Staging version mismatch: expected {latest_version[:8]}, got {staging_version[:8] if staging_version else 'none'}")
-                # Try to fix by forcing a fresh update
-                logger.info("Attempting to fix staging version mismatch...")
-                # Clear staging and try again
-                success_retry = await self._clone_or_update_staging()
-                if success_retry:
-                    staging_version_retry = await self._get_staging_version()
-                    if staging_version_retry == latest_version:
-                        logger.info("Staging version fixed after retry")
+                # Force a complete fresh clone by clearing staging
+                logger.info("Forcing fresh clone to fix staging version mismatch...")
+                try:
+                    # Clear staging directory contents completely
+                    import shutil
+                    for item in self.staging_dir.iterdir():
+                        try:
+                            if item.is_dir():
+                                shutil.rmtree(item)
+                            else:
+                                item.unlink()
+                        except Exception as e:
+                            logger.warning(f"Could not remove {item}: {e}")
+                    
+                    # Now do a fresh clone
+                    success_retry = await self._clone_or_update_staging()
+                    if success_retry:
+                        staging_version_retry = await self._get_staging_version()
+                        if staging_version_retry == latest_version:
+                            logger.info("Staging version fixed after fresh clone")
+                        else:
+                            logger.error(f"Staging version still mismatch after fresh clone: expected {latest_version[:8]}, got {staging_version_retry[:8] if staging_version_retry else 'none'}")
+                            self.set_state(UpdateState.FAILED)
+                            return False
                     else:
-                        logger.error(f"Staging version still mismatch after retry: expected {latest_version[:8]}, got {staging_version_retry[:8] if staging_version_retry else 'none'}")
+                        logger.error("Failed to do fresh clone")
                         self.set_state(UpdateState.FAILED)
                         return False
-                else:
-                    logger.error("Failed to fix staging version mismatch")
+                except Exception as e:
+                    logger.error(f"Error during fresh clone attempt: {e}", exc_info=True)
                     self.set_state(UpdateState.FAILED)
                     return False
             
