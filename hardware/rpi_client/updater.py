@@ -548,6 +548,19 @@ class UpdateManager:
                 self._cleanup_staging()
                 self.set_state(UpdateState.IDLE)
             
+            # Handle interrupted checking/downloading states (power loss during update check/download)
+            if current_state == UpdateState.CHECKING:
+                logger.info("Previous update check was interrupted, resetting to idle")
+                self.set_state(UpdateState.IDLE)
+                current_state = UpdateState.IDLE
+            
+            if current_state == UpdateState.DOWNLOADING:
+                logger.warning("Previous update download was interrupted, resetting to idle")
+                # Staging might be in inconsistent state, but git operations are atomic
+                # so it should be safe to continue. Reset state and retry.
+                self.set_state(UpdateState.IDLE)
+                current_state = UpdateState.IDLE
+            
             if current_state == UpdateState.READY_TO_APPLY:
                 logger.info("Update already staged, waiting for next boot")
                 return True
