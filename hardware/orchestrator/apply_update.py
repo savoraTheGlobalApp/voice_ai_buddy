@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -86,13 +87,73 @@ def _atomic_write_state(state: str) -> None:
             pass
 
 
+# Valid states (must match UpdateState enum in updater.py)
+VALID_STATES = {
+    "idle",
+    "checking",
+    "downloading",
+    "ready_to_apply",
+    "applying",
+    "completed",
+    "failed"
+}
+
 def _read_state() -> str:
-    """Read current state."""
+    """Read current state with validation."""
     if not STATE_FILE.exists():
         return "idle"
     try:
-        return STATE_FILE.read_text().strip()
-    except Exception:
+        state_str = STATE_FILE.read_text().strip()
+        
+        # Validate state - handle partial writes and invalid states
+        if not state_str:
+            logger.warning("State file is empty, resetting to idle")
+            _atomic_write_state("idle")
+            return "idle"
+        
+        # Check if state is valid
+        if state_str not in VALID_STATES:
+            # Check for partial matches (e.g., "appl" -> "applying", "chec" -> "checking")
+            # This handles cases where power was cut during state write
+            partial_matches = {
+                "appl": "applying",
+                "chec": "checking",
+                "down": "downloading",
+                "read": "ready_to_apply",
+                "comp": "completed",
+                "fail": "failed"
+            }
+            
+            # Check if it's a partial match
+            matched_state = None
+            for partial, full_state in partial_matches.items():
+                if state_str.startswith(partial) or full_state.startswith(state_str):
+                    matched_state = full_state
+                    logger.warning(f"Detected partial state '{state_str}', interpreting as '{matched_state}'")
+                    break
+            
+            if matched_state:
+                # Fix the state file
+                _atomic_write_state(matched_state)
+                return matched_state
+            else:
+                # Unknown state - reset to idle and remove stale lock
+                logger.warning(f"Unknown state '{state_str}', resetting to idle")
+                lock_file = STATE_DIR / "update_lock"
+                if lock_file.exists():
+                    lock_age = time.time() - lock_file.stat().st_mtime
+                    if lock_age > 60:  # Lock is older than 1 minute
+                        try:
+                            lock_file.unlink()
+                            logger.info("Removed stale lock file")
+                        except Exception as e:
+                            logger.warning(f"Failed to remove stale lock: {e}")
+                _atomic_write_state("idle")
+                return "idle"
+        
+        return state_str
+    except Exception as e:
+        logger.warning(f"Failed to read state file: {e}, resetting to idle")
         return "idle"
 
 
