@@ -135,6 +135,19 @@ class UpdateManager:
                     return False
             
             self.lock_file.write_text(str(int(time.time())))
+            
+            # Ensure lock file has correct ownership (service user, not root)
+            # This allows the service user to remove it later
+            try:
+                import os
+                import pwd
+                current_uid = os.getuid()
+                current_gid = os.getgid()
+                os.chown(self.lock_file, current_uid, current_gid)
+                os.chmod(self.lock_file, 0o644)  # rw-r--r--
+            except Exception:
+                pass  # Ignore permission errors, but try to fix ownership
+            
             return True
         except Exception as e:
             logger.error(f"Failed to acquire lock: {e}")
