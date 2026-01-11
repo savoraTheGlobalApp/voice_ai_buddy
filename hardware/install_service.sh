@@ -44,18 +44,29 @@ echo "Production directory: $PRODUCTION_DIR"
 echo "Hardware directory: $HARDWARE_DIR"
 echo ""
 
-# Check if virtual environment exists
-if [ ! -d "$HARDWARE_DIR/venv" ]; then
-    echo -e "${RED}Error: Virtual environment not found at $HARDWARE_DIR/venv${NC}"
-    echo "Please run setup.sh first to create the virtual environment."
+# Check if shared virtual environment exists (hybrid system)
+SHARED_VENV="/var/lib/voice_ai_buddy/venv"
+if [ ! -d "$SHARED_VENV" ]; then
+    echo -e "${RED}Error: Shared virtual environment not found at $SHARED_VENV${NC}"
+    echo "The hybrid update system requires a shared venv at /var/lib/voice_ai_buddy/venv"
+    echo "Please ensure the hybrid system is set up correctly."
     exit 1
 fi
 
-# Check if Python module can be imported
+# Check if orchestrator exists (hybrid system)
+ORCHESTRATOR_DIR="/opt/voice_ai_buddy_orchestrator"
+if [ ! -d "$ORCHESTRATOR_DIR" ]; then
+    echo -e "${RED}Error: Orchestrator directory not found at $ORCHESTRATOR_DIR${NC}"
+    echo "The hybrid update system requires the orchestrator to be installed."
+    echo "Please run the orchestrator installation script first."
+    exit 1
+fi
+
+# Check if Python module can be imported from shared venv
 echo "Verifying Python installation..."
-if ! "$HARDWARE_DIR/venv/bin/python" -c "import rpi_client" 2>/dev/null; then
-    echo -e "${RED}Error: Cannot import rpi_client module${NC}"
-    echo "Please ensure the virtual environment is set up correctly."
+if ! "$SHARED_VENV/bin/python" -c "import rpi_client" 2>/dev/null; then
+    echo -e "${RED}Error: Cannot import rpi_client module from shared venv${NC}"
+    echo "Please ensure the shared virtual environment is set up correctly."
     exit 1
 fi
 
@@ -75,14 +86,12 @@ fi
 # Create systemd service file with correct paths
 SERVICE_FILE="$HARDWARE_DIR/voice-ai-buddy.service"
 TEMP_SERVICE_FILE="/tmp/voice-ai-buddy.service.$$"
-VENV_BIN="$HARDWARE_DIR/venv/bin"
 
 echo "Creating systemd service file..."
 
-# Replace placeholders in service file
+# Replace placeholders in service file (hybrid system uses fixed paths for venv and orchestrator)
 sed -e "s|REPLACE_USER|$CURRENT_USER|g" \
     -e "s|REPLACE_HARDWARE_DIR|$HARDWARE_DIR|g" \
-    -e "s|REPLACE_VENV_BIN|$VENV_BIN|g" \
     "$SERVICE_FILE" > "$TEMP_SERVICE_FILE"
 
 # Verify the service file paths are correct
