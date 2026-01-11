@@ -10,10 +10,13 @@ Type=simple
 User=REPLACE_USER
 Group=REPLACE_USER
 WorkingDirectory=REPLACE_HARDWARE_DIR
-Environment="PATH=REPLACE_VENV_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Use shared venv from /var/lib/voice_ai_buddy/venv (hybrid system)
+Environment="PATH=/var/lib/voice_ai_buddy/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # Apply updates before starting (non-blocking, continues even if update fails)
-ExecStartPre=/usr/bin/python3 /opt/voice_ai_buddy/hardware/apply_update.py || true
-ExecStart=REPLACE_VENV_BIN/python -m rpi_client.main
+# Use fixed orchestrator (never updated) - hybrid system
+ExecStartPre=/usr/bin/python3 /opt/voice_ai_buddy_orchestrator/apply_update.py || true
+# Use shared venv from /var/lib/voice_ai_buddy/venv
+ExecStart=/var/lib/voice_ai_buddy/venv/bin/python -m rpi_client.main
 Restart=always
 RestartSec=10
 StandardOutput=journal
