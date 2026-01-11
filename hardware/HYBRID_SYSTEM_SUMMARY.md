@@ -19,8 +19,8 @@
 - Installs orchestrator to `/opt/voice_ai_buddy_orchestrator/`
 - Sets proper permissions
 
-### 4. New Service File (`hardware/voice-ai-buddy-hybrid.service`)
-- Updated to use orchestrator
+### 4. Service File (`hardware/voice-ai-buddy.service`)
+- Updated to use orchestrator (hybrid system)
 - Uses shared venv from `/var/lib/voice_ai_buddy/venv`
 
 ## Key Features
@@ -102,7 +102,7 @@ hardware/
 │   ├── install_orchestrator.sh      # Installation script
 │   ├── migrate_to_hybrid.sh         # Migration script
 │   └── README.md                     # Orchestrator docs
-├── voice-ai-buddy-hybrid.service    # New service file
+├── voice-ai-buddy.service           # Service file (hybrid system)
 ├── HYBRID_SYSTEM_INSTALLATION.md     # Installation guide
 ├── HYBRID_SYSTEM_SUMMARY.md          # This file
 ├── MIGRATION_PLAN.md                 # Migration plan
