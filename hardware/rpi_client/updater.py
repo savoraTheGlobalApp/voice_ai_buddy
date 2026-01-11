@@ -534,11 +534,29 @@ class UpdateManager:
         Returns:
             True if update is available and downloaded, False otherwise
         """
+        # Check for interrupted states BEFORE acquiring lock
+        # This allows us to clean up stale locks from interrupted operations
+        current_state = self.get_current_state()
+        
+        # Handle interrupted checking/downloading states (power loss during update check/download)
+        # These states indicate an interrupted operation, so we should remove the lock
+        if current_state == UpdateState.CHECKING or current_state == UpdateState.DOWNLOADING:
+            if self.lock_file.exists():
+                lock_age = time.time() - self.lock_file.stat().st_mtime
+                if lock_age > 60:  # Lock is older than 1 minute (definitely stale)
+                    logger.info(f"Removing stale lock file from interrupted {current_state.value} state (age: {lock_age:.0f}s)")
+                    try:
+                        self.lock_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to remove stale lock: {e}")
+        
+        # Now try to acquire lock
         if not self._acquire_lock():
             logger.debug("Update lock already held, skipping check")
             return False
         
         try:
+            # Re-read state after acquiring lock (might have changed)
             current_state = self.get_current_state()
             
             # Handle interrupted states
@@ -551,29 +569,11 @@ class UpdateManager:
             # Handle interrupted checking/downloading states (power loss during update check/download)
             if current_state == UpdateState.CHECKING:
                 logger.info("Previous update check was interrupted, resetting to idle")
-                # Remove stale lock file if it exists
-                if self.lock_file.exists():
-                    lock_age = time.time() - self.lock_file.stat().st_mtime
-                    if lock_age > 60:  # Lock is older than 1 minute (definitely stale)
-                        logger.info(f"Removing stale lock file (age: {lock_age:.0f}s)")
-                        try:
-                            self.lock_file.unlink()
-                        except Exception as e:
-                            logger.warning(f"Failed to remove stale lock: {e}")
                 self.set_state(UpdateState.IDLE)
                 current_state = UpdateState.IDLE
             
             if current_state == UpdateState.DOWNLOADING:
                 logger.warning("Previous update download was interrupted, resetting to idle")
-                # Remove stale lock file if it exists
-                if self.lock_file.exists():
-                    lock_age = time.time() - self.lock_file.stat().st_mtime
-                    if lock_age > 60:  # Lock is older than 1 minute (definitely stale)
-                        logger.info(f"Removing stale lock file (age: {lock_age:.0f}s)")
-                        try:
-                            self.lock_file.unlink()
-                        except Exception as e:
-                            logger.warning(f"Failed to remove stale lock: {e}")
                 # Staging might be in inconsistent state, but git operations are atomic
                 # so it should be safe to continue. Reset state and retry.
                 self.set_state(UpdateState.IDLE)
