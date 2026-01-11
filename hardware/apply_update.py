@@ -295,6 +295,58 @@ def _copy_directory_contents(source_dir: Path, dest_dir: Path) -> None:
             shutil.copy2(item, dest_item)
 
 
+def _is_production_valid(production_dir: Path) -> bool:
+    """
+    Verify that production directory is valid and not corrupted.
+    
+    Checks:
+    - Production directory exists
+    - Is a valid git repository (has .git directory with content)
+    - Has hardware directory
+    - Has rpi_client module
+    
+    Returns:
+        True if production is valid, False if corrupted
+    """
+    if not production_dir.exists():
+        return False
+    
+    # Check if it's a valid git repository
+    git_dir = production_dir / ".git"
+    if not git_dir.exists() or not git_dir.is_dir():
+        logger.warning("Production directory missing .git directory")
+        return False
+    
+    # Check if .git has content (not empty)
+    try:
+        git_items = list(git_dir.iterdir())
+        if len(git_items) == 0:
+            logger.warning("Production .git directory is empty (corrupted)")
+            return False
+        
+        # Check for critical git files
+        if not (git_dir / "HEAD").exists() and not (git_dir / "config").exists():
+            logger.warning("Production .git directory missing critical files")
+            return False
+    except Exception as e:
+        logger.warning(f"Error checking .git directory: {e}")
+        return False
+    
+    # Check for hardware directory
+    hardware_dir = production_dir / "hardware"
+    if not hardware_dir.exists() or not hardware_dir.is_dir():
+        logger.warning("Production directory missing hardware/ directory")
+        return False
+    
+    # Check for rpi_client module
+    rpi_client_dir = hardware_dir / "rpi_client"
+    if not rpi_client_dir.exists() or not rpi_client_dir.is_dir():
+        logger.warning("Production directory missing hardware/rpi_client/ directory")
+        return False
+    
+    return True
+
+
 def _restore_local_files_from_backup(backup_dir: Path, production_dir: Path) -> None:
     """
     Restore local-only, non-tracked config files from backup into the new production.
@@ -384,14 +436,79 @@ def apply_update():
                 state_file.write_text("failed")
                 return False
         else:
-            # Production exists - update was likely completed but state wasn't updated
-            logger.info("Production exists, update likely completed. Cleaning up...")
-            if BACKUP_DIR.exists():
-                logger.info("Removing old backup...")
-                shutil.rmtree(BACKUP_DIR)
-            # Don't remove staging directory - it's persistent and needed for future updates
-            state_file.write_text("idle")
-            return True
+            # Production exists - but we need to verify it's valid
+            # If production is corrupted (e.g., empty .git, missing files), restore from backup
+            if not _is_production_valid(PRODUCTION_DIR):
+                logger.warning("Production exists but appears corrupted, attempting to restore from backup...")
+                if BACKUP_DIR.exists():
+                    logger.info("Restoring production from backup due to corruption...")
+                    try:
+                        # Clear corrupted production
+                        _clear_directory_contents(
+                            PRODUCTION_DIR,
+                            preserve_patterns=['hardware/venv', 'hardware/.env']
+                        )
+                        # Restore from backup
+                        _copy_directory_contents(BACKUP_DIR, PRODUCTION_DIR)
+                        # Restore local files
+                        _restore_local_files_from_backup(BACKUP_DIR, PRODUCTION_DIR)
+                        # Fix ownership
+                        service_user = _detect_service_user()
+                        _chown_recursive(PRODUCTION_DIR, service_user)
+                        logger.info("Successfully restored production from backup")
+                        state_file.write_text("idle")
+                        return True
+                    except Exception as e:
+                        logger.error(f"Failed to restore from backup: {e}")
+                        # Try staging as fallback
+                        if STAGING_DIR.exists():
+                            logger.info("Backup restore failed, trying staging directory...")
+                            try:
+                                _clear_directory_contents(
+                                    PRODUCTION_DIR,
+                                    preserve_patterns=['hardware/venv', 'hardware/.env']
+                                )
+                                _copy_directory_contents(STAGING_DIR, PRODUCTION_DIR)
+                                service_user = _detect_service_user()
+                                _chown_recursive(PRODUCTION_DIR, service_user)
+                                logger.info("Successfully restored production from staging")
+                                state_file.write_text("idle")
+                                return True
+                            except Exception as restore_error:
+                                logger.error(f"Failed to restore from staging: {restore_error}")
+                        state_file.write_text("failed")
+                        return False
+                elif STAGING_DIR.exists():
+                    # No backup, but staging exists - restore from staging
+                    logger.info("No backup available, restoring from staging...")
+                    try:
+                        _clear_directory_contents(
+                            PRODUCTION_DIR,
+                            preserve_patterns=['hardware/venv', 'hardware/.env']
+                        )
+                        _copy_directory_contents(STAGING_DIR, PRODUCTION_DIR)
+                        service_user = _detect_service_user()
+                        _chown_recursive(PRODUCTION_DIR, service_user)
+                        logger.info("Successfully restored production from staging")
+                        state_file.write_text("idle")
+                        return True
+                    except Exception as e:
+                        logger.error(f"Failed to restore from staging: {e}")
+                        state_file.write_text("failed")
+                        return False
+                else:
+                    logger.error("Production corrupted but no backup or staging available!")
+                    state_file.write_text("failed")
+                    return False
+            else:
+                # Production exists and is valid - update was likely completed but state wasn't updated
+                logger.info("Production exists and is valid, update likely completed. Cleaning up...")
+                if BACKUP_DIR.exists():
+                    logger.info("Removing old backup...")
+                    shutil.rmtree(BACKUP_DIR)
+                # Don't remove staging directory - it's persistent and needed for future updates
+                state_file.write_text("idle")
+                return True
     
     if current_state != "ready_to_apply":
         logger.info(f"Update not ready (state: {current_state}), skipping")
