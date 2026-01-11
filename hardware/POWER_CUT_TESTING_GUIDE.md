@@ -71,7 +71,7 @@ This method simulates a power cut by interrupting the orchestrator during execut
 5. **After reboot**, check logs:
    ```bash
    # Check orchestrator logs (it runs on boot)
-   sudo journalctl -u voice-ai-buddy-hybrid.service -n 50 | grep -i orchestrator
+   sudo journalctl -u voice-ai-buddy.service -n 50 | grep -i orchestrator
    
    # Check update state
    cat /var/lib/voice_ai_buddy/update_state.txt
@@ -99,7 +99,7 @@ This method simulates a power cut by interrupting the orchestrator during execut
 5. **Check recovery**:
    ```bash
    # Check orchestrator logs
-   sudo journalctl -u voice-ai-buddy-hybrid.service -n 100
+   sudo journalctl -u voice-ai-buddy.service -n 100
    
    # Check update state
    cat /var/lib/voice_ai_buddy/update_state.txt
@@ -114,7 +114,7 @@ You can modify the service to add a delay, giving you time to cut power:
 
 1. **Edit the service file**:
    ```bash
-   sudo nano /etc/systemd/system/voice-ai-buddy-hybrid.service
+   sudo nano /etc/systemd/system/voice-ai-buddy.service
    ```
 
 2. **Add a sleep before orchestrator**:
@@ -198,7 +198,7 @@ The system now handles partial state writes (e.g., "appl" instead of "applying")
 
 3. **Check logs** - should detect and fix:
    ```bash
-   sudo journalctl -u voice-ai-buddy-hybrid.service -n 20
+   sudo journalctl -u voice-ai-buddy.service -n 20
    # Should show: "Detected partial state 'appl', interpreting as 'applying'"
    ```
 
@@ -222,7 +222,7 @@ The system now handles partial state writes (e.g., "appl" instead of "applying")
 
 3. **Check logs** - should reset to `idle`:
    ```bash
-   sudo journalctl -u voice-ai-buddy-hybrid.service -n 20
+   sudo journalctl -u voice-ai-buddy.service -n 20
    # Should show: "Unknown state 'invalid_state_xyz', resetting to idle"
    ```
 
@@ -278,13 +278,13 @@ ls -la /opt/voice_ai_buddy_v1/
 ls -la /opt/voice_ai_buddy_v2/
 
 # 5. Check orchestrator logs
-sudo journalctl -u voice-ai-buddy-hybrid.service -n 100 | grep -i orchestrator
+sudo journalctl -u voice-ai-buddy.service -n 100 | grep -i orchestrator
 
 # 6. Check updater logs
 sudo journalctl -u voice-ai-buddy-updater.service -n 50
 
 # 7. Verify application is running
-sudo systemctl status voice-ai-buddy-hybrid.service
+sudo systemctl status voice-ai-buddy.service
 ```
 
 ## Troubleshooting Failed Recovery
@@ -293,7 +293,7 @@ If recovery fails:
 
 1. **Check orchestrator logs**:
    ```bash
-   sudo journalctl -u voice-ai-buddy-hybrid.service -n 200
+   sudo journalctl -u voice-ai-buddy.service -n 200
    ```
 
 2. **Manually inspect state**:
