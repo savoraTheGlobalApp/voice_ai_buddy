@@ -6,6 +6,9 @@ SERVICE_USER="${1:-laddu}"  # Default to 'laddu' if not provided
 PRODUCTION_DIR="/opt/voice_ai_buddy"
 STAGING_DIR="/opt/voice_ai_buddy_staging"
 STATE_DIR="/var/lib/voice_ai_buddy"
+ORCHESTRATOR_DIR="/opt/voice_ai_buddy_orchestrator"
+SHARED_VENV="$STATE_DIR/venv"
+SHARED_ENV="$STATE_DIR/.env"
 
 echo "=== Update System Permission Verification ==="
 echo "Service User: $SERVICE_USER"
@@ -74,11 +77,46 @@ echo "=== Directory Permissions ==="
 check_dir "$PRODUCTION_DIR" "$SERVICE_USER"
 check_dir "$STAGING_DIR" "$SERVICE_USER"
 check_dir "$STATE_DIR" "$SERVICE_USER"
+check_dir "$ORCHESTRATOR_DIR" "$SERVICE_USER"
 check_dir "$PRODUCTION_DIR/hardware" "$SERVICE_USER"
-if [ -d "$PRODUCTION_DIR/hardware/venv" ]; then
+
+# Check if using version directory system (symlink)
+if [ -L "$PRODUCTION_DIR" ]; then
+    echo "✓ Production is a symlink (version directory system)"
+    LINK_TARGET=$(readlink -f "$PRODUCTION_DIR")
+    echo "  Points to: $LINK_TARGET"
+    
+    # Check version directories
+    if [ -d "/opt/voice_ai_buddy_v1" ]; then
+        check_dir "/opt/voice_ai_buddy_v1" "$SERVICE_USER"
+    fi
+    if [ -d "/opt/voice_ai_buddy_v2" ]; then
+        check_dir "/opt/voice_ai_buddy_v2" "$SERVICE_USER"
+    fi
+else
+    echo "⚠️  Production is not a symlink (may not be using version directory system)"
+fi
+
+# Check shared resources
+if [ -d "$SHARED_VENV" ]; then
+    check_dir "$SHARED_VENV" "$SERVICE_USER"
+else
+    echo "⚠️  $SHARED_VENV - Does not exist (will be created during migration)"
+fi
+
+# Check if production venv is symlink (after migration)
+if [ -L "$PRODUCTION_DIR/hardware/venv" ]; then
+    VENV_TARGET=$(readlink -f "$PRODUCTION_DIR/hardware/venv")
+    if [ "$VENV_TARGET" = "$SHARED_VENV" ]; then
+        echo "✓ Production venv is symlink to shared venv"
+    else
+        echo "⚠️  Production venv symlink points to: $VENV_TARGET (expected: $SHARED_VENV)"
+    fi
+elif [ -d "$PRODUCTION_DIR/hardware/venv" ]; then
+    echo "⚠️  Production has local venv (should be symlink after migration)"
     check_dir "$PRODUCTION_DIR/hardware/venv" "$SERVICE_USER"
 else
-    echo "⚠️  $PRODUCTION_DIR/hardware/venv - Does not exist (will be created by apply_update.py)"
+    echo "⚠️  $PRODUCTION_DIR/hardware/venv - Does not exist (should be symlink to $SHARED_VENV)"
 fi
 echo ""
 
@@ -93,10 +131,26 @@ echo ""
 echo "=== Required Executables ==="
 check_executable "/usr/bin/python3"
 check_executable "/usr/bin/git"
-if [ -f "$PRODUCTION_DIR/hardware/venv/bin/python" ]; then
+
+# Check orchestrator
+if [ -f "$ORCHESTRATOR_DIR/apply_update.py" ]; then
+    check_executable "$ORCHESTRATOR_DIR/apply_update.py"
+else
+    echo "❌ $ORCHESTRATOR_DIR/apply_update.py - NOT FOUND (run: cd hardware/orchestrator && sudo ./install_orchestrator.sh)"
+fi
+
+# Check shared venv Python
+if [ -f "$SHARED_VENV/bin/python" ]; then
+    check_executable "$SHARED_VENV/bin/python"
+else
+    echo "⚠️  $SHARED_VENV/bin/python - Does not exist (will be created during setup/migration)"
+fi
+
+# Check production venv Python (should be symlink or use shared)
+if [ -L "$PRODUCTION_DIR/hardware/venv/bin/python" ] || [ -f "$PRODUCTION_DIR/hardware/venv/bin/python" ]; then
     check_executable "$PRODUCTION_DIR/hardware/venv/bin/python"
 else
-    echo "⚠️  $PRODUCTION_DIR/hardware/venv/bin/python - Does not exist (will be created by apply_update.py)"
+    echo "⚠️  $PRODUCTION_DIR/hardware/venv/bin/python - Does not exist (should use shared venv)"
 fi
 echo ""
 
@@ -169,5 +223,12 @@ echo "Quick fix all permissions:"
 echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER $STATE_DIR"
 echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER $STAGING_DIR"
 echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER $PRODUCTION_DIR"
+echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER $ORCHESTRATOR_DIR"
+if [ -d "/opt/voice_ai_buddy_v1" ]; then
+    echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER /opt/voice_ai_buddy_v1"
+fi
+if [ -d "/opt/voice_ai_buddy_v2" ]; then
+    echo "  sudo chown -R $SERVICE_USER:$SERVICE_USER /opt/voice_ai_buddy_v2"
+fi
 echo ""
 
