@@ -41,20 +41,30 @@ sudo apt install -y \
     python3-pip \
     python3-venv
 
-# Create virtual environment
-echo ""
-echo "Creating virtual environment..."
-if [ ! -d "venv" ]; then
-    python3 -m venv venv
-    echo "Virtual environment created"
+# Check if we're in a migrated system (version directory system)
+SHARED_VENV="/var/lib/voice_ai_buddy/venv"
+if [ -d "$SHARED_VENV" ] && [ -L "/opt/voice_ai_buddy" ]; then
+    echo ""
+    echo "Detected version directory system with shared venv."
+    echo "Using shared virtual environment: $SHARED_VENV"
+    VENV_PATH="$SHARED_VENV"
 else
-    echo "Virtual environment already exists"
+    # Create local virtual environment (for initial setup, before migration)
+    echo ""
+    echo "Creating virtual environment..."
+    if [ ! -d "venv" ]; then
+        python3 -m venv venv
+        echo "Virtual environment created"
+    else
+        echo "Virtual environment already exists"
+    fi
+    VENV_PATH="venv"
 fi
 
 # Activate virtual environment
 echo ""
 echo "Activating virtual environment..."
-source venv/bin/activate
+source "$VENV_PATH/bin/activate"
 
 # Upgrade pip
 echo ""
@@ -68,9 +78,19 @@ pip install -r requirements.txt
 
 # Check for .env file
 echo ""
-if [ ! -f ".env" ]; then
+SHARED_ENV="/var/lib/voice_ai_buddy/.env"
+if [ -f "$SHARED_ENV" ] && [ -L "/opt/voice_ai_buddy" ]; then
+    echo "Detected version directory system with shared .env."
+    echo "Shared .env file: $SHARED_ENV"
+    echo "Edit it at: $SHARED_ENV"
+elif [ ! -f ".env" ]; then
     echo "Creating .env file from .env.example..."
-    cp .env.example .env
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+    else
+        touch .env
+        echo "# Add your configuration here" >> .env
+    fi
     echo ""
     echo "⚠️  IMPORTANT: Please edit .env file with your configuration:"
     echo "   - BACKEND_URL: Your Railway backend URL"
@@ -80,6 +100,9 @@ if [ ! -f ".env" ]; then
     echo "   - USER_AGE: Child's age"
     echo ""
     echo "Run: nano .env"
+    echo ""
+    echo "Note: After migrating to version directory system, .env will be moved to:"
+    echo "      /var/lib/voice_ai_buddy/.env"
 else
     echo ".env file already exists"
 fi
