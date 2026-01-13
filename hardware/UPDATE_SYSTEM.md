@@ -1,6 +1,8 @@
 # Automatic Update System - Complete Guide
 
-This document provides a comprehensive guide to the hybrid automatic update system for Voice AI Buddy on Raspberry Pi.
+This document provides a comprehensive guide to the automatic update system for Voice AI Buddy on Raspberry Pi.
+
+The system uses a hybrid architecture with version directories, symlinks, and shared resources for atomic, power-loss-safe updates.
 
 ## Table of Contents
 
@@ -20,7 +22,7 @@ This document provides a comprehensive guide to the hybrid automatic update syst
 
 ## Overview
 
-The hybrid update system automatically fetches code changes from GitHub and applies them atomically on the next boot, ensuring:
+The update system automatically fetches code changes from GitHub and applies them atomically on the next boot, ensuring:
 
 - ✅ **Atomic updates**: Symlink swap is a single operation, no partial states
 - ✅ **Power loss safe**: Old version always intact, can rollback instantly
@@ -31,7 +33,7 @@ The hybrid update system automatically fetches code changes from GitHub and appl
 
 ## Architecture
 
-### Hybrid System Directory Structure
+### Directory Structure
 
 ```
 /opt/voice_ai_buddy/                    # Production (symlink to v1 or v2)
@@ -145,7 +147,7 @@ cd /opt/voice_ai_buddy/hardware
 
 This installs system dependencies, creates virtual environment, and installs Python packages.
 
-### Step 3: Install Orchestrator (Hybrid System)
+### Step 3: Install Orchestrator
 
 ```bash
 cd /opt/voice_ai_buddy/hardware/orchestrator
@@ -155,7 +157,7 @@ sudo ./install_orchestrator.sh
 
 This installs the orchestrator to `/opt/voice_ai_buddy_orchestrator/` (fixed location, never updated).
 
-### Step 4: Migrate to Hybrid System
+### Step 4: Migrate to Version Directory System
 
 ```bash
 cd /opt/voice_ai_buddy/hardware/orchestrator
@@ -270,7 +272,7 @@ self.initial_delay = 60  # Change to desired delay
 
 ### Atomic Updates
 
-The hybrid system uses **symlink swapping** for true atomicity:
+The system uses **symlink swapping** for true atomicity:
 
 1. Old version (v1) remains untouched
 2. New version (v2) is built separately
@@ -465,7 +467,7 @@ sudo systemctl restart voice-ai-buddy-updater.service
 ### Verify System Type
 
 ```bash
-# Check if using hybrid system (should be symlink)
+# Check if using version directory system (should be symlink)
 ls -la /opt/voice_ai_buddy
 # Should show: /opt/voice_ai_buddy -> /opt/voice_ai_buddy_v1
 ```
@@ -583,7 +585,7 @@ sudo chown -h laddu:laddu /opt/voice_ai_buddy
 
 ### Rollback to Previous Version
 
-In hybrid system, rollback is instant:
+Rollback is instant using symlink swap:
 
 ```bash
 # Check which version is active
