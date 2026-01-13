@@ -722,7 +722,7 @@ cd hardware
 ./uninstall_service.sh
 ```
 
-For detailed information, see [SERVICE_SETUP.md](SERVICE_SETUP.md).
+For detailed information, see [OPERATIONS.md](OPERATIONS.md).
 
 #### Manual Systemd Setup (Alternative)
 
