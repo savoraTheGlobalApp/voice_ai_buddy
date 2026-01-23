@@ -551,6 +551,13 @@ try:
         append_conversation_chunk as _append_conversation_chunk,
         ConversationMessage as ServiceConversationMessage
     )
+    from services.story_service import (
+        build_story_system_prompt,
+        get_story_user_prompt,
+        StoryRequest as ServiceStoryRequest,
+        ChildProfile,
+        LENGTH_TO_SEGMENTS,
+    )
     FIREBASE_SERVICES_AVAILABLE = True
 except ImportError as e:
     FIREBASE_SERVICES_AVAILABLE = False
@@ -1728,7 +1735,7 @@ async def append_conversation(uid: str, session_id: str, request: ConversationAp
 @app.post("/api/users/{uid}/stories/generate", response_model=StoryGenerateResponse)
 async def generate_story(uid: str, request: StoryGenerateRequest):
     """
-    Generate a personalized story for a child.
+    Generate a personalized story for a child using OpenAI.
 
     Args:
         uid: Firebase user ID (child's account)
@@ -1737,42 +1744,118 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
     Returns:
         StoryGenerateResponse with session_id, title, and segments
     """
+    # Check OpenAI API key
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
     # Generate unique session ID
     session_id = f"story-{uuid.uuid4().hex[:12]}"
 
-    # TODO: Step 2.3 - Replace with actual OpenAI generation
-    # For now, return hardcoded test response
+    # Try to fetch child data from Firebase, use defaults if not available
+    child_name = "Little One"
+    child_age = 5
 
-    # Build a simple test story based on request
-    topics_str = ", ".join(request.topics) if request.topics else "adventure"
-    values_str = ", ".join(request.values) if request.values else "kindness"
+    if FIREBASE_SERVICES_AVAILABLE and is_firebase_available():
+        try:
+            db = get_db()
+            user_doc = db.collection("users").document(uid).get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                child_name = user_data.get("name", child_name)
+                child_age = user_data.get("age", child_age)
+        except Exception as e:
+            logger.warning(f"Failed to fetch user data for {uid}: {e}, using defaults")
 
-    hardcoded_segments = [
-        StorySegmentResponse(
-            segment_index=0,
-            narrative=f"Once upon a time, in a magical world of {topics_str}, there lived a brave little hero.",
-            segment_type="opening",
-            discussion_question=None
-        ),
-        StorySegmentResponse(
-            segment_index=1,
-            narrative=f"One day, our hero discovered something amazing and learned about {values_str}.",
-            segment_type="middle",
-            discussion_question="What do you think the hero discovered?"
-        ),
-        StorySegmentResponse(
-            segment_index=2,
-            narrative="And they all lived happily ever after, having learned an important lesson. The End.",
-            segment_type="resolution",
-            discussion_question=None
-        ),
-    ]
-
-    return StoryGenerateResponse(
-        session_id=session_id,
-        title=f"The {topics_str.title()} Adventure",
-        segments=hardcoded_segments
+    # Build the story prompt
+    child_profile = ChildProfile(name=child_name, age=child_age)
+    story_request = ServiceStoryRequest(
+        topics=request.topics,
+        values=request.values,
+        length=request.length,
+        setting=request.setting
     )
+
+    system_prompt = build_story_system_prompt(child_profile, story_request)
+    user_prompt = get_story_user_prompt()
+
+    # Call OpenAI API
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.8,
+                    "max_tokens": 2000,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=60.0,
+            )
+
+            if not response.is_success:
+                error_text = response.text
+                logger.error(f"OpenAI API error: {error_text}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate story: {error_text}"
+                )
+
+            data = response.json()
+            story_json = data["choices"][0]["message"]["content"]
+
+            # Parse the JSON response
+            try:
+                story_data = json.loads(story_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse story JSON: {e}, response: {story_json}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to parse generated story"
+                )
+
+            # Convert to response model
+            segments = [
+                StorySegmentResponse(
+                    segment_index=seg.get("segment_index", idx),
+                    narrative=seg.get("narrative", ""),
+                    segment_type=seg.get("segment_type", "middle"),
+                    discussion_question=seg.get("discussion_question")
+                )
+                for idx, seg in enumerate(story_data.get("segments", []))
+            ]
+
+            return StoryGenerateResponse(
+                session_id=session_id,
+                title=story_data.get("title", "A Magical Story"),
+                segments=segments
+            )
+
+    except httpx.HTTPError as e:
+        logger.error(f"Network error while calling OpenAI: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Network error while generating story: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error generating story: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
+        )
 
 
 if __name__ == "__main__":
