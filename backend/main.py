@@ -557,6 +557,11 @@ try:
         StoryRequest as ServiceStoryRequest,
         ChildProfile,
         LENGTH_TO_SEGMENTS,
+        StorySegment as ServiceStorySegment,
+        save_story_session as _save_story_session,
+        fetch_story_session as _fetch_story_session,
+        list_story_sessions as _list_story_sessions,
+        update_story_status as _update_story_status,
     )
     FIREBASE_SERVICES_AVAILABLE = True
 except ImportError as e:
@@ -1836,9 +1841,36 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
                 for idx, seg in enumerate(story_data.get("segments", []))
             ]
 
+            title = story_data.get("title", "A Magical Story")
+
+            # Save story to Firebase (non-blocking, don't fail if save fails)
+            if FIREBASE_SERVICES_AVAILABLE and is_firebase_available():
+                try:
+                    service_segments = [
+                        ServiceStorySegment(
+                            segment_index=seg.segment_index,
+                            narrative=seg.narrative,
+                            segment_type=seg.segment_type,
+                            discussion_question=seg.discussion_question
+                        )
+                        for seg in segments
+                    ]
+                    _save_story_session(
+                        uid=uid,
+                        session_id=session_id,
+                        title=title,
+                        segments=service_segments,
+                        request=story_request,
+                        child_name=child_name,
+                        child_age=child_age
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save story to Firebase: {e}")
+                    # Don't fail the request, story was generated successfully
+
             return StoryGenerateResponse(
                 session_id=session_id,
-                title=story_data.get("title", "A Magical Story"),
+                title=title,
                 segments=segments
             )
 
@@ -1855,6 +1887,148 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/stories")
+async def list_stories(uid: str, limit: int = 20):
+    """
+    List story sessions for a user.
+
+    Args:
+        uid: Firebase user ID
+        limit: Maximum number of stories to return (default: 20)
+
+    Returns:
+        List of story summaries with session_id, title, created_at, status
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    try:
+        stories = _list_story_sessions(uid, limit)
+        return {"stories": stories}
+    except Exception as e:
+        logger.error(f"Failed to list stories for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list stories: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/stories/{session_id}")
+async def get_story(uid: str, session_id: str):
+    """
+    Get a specific story session.
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+
+    Returns:
+        Full story with all segments
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    try:
+        story = _fetch_story_session(uid, session_id)
+        if story is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Story {session_id} not found"
+            )
+
+        return {
+            "session_id": story.session_id,
+            "title": story.title,
+            "child_name": story.child_name,
+            "child_age": story.child_age,
+            "request": {
+                "topics": story.request.topics,
+                "values": story.request.values,
+                "length": story.request.length,
+                "setting": story.request.setting
+            },
+            "segments": [
+                {
+                    "segment_index": seg.segment_index,
+                    "narrative": seg.narrative,
+                    "segment_type": seg.segment_type,
+                    "discussion_question": seg.discussion_question
+                }
+                for seg in story.segments
+            ],
+            "status": story.status,
+            "created_at": story.created_at.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get story {session_id} for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get story: {str(e)}"
+        )
+
+
+@app.patch("/api/users/{uid}/stories/{session_id}/status")
+async def update_story_status_endpoint(uid: str, session_id: str, status: str):
+    """
+    Update the status of a story (e.g., mark as read or favorite).
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+        status: New status ("generated", "read", "favorite")
+
+    Returns:
+        Success message
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    if status not in ("generated", "read", "favorite"):
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be 'generated', 'read', or 'favorite'"
+        )
+
+    try:
+        _update_story_status(uid, session_id, status)
+        return {"message": f"Story status updated to {status}"}
+    except Exception as e:
+        logger.error(f"Failed to update story status {session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update story status: {str(e)}"
         )
 
 

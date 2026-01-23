@@ -317,3 +317,163 @@ class TestStoryGenerateEndpointErrors:
             )
             assert response.status_code == 500
             assert "Failed to parse" in response.json()["detail"]
+
+
+# =============================================================================
+# Story Retrieval Endpoint Tests
+# =============================================================================
+
+class TestListStoriesEndpoint:
+    """Test GET /api/users/{uid}/stories endpoint."""
+
+    def test_list_stories_success(self):
+        """Test listing stories with mocked Firebase."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._list_story_sessions") as mock_list:
+                    mock_list.return_value = [
+                        {
+                            "session_id": "story-1",
+                            "title": "First Story",
+                            "child_name": "Emma",
+                            "topics": ["dinosaurs"],
+                            "status": "generated",
+                            "created_at": "2024-01-01T00:00:00+00:00"
+                        },
+                        {
+                            "session_id": "story-2",
+                            "title": "Second Story",
+                            "child_name": "Emma",
+                            "topics": ["space"],
+                            "status": "read",
+                            "created_at": "2024-01-02T00:00:00+00:00"
+                        }
+                    ]
+
+                    response = client.get("/api/users/test-user/stories")
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert "stories" in data
+                    assert len(data["stories"]) == 2
+                    assert data["stories"][0]["session_id"] == "story-1"
+
+    def test_list_stories_with_limit(self):
+        """Test listing stories with custom limit."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._list_story_sessions") as mock_list:
+                    mock_list.return_value = []
+
+                    response = client.get("/api/users/test-user/stories?limit=5")
+
+                    assert response.status_code == 200
+                    mock_list.assert_called_once_with("test-user", 5)
+
+    def test_list_stories_firebase_unavailable(self):
+        """Test listing stories when Firebase is not available."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", False):
+            response = client.get("/api/users/test-user/stories")
+            assert response.status_code == 503
+
+
+class TestGetStoryEndpoint:
+    """Test GET /api/users/{uid}/stories/{session_id} endpoint."""
+
+    def test_get_story_success(self):
+        """Test getting a specific story."""
+        from services.story_service import StorySession, StoryRequest, StorySegment
+        from datetime import datetime, timezone
+
+        mock_story = StorySession(
+            session_id="story-123",
+            child_name="Emma",
+            child_age=5,
+            request=StoryRequest(topics=["dinosaurs"], values=["sharing"]),
+            title="Dinosaur Adventure",
+            segments=[
+                StorySegment(
+                    segment_index=0,
+                    narrative="Once upon a time...",
+                    segment_type="opening",
+                    discussion_question=None
+                )
+            ],
+            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            status="generated"
+        )
+
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._fetch_story_session", return_value=mock_story):
+                    response = client.get("/api/users/test-user/stories/story-123")
+
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert data["session_id"] == "story-123"
+                    assert data["title"] == "Dinosaur Adventure"
+                    assert data["child_name"] == "Emma"
+                    assert len(data["segments"]) == 1
+
+    def test_get_story_not_found(self):
+        """Test getting a non-existent story."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._fetch_story_session", return_value=None):
+                    response = client.get("/api/users/test-user/stories/nonexistent")
+
+                    assert response.status_code == 404
+                    assert "not found" in response.json()["detail"]
+
+    def test_get_story_firebase_unavailable(self):
+        """Test getting story when Firebase is not available."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", False):
+            response = client.get("/api/users/test-user/stories/story-123")
+            assert response.status_code == 503
+
+
+class TestUpdateStoryStatusEndpoint:
+    """Test PATCH /api/users/{uid}/stories/{session_id}/status endpoint."""
+
+    def test_update_status_success(self):
+        """Test updating story status to favorite."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._update_story_status") as mock_update:
+                    response = client.patch(
+                        "/api/users/test-user/stories/story-123/status?status=favorite"
+                    )
+
+                    assert response.status_code == 200
+                    assert "favorite" in response.json()["message"]
+                    mock_update.assert_called_once_with("test-user", "story-123", "favorite")
+
+    def test_update_status_to_read(self):
+        """Test updating story status to read."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                with patch("main._update_story_status"):
+                    response = client.patch(
+                        "/api/users/test-user/stories/story-123/status?status=read"
+                    )
+
+                    assert response.status_code == 200
+
+    def test_update_status_invalid(self):
+        """Test updating with invalid status."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", True):
+            with patch("main.is_firebase_available", return_value=True):
+                response = client.patch(
+                    "/api/users/test-user/stories/story-123/status?status=invalid"
+                )
+
+                assert response.status_code == 400
+                assert "must be" in response.json()["detail"]
+
+    def test_update_status_firebase_unavailable(self):
+        """Test updating status when Firebase is not available."""
+        with patch("main.FIREBASE_SERVICES_AVAILABLE", False):
+            response = client.patch(
+                "/api/users/test-user/stories/story-123/status?status=read"
+            )
+            assert response.status_code == 503

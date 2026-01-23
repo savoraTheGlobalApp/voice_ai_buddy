@@ -6,6 +6,9 @@ import logging
 from typing import List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from firebase_admin import firestore
+
+from .firebase_service import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +166,204 @@ def get_story_user_prompt() -> str:
         User prompt string
     """
     return "Generate the story now. Respond only with the JSON, no additional text."
+
+
+# =============================================================================
+# Firebase Storage Functions
+# =============================================================================
+
+def save_story_session(
+    uid: str,
+    session_id: str,
+    title: str,
+    segments: List[StorySegment],
+    request: StoryRequest,
+    child_name: str,
+    child_age: int
+) -> None:
+    """
+    Save a generated story session to Firebase.
+
+    Args:
+        uid: Firebase user ID
+        session_id: Unique story session ID
+        title: Story title
+        segments: List of story segments
+        request: Original story request
+        child_name: Child's name
+        child_age: Child's age
+    """
+    db = get_db()
+    ref = db.collection("users").document(uid).collection("stories").document(session_id)
+
+    try:
+        ref.set({
+            "sessionId": session_id,
+            "title": title,
+            "childName": child_name,
+            "childAge": child_age,
+            "request": {
+                "topics": request.topics,
+                "values": request.values,
+                "length": request.length,
+                "setting": request.setting
+            },
+            "segments": [
+                {
+                    "segmentIndex": seg.segment_index,
+                    "narrative": seg.narrative,
+                    "segmentType": seg.segment_type,
+                    "discussionQuestion": seg.discussion_question
+                }
+                for seg in segments
+            ],
+            "status": "generated",
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        })
+        logger.info(f"Saved story session: {session_id} for user {uid}")
+    except Exception as e:
+        logger.error(f"Failed to save story session {session_id}: {e}")
+        raise
+
+
+def fetch_story_session(uid: str, session_id: str) -> Optional[StorySession]:
+    """
+    Fetch a specific story session from Firebase.
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+
+    Returns:
+        StorySession object or None if not found
+    """
+    db = get_db()
+    ref = db.collection("users").document(uid).collection("stories").document(session_id)
+
+    try:
+        doc_snap = ref.get()
+        if not doc_snap.exists:
+            return None
+
+        data = doc_snap.to_dict()
+        if not data:
+            return None
+
+        # Parse request
+        request_data = data.get("request", {})
+        request = StoryRequest(
+            topics=request_data.get("topics", []),
+            values=request_data.get("values", []),
+            length=request_data.get("length", "medium"),
+            setting=request_data.get("setting")
+        )
+
+        # Parse segments
+        segments = [
+            StorySegment(
+                segment_index=seg.get("segmentIndex", idx),
+                narrative=seg.get("narrative", ""),
+                segment_type=seg.get("segmentType", "middle"),
+                discussion_question=seg.get("discussionQuestion")
+            )
+            for idx, seg in enumerate(data.get("segments", []))
+        ]
+
+        # Parse created_at
+        created_at = data.get("createdAt")
+        if hasattr(created_at, "timestamp"):
+            created_at_dt = datetime.fromtimestamp(created_at.timestamp(), tz=timezone.utc)
+        else:
+            created_at_dt = datetime.now(timezone.utc)
+
+        return StorySession(
+            session_id=data.get("sessionId", session_id),
+            child_name=data.get("childName", ""),
+            child_age=data.get("childAge", 0),
+            request=request,
+            title=data.get("title", ""),
+            segments=segments,
+            created_at=created_at_dt,
+            status=data.get("status", "generated")
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch story session {session_id}: {e}")
+        raise
+
+
+def list_story_sessions(uid: str, limit: int = 20) -> List[dict]:
+    """
+    List story sessions for a user, ordered by creation date (newest first).
+
+    Args:
+        uid: Firebase user ID
+        limit: Maximum number of stories to return
+
+    Returns:
+        List of story summary dicts with id, title, createdAt, status
+    """
+    db = get_db()
+    stories_ref = db.collection("users").document(uid).collection("stories")
+
+    try:
+        # Query stories ordered by createdAt descending
+        query = stories_ref.order_by("createdAt", direction=firestore.Query.DESCENDING).limit(limit)
+        docs = query.stream()
+
+        stories = []
+        for doc_snap in docs:
+            data = doc_snap.to_dict()
+            if not data:
+                continue
+
+            # Parse created_at for response
+            created_at = data.get("createdAt")
+            if hasattr(created_at, "isoformat"):
+                created_at_str = created_at.isoformat()
+            elif hasattr(created_at, "timestamp"):
+                created_at_str = datetime.fromtimestamp(
+                    created_at.timestamp(), tz=timezone.utc
+                ).isoformat()
+            else:
+                created_at_str = None
+
+            stories.append({
+                "session_id": doc_snap.id,
+                "title": data.get("title", "Untitled Story"),
+                "child_name": data.get("childName", ""),
+                "topics": data.get("request", {}).get("topics", []),
+                "status": data.get("status", "generated"),
+                "created_at": created_at_str
+            })
+
+        return stories
+    except Exception as e:
+        logger.error(f"Failed to list story sessions for {uid}: {e}")
+        raise
+
+
+def update_story_status(uid: str, session_id: str, status: str) -> None:
+    """
+    Update the status of a story session.
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+        status: New status ("generated", "read", "favorite")
+    """
+    if status not in ("generated", "read", "favorite"):
+        raise ValueError(f"Invalid status: {status}")
+
+    db = get_db()
+    ref = db.collection("users").document(uid).collection("stories").document(session_id)
+
+    try:
+        ref.update({
+            "status": status,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        })
+        logger.info(f"Updated story {session_id} status to {status}")
+    except Exception as e:
+        logger.error(f"Failed to update story status {session_id}: {e}")
+        raise
