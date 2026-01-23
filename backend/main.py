@@ -12,6 +12,7 @@ import httpx
 import json
 import asyncio
 import time
+import uuid
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -145,6 +146,27 @@ class ConversationAppendRequest(BaseModel):
 class ConversationAppendResponse(BaseModel):
     session_id: str
     was_split: bool
+
+
+# Story generation request/response models
+class StoryGenerateRequest(BaseModel):
+    topics: List[str]                    # e.g., ["dinosaurs", "space"]
+    values: List[str]                    # e.g., ["sharing", "kindness"]
+    length: str = "medium"               # "short" | "medium" | "long"
+    setting: Optional[str] = None        # e.g., "forest", "underwater"
+
+
+class StorySegmentResponse(BaseModel):
+    segment_index: int
+    narrative: str
+    segment_type: str                    # "opening" | "middle" | "climax" | "resolution"
+    discussion_question: Optional[str] = None
+
+
+class StoryGenerateResponse(BaseModel):
+    session_id: str
+    title: str
+    segments: List[StorySegmentResponse]
 
 
 @app.get("/health")
@@ -1697,6 +1719,60 @@ async def append_conversation(uid: str, session_id: str, request: ConversationAp
             status_code=500,
             detail=f"Failed to append conversation: {str(e)}"
         )
+
+
+# =============================================================================
+# Story Generation Endpoints
+# =============================================================================
+
+@app.post("/api/users/{uid}/stories/generate", response_model=StoryGenerateResponse)
+async def generate_story(uid: str, request: StoryGenerateRequest):
+    """
+    Generate a personalized story for a child.
+
+    Args:
+        uid: Firebase user ID (child's account)
+        request: StoryGenerateRequest with topics, values, length, setting
+
+    Returns:
+        StoryGenerateResponse with session_id, title, and segments
+    """
+    # Generate unique session ID
+    session_id = f"story-{uuid.uuid4().hex[:12]}"
+
+    # TODO: Step 2.3 - Replace with actual OpenAI generation
+    # For now, return hardcoded test response
+
+    # Build a simple test story based on request
+    topics_str = ", ".join(request.topics) if request.topics else "adventure"
+    values_str = ", ".join(request.values) if request.values else "kindness"
+
+    hardcoded_segments = [
+        StorySegmentResponse(
+            segment_index=0,
+            narrative=f"Once upon a time, in a magical world of {topics_str}, there lived a brave little hero.",
+            segment_type="opening",
+            discussion_question=None
+        ),
+        StorySegmentResponse(
+            segment_index=1,
+            narrative=f"One day, our hero discovered something amazing and learned about {values_str}.",
+            segment_type="middle",
+            discussion_question="What do you think the hero discovered?"
+        ),
+        StorySegmentResponse(
+            segment_index=2,
+            narrative="And they all lived happily ever after, having learned an important lesson. The End.",
+            segment_type="resolution",
+            discussion_question=None
+        ),
+    ]
+
+    return StoryGenerateResponse(
+        session_id=session_id,
+        title=f"The {topics_str.title()} Adventure",
+        segments=hardcoded_segments
+    )
 
 
 if __name__ == "__main__":
