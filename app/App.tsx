@@ -4753,6 +4753,30 @@ export default function Page() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          {/* Stories Button */}
+          <button
+            onClick={() => router.push('/stories')}
+            style={{
+              padding: '6px 12px',
+              fontSize: '14px',
+              fontWeight: 600,
+              color: '#ffffff',
+              backgroundColor: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+            Stories
+          </button>
           {/* Toggle Buttons */}
           <button
             onClick={() => setShowChat(false)}
@@ -6466,6 +6490,26 @@ export default function Page() {
           <svg width="24" height="24" viewBox="0 0 24 24" fill={activeSection === 'home' ? '#3b82f6' : 'none'} stroke={activeSection === 'home' ? '#3b82f6' : '#6b7280'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
             <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
+        </button>
+        <button
+          onClick={() => router.push('/stories')}
+          aria-label="Stories"
+          title="Stories"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '8px 24px',
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            transition: 'color 0.2s',
+          }}
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
           </svg>
         </button>
         <button
