@@ -5,7 +5,7 @@ Handles story creation, prompt building, and story session management.
 import logging
 from typing import List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class StorySession:
     request: StoryRequest
     title: str
     segments: List[StorySegment]
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "generated"            # "generated" | "read" | "favorite"
 
 
