@@ -22,7 +22,43 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
       
-      # ⭐ NEW: Shows what will be merged
+      - name: Generate detailed commit message
+        id: commit-msg
+        run: |
+          git fetch origin main dev
+          
+          # Get commit count
+          COMMIT_COUNT=$(git rev-list --count origin/main..origin/dev 2>/dev/null || echo "0")
+          
+          # Get commit list
+          COMMIT_LIST=$(git log origin/main..origin/dev --oneline --no-decorate | head -10 | sed 's/^/- /' || echo "No commits")
+          
+          # Get file changes summary
+          FILE_CHANGES=$(git diff --stat origin/main..origin/dev | tail -1 || echo "No changes")
+          
+          # Get list of changed files
+          CHANGED_FILES=$(git diff --name-only origin/main..origin/dev | head -20 | sed 's/^/  - /' || echo "")
+          
+          # Create detailed commit message
+          cat > /tmp/commit_msg.txt << EOF
+          Merge dev to main: $(date +'%Y-%m-%d %H:%M:%S')
+          
+          Summary:
+          - Commits merged: $COMMIT_COUNT
+          - Files changed: $FILE_CHANGES
+          
+          Commits included:
+          $COMMIT_LIST
+          
+          Files changed:
+          $CHANGED_FILES
+          EOF
+          
+          # Store message for next step
+          echo "message<<EOF" >> $GITHUB_OUTPUT
+          cat /tmp/commit_msg.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      
       - name: Show what will be merged
         run: |
           echo "## Commits in dev that are not in main:"
@@ -32,7 +68,6 @@ jobs:
           echo "## Files changed:"
           git diff --stat origin/main..origin/dev || echo "No changes"
       
-      # ⭐ NEW: Checks if merge is needed
       - name: Check if merge is needed
         id: check-merge
         run: |
@@ -44,17 +79,19 @@ jobs:
             echo "✅ Changes detected, will merge"
           fi
       
-      # ⭐ UPDATED: Only runs if merge is needed
       - name: Merge dev to main
         if: steps.check-merge.outputs.no_merge == 'false'
         run: |
           git checkout main
           git pull origin main
-          git merge origin/dev --no-edit -m "Merge dev to main: $(date +'%Y-%m-%d %H:%M:%S')"
+          
+          # Use the detailed commit message
+          git merge origin/dev --no-ff -m "$(cat /tmp/commit_msg.txt)"
           git push origin main
+          
           echo "✅ Successfully merged dev to main"
+          echo "📝 Commit message includes detailed information"
       
-      # ⭐ NEW: Skips merge if already in sync
       - name: Skip merge (already in sync)
         if: steps.check-merge.outputs.no_merge == 'true'
         run: |
