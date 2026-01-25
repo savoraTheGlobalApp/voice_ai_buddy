@@ -1,0 +1,61 @@
+name: Manual Merge Dev to Main
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+      
+      # ⭐ NEW: Shows what will be merged
+      - name: Show what will be merged
+        run: |
+          echo "## Commits in dev that are not in main:"
+          git fetch origin main dev
+          git log origin/main..origin/dev --oneline || echo "No new commits"
+          echo ""
+          echo "## Files changed:"
+          git diff --stat origin/main..origin/dev || echo "No changes"
+      
+      # ⭐ NEW: Checks if merge is needed
+      - name: Check if merge is needed
+        id: check-merge
+        run: |
+          if git diff --quiet origin/main...origin/dev; then
+            echo "no_merge=true" >> $GITHUB_OUTPUT
+            echo "⚠️ No changes to merge - dev and main are already in sync"
+          else
+            echo "no_merge=false" >> $GITHUB_OUTPUT
+            echo "✅ Changes detected, will merge"
+          fi
+      
+      # ⭐ UPDATED: Only runs if merge is needed
+      - name: Merge dev to main
+        if: steps.check-merge.outputs.no_merge == 'false'
+        run: |
+          git checkout main
+          git pull origin main
+          git merge origin/dev --no-edit -m "Merge dev to main: $(date +'%Y-%m-%d %H:%M:%S')"
+          git push origin main
+          echo "✅ Successfully merged dev to main"
+      
+      # ⭐ NEW: Skips merge if already in sync
+      - name: Skip merge (already in sync)
+        if: steps.check-merge.outputs.no_merge == 'true'
+        run: |
+          echo "ℹ️ Skipping merge - dev and main are already in sync"
