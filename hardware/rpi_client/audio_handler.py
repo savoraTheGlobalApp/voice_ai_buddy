@@ -753,6 +753,49 @@ class StreamingSpeaker:
         except Exception:
             return False
     
+    def _build_detection_info(
+        self,
+        is_finished: bool,
+        queue_condition: bool,
+        audio_condition: bool,
+        hardware_condition: bool,
+        queue_empty_duration: float = None,
+        audio_silence_duration: float = None
+    ) -> dict:
+        """
+        Helper method to build detection info dictionary.
+        
+        Args:
+            is_finished: Whether playback is finished
+            queue_condition: Whether queue condition is met
+            audio_condition: Whether audio condition is met
+            hardware_condition: Whether hardware condition is met
+            queue_empty_duration: Cached queue empty duration (optional)
+            audio_silence_duration: Cached audio silence duration (optional)
+        
+        Returns:
+            Detection info dictionary
+        """
+        if queue_empty_duration is None:
+            queue_empty_duration = self.get_queue_empty_duration()
+        if audio_silence_duration is None:
+            audio_silence_duration = self.audio_level_silence_duration
+        
+        return {
+            "queue_empty": self.is_queue_empty(),
+            "queue_empty_duration": queue_empty_duration,
+            "audio_silent": audio_condition,
+            "audio_silence_duration": audio_silence_duration,
+            "current_level_db": self.get_current_audio_level_db(),
+            "avg_level_db": self.get_average_audio_level_db(),
+            "stream_active": self.is_stream_active(),
+            "total_written": self.total_audio_written,
+            "is_finished": is_finished,
+            "queue_condition_met": queue_condition,
+            "audio_condition_met": audio_condition,
+            "hardware_condition_met": hardware_condition
+        }
+    
     def has_finished_playback(
         self,
         queue_silence_threshold: float = QUEUE_SILENCE_THRESHOLD,
@@ -760,7 +803,10 @@ class StreamingSpeaker:
         hardware_buffer_delay: float = HARDWARE_BUFFER_DELAY
     ) -> tuple[bool, dict[str, any]]:
         """
-        Check if playback has finished using multi-factor detection.
+        Check if playback has finished using optimized multi-factor detection.
+        
+        OPTIMIZED: Uses unified threshold calculation to eliminate redundancy and
+        reduce turn-around time. Early exits for common cases.
         
         This method combines:
         1. Queue state (empty for threshold duration)
@@ -775,37 +821,53 @@ class StreamingSpeaker:
         Returns:
             Tuple of (is_finished, detection_info_dict)
         """
-        detection_info = {
-            "queue_empty": self.is_queue_empty(),
-            "queue_empty_duration": self.get_queue_empty_duration(),
-            "audio_silent": self.is_audio_silent(audio_silence_threshold),
-            "audio_silence_duration": self.audio_level_silence_duration,
-            "current_level_db": self.get_current_audio_level_db(),
-            "avg_level_db": self.get_average_audio_level_db(),
-            "stream_active": self.is_stream_active(),
-            "total_written": self.total_audio_written
-        }
+        # FAST PATH: Early exit if queue is not empty (most common case)
+        queue_empty = self.is_queue_empty()
+        if not queue_empty:
+            # Queue has data, definitely not finished - return immediately
+            return False, self._build_detection_info(False, False, False, False)
         
-        # All conditions must be met for definitive completion
-        queue_condition = (
-            self.is_queue_empty() and
-            self.get_queue_empty_duration() >= queue_silence_threshold
+        # Cache expensive operations (called multiple times)
+        queue_empty_duration = self.queue_empty_duration  # Direct access, already checked queue is empty
+        audio_silence_duration = self.audio_level_silence_duration
+        
+        # OPTIMIZATION: Use unified threshold - queue must be empty for
+        # max(queue_threshold, audio_threshold) + buffer_delay
+        # This ensures both conditions are met while minimizing wait time
+        required_queue_duration = max(queue_silence_threshold, audio_silence_threshold) + hardware_buffer_delay
+        
+        # Early exit if queue hasn't been empty long enough
+        if queue_empty_duration < required_queue_duration:
+            # Build minimal detection info for early exit
+            audio_ready = (
+                self.last_audio_level_time > 0 and
+                audio_silence_duration >= audio_silence_threshold
+            )
+            queue_condition_met = queue_empty_duration >= queue_silence_threshold
+            hardware_condition_met = queue_empty_duration >= required_queue_duration
+            
+            return False, self._build_detection_info(
+                False, queue_condition_met, audio_ready, hardware_condition_met,
+                queue_empty_duration, audio_silence_duration
+            )
+        
+        # Check if audio has been silent long enough
+        audio_ready = (
+            self.last_audio_level_time > 0 and
+            audio_silence_duration >= audio_silence_threshold
         )
         
-        audio_condition = self.is_audio_silent(audio_silence_threshold)
+        # Both conditions must be ready
+        is_finished = audio_ready
         
-        # Add hardware buffer delay to queue condition
-        total_queue_duration = self.get_queue_empty_duration()
-        hardware_condition = total_queue_duration >= (queue_silence_threshold + hardware_buffer_delay)
+        # Build detection info
+        queue_condition_met = queue_empty_duration >= queue_silence_threshold
+        hardware_condition_met = queue_empty_duration >= required_queue_duration
         
-        is_finished = queue_condition and audio_condition and hardware_condition
-        
-        detection_info["is_finished"] = is_finished
-        detection_info["queue_condition_met"] = queue_condition
-        detection_info["audio_condition_met"] = audio_condition
-        detection_info["hardware_condition_met"] = hardware_condition
-        
-        return is_finished, detection_info
+        return is_finished, self._build_detection_info(
+            is_finished, queue_condition_met, audio_ready, hardware_condition_met,
+            queue_empty_duration, audio_silence_duration
+        )
 
 
 def generate_silence_chunk(chunk_size: int, sample_rate: int = 16000) -> bytes:
@@ -867,7 +929,7 @@ def resample_audio_to_16khz(audio_data: bytes, source_sample_rate: int) -> bytes
         
     except ImportError:
         # Fallback: simple linear interpolation (less accurate but works without pydub)
-        logger.warning("pydub not available, using simple resampling (may be less accurate)")
+        #logger.warning("pydub not available, using simple resampling (may be less accurate)")
         try:
             import numpy as np
         except ImportError:
