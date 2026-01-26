@@ -17,6 +17,7 @@ from .instruction_builder import (
     build_greeting_prompt,
     UserMemory
 )
+from .greeting_prompts import GreetingSelector
 from .constants import (
     MEMORY_EXTRACT_EVERY_N,
     MEMORY_EXTRACTION_TOP_K,
@@ -78,7 +79,11 @@ class VoiceAIBuddy:
         # Speaking state management (thread-safe)
         self.speaking = threading.Event()  # Set when TTS is active, cleared when finished
         self.speaking_cooldown_ms = SPEAKING_COOLDOWN_MS
-    
+
+        # Greeting system (hardcoded prompts for instant, varied greetings)
+        # Tracks last 15 greetings to ensure no repetition
+        self.greeting_selector = GreetingSelector(max_recent=15)
+
     async def initialize(self) -> None:
         """Initialize all components."""
         logger.info("Initializing Voice AI Buddy...")
@@ -325,81 +330,52 @@ class VoiceAIBuddy:
     async def _send_initial_greeting(self) -> None:
         """
         Send initial greeting from AI before user starts speaking.
-        This makes the AI speak first, creating a more engaging experience.
+        Uses hardcoded age-appropriate greetings for instant, varied responses.
         """
         if self._greeting_sent:
             logger.debug("Initial greeting already sent, skipping")
             return
-        
-        logger.info("Generating initial greeting...")
-        
+
+        logger.info("Selecting initial greeting...")
+
         try:
-            # Build greeting prompt with user info and memories
-            top_memories_count = await config.get_top_memories_count()
-            memories: List[UserMemory] = []
-            if config.USER_UID and self.api_client:
-                try:
-                    memory_dicts = await self.api_client.get_top_memories(
-                        config.USER_UID,
-                        top_memories_count
-                    )
-                    memories = [
-                        UserMemory(
-                            id=mem.get("id"),
-                            text=mem.get("text", ""),
-                            type=mem.get("type", "facts"),
-                            importance=mem.get("importance", 3)
-                        )
-                        for mem in memory_dicts
-                    ]
-                except Exception as e:
-                    logger.warning(f"Failed to fetch memories for greeting: {e}")
-            
-            greeting_prompt = build_greeting_prompt(
+            # Get random age-appropriate greeting (instant, no LLM call)
+            greeting_text = self.greeting_selector.get_greeting(
                 user_name=config.USER_NAME,
-                user_age=config.USER_AGE,
-                top_memories=memories,
-                top_memories_count=top_memories_count
+                user_age=config.USER_AGE
             )
-            
-            # Add greeting prompt to conversation history temporarily
-            greeting_user_message = ChatMessage(role="user", content=greeting_prompt)
-            self.conversation_history.append(greeting_user_message)
-            
-            # Generate greeting using chat API
-            if self.use_streaming:
-                await self._handle_streaming_greeting()
-            else:
-                await self._handle_non_streaming_greeting()
-            
-            # Remove greeting prompt from history (keep only system + assistant greeting)
-            # Find and remove the greeting prompt
-            greeting_prompt_index = -1
-            for i, msg in enumerate(self.conversation_history):
-                if msg.role == "user" and msg.content == greeting_prompt:
-                    greeting_prompt_index = i
-                    break
-            
-            if greeting_prompt_index >= 0:
-                self.conversation_history.pop(greeting_prompt_index)
-                logger.debug("Removed greeting prompt from conversation history")
-            
-            self._greeting_sent = True
-            logger.info("Initial greeting sent and spoken successfully")
-            
+
+            logger.info(f"Selected greeting: '{greeting_text}'")
+
+            # Add greeting to conversation history
+            assistant_message = ChatMessage(role="assistant", content=greeting_text)
+            self.conversation_history.append(assistant_message)
+
+            # Speak greeting
+            try:
+                if self.use_streaming:
+                    await self._speak_greeting_streaming(greeting_text)
+                else:
+                    await self._speak_greeting_non_streaming(greeting_text)
+                self._greeting_sent = True
+                logger.info("Initial greeting sent and spoken successfully")
+            except Exception as e:
+                logger.error(f"Failed to speak greeting: {e}", exc_info=True)
+                raise
+
         except Exception as e:
-            logger.error(f"Failed to send initial greeting: {e}", exc_info=True)
-            # Use fallback greeting
+            logger.error(f"Failed to generate/speak greeting: {e}", exc_info=True)
+            # Use simple fallback greeting
             fallback_greeting = (
                 f"Hi {config.USER_NAME}! I'm your learning buddy! What would you like to explore today?"
                 if config.USER_NAME
                 else "Hi! I'm your learning buddy! What would you like to explore today?"
             )
-            
+
             # Add fallback greeting to history
             assistant_message = ChatMessage(role="assistant", content=fallback_greeting)
             self.conversation_history.append(assistant_message)
-            
+
             # Speak fallback greeting
             try:
                 if self.use_streaming:
