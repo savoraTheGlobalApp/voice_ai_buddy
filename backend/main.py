@@ -12,6 +12,7 @@ import httpx
 import json
 import asyncio
 import time
+import uuid
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -145,6 +146,27 @@ class ConversationAppendRequest(BaseModel):
 class ConversationAppendResponse(BaseModel):
     session_id: str
     was_split: bool
+
+
+# Story generation request/response models
+class StoryGenerateRequest(BaseModel):
+    topics: List[str]                    # e.g., ["dinosaurs", "space"]
+    values: List[str]                    # e.g., ["sharing", "kindness"]
+    length: str = "medium"               # "short" | "medium" | "long"
+    setting: Optional[str] = None        # e.g., "forest", "underwater"
+
+
+class StorySegmentResponse(BaseModel):
+    segment_index: int
+    narrative: str
+    segment_type: str                    # "opening" | "middle" | "climax" | "resolution"
+    discussion_question: Optional[str] = None
+
+
+class StoryGenerateResponse(BaseModel):
+    session_id: str
+    title: str
+    segments: List[StorySegmentResponse]
 
 
 @app.get("/health")
@@ -528,6 +550,18 @@ try:
         start_conversation_session as _start_conversation_session,
         append_conversation_chunk as _append_conversation_chunk,
         ConversationMessage as ServiceConversationMessage
+    )
+    from services.story_service import (
+        build_story_system_prompt,
+        get_story_user_prompt,
+        StoryRequest as ServiceStoryRequest,
+        ChildProfile,
+        LENGTH_TO_SEGMENTS,
+        StorySegment as ServiceStorySegment,
+        save_story_session as _save_story_session,
+        fetch_story_session as _fetch_story_session,
+        list_story_sessions as _list_story_sessions,
+        update_story_status as _update_story_status,
     )
     FIREBASE_SERVICES_AVAILABLE = True
 except ImportError as e:
@@ -1696,6 +1730,305 @@ async def append_conversation(uid: str, session_id: str, request: ConversationAp
         raise HTTPException(
             status_code=500,
             detail=f"Failed to append conversation: {str(e)}"
+        )
+
+
+# =============================================================================
+# Story Generation Endpoints
+# =============================================================================
+
+@app.post("/api/users/{uid}/stories/generate", response_model=StoryGenerateResponse)
+async def generate_story(uid: str, request: StoryGenerateRequest):
+    """
+    Generate a personalized story for a child using OpenAI.
+
+    Args:
+        uid: Firebase user ID (child's account)
+        request: StoryGenerateRequest with topics, values, length, setting
+
+    Returns:
+        StoryGenerateResponse with session_id, title, and segments
+    """
+    # Check OpenAI API key
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="OPENAI_API_KEY is not set on the server"
+        )
+
+    # Generate unique session ID
+    session_id = f"story-{uuid.uuid4().hex[:12]}"
+
+    # Try to fetch child data from Firebase, use defaults if not available
+    child_name = "Little One"
+    child_age = 5
+
+    if FIREBASE_SERVICES_AVAILABLE and is_firebase_available():
+        try:
+            db = get_db()
+            user_doc = db.collection("users").document(uid).get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                child_name = user_data.get("name", child_name)
+                child_age = user_data.get("age", child_age)
+        except Exception as e:
+            logger.warning(f"Failed to fetch user data for {uid}: {e}, using defaults")
+
+    # Build the story prompt
+    child_profile = ChildProfile(name=child_name, age=child_age)
+    story_request = ServiceStoryRequest(
+        topics=request.topics,
+        values=request.values,
+        length=request.length,
+        setting=request.setting
+    )
+
+    system_prompt = build_story_system_prompt(child_profile, story_request)
+    user_prompt = get_story_user_prompt()
+
+    # Call OpenAI API
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.8,
+                    "max_tokens": 2000,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=60.0,
+            )
+
+            if not response.is_success:
+                error_text = response.text
+                logger.error(f"OpenAI API error: {error_text}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to generate story: {error_text}"
+                )
+
+            data = response.json()
+            story_json = data["choices"][0]["message"]["content"]
+
+            # Parse the JSON response
+            try:
+                story_data = json.loads(story_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse story JSON: {e}, response: {story_json}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to parse generated story"
+                )
+
+            # Convert to response model
+            segments = [
+                StorySegmentResponse(
+                    segment_index=seg.get("segment_index", idx),
+                    narrative=seg.get("narrative", ""),
+                    segment_type=seg.get("segment_type", "middle"),
+                    discussion_question=seg.get("discussion_question")
+                )
+                for idx, seg in enumerate(story_data.get("segments", []))
+            ]
+
+            title = story_data.get("title", "A Magical Story")
+
+            # Save story to Firebase (non-blocking, don't fail if save fails)
+            if FIREBASE_SERVICES_AVAILABLE and is_firebase_available():
+                try:
+                    service_segments = [
+                        ServiceStorySegment(
+                            segment_index=seg.segment_index,
+                            narrative=seg.narrative,
+                            segment_type=seg.segment_type,
+                            discussion_question=seg.discussion_question
+                        )
+                        for seg in segments
+                    ]
+                    _save_story_session(
+                        uid=uid,
+                        session_id=session_id,
+                        title=title,
+                        segments=service_segments,
+                        request=story_request,
+                        child_name=child_name,
+                        child_age=child_age
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save story to Firebase: {e}")
+                    # Don't fail the request, story was generated successfully
+
+            return StoryGenerateResponse(
+                session_id=session_id,
+                title=title,
+                segments=segments
+            )
+
+    except httpx.HTTPError as e:
+        logger.error(f"Network error while calling OpenAI: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Network error while generating story: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error generating story: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/stories")
+async def list_stories(uid: str, limit: int = 20):
+    """
+    List story sessions for a user.
+
+    Args:
+        uid: Firebase user ID
+        limit: Maximum number of stories to return (default: 20)
+
+    Returns:
+        List of story summaries with session_id, title, created_at, status
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    try:
+        stories = _list_story_sessions(uid, limit)
+        return {"stories": stories}
+    except Exception as e:
+        logger.error(f"Failed to list stories for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list stories: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/stories/{session_id}")
+async def get_story(uid: str, session_id: str):
+    """
+    Get a specific story session.
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+
+    Returns:
+        Full story with all segments
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    try:
+        story = _fetch_story_session(uid, session_id)
+        if story is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Story {session_id} not found"
+            )
+
+        return {
+            "session_id": story.session_id,
+            "title": story.title,
+            "child_name": story.child_name,
+            "child_age": story.child_age,
+            "request": {
+                "topics": story.request.topics,
+                "values": story.request.values,
+                "length": story.request.length,
+                "setting": story.request.setting
+            },
+            "segments": [
+                {
+                    "segment_index": seg.segment_index,
+                    "narrative": seg.narrative,
+                    "segment_type": seg.segment_type,
+                    "discussion_question": seg.discussion_question
+                }
+                for seg in story.segments
+            ],
+            "status": story.status,
+            "created_at": story.created_at.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get story {session_id} for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get story: {str(e)}"
+        )
+
+
+@app.patch("/api/users/{uid}/stories/{session_id}/status")
+async def update_story_status_endpoint(uid: str, session_id: str, status: str):
+    """
+    Update the status of a story (e.g., mark as read or favorite).
+
+    Args:
+        uid: Firebase user ID
+        session_id: Story session ID
+        status: New status ("generated", "read", "favorite")
+
+    Returns:
+        Success message
+    """
+    if not FIREBASE_SERVICES_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase services not available. Check backend configuration."
+        )
+
+    if not is_firebase_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Firebase not configured. Set FIREBASE_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS."
+        )
+
+    if status not in ("generated", "read", "favorite"):
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be 'generated', 'read', or 'favorite'"
+        )
+
+    try:
+        _update_story_status(uid, session_id, status)
+        return {"message": f"Story status updated to {status}"}
+    except Exception as e:
+        logger.error(f"Failed to update story status {session_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update story status: {str(e)}"
         )
 
 
