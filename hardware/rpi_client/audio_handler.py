@@ -551,14 +551,36 @@ class StreamingSpeaker:
                 self.stream = None
         
         # Clear queue
+        self.clear_queue()
+
+        logger.info("Stopped streaming speaker")
+
+    def clear_queue(self) -> None:
+        """Drain all pending audio chunks from the queue."""
+        count = 0
         while not self.q.empty():
             try:
                 self.q.get_nowait()
+                count += 1
             except queue.Empty:
                 break
-        
-        logger.info("Stopped streaming speaker")
-    
+        if count > 0:
+            logger.debug(f"Cleared {count} chunks from audio queue")
+
+    def reset_tracking(self) -> None:
+        """
+        Reset audio level and timing tracking to initial state.
+        Call this after feedback audio (beep/ambient) stops so that
+        TTS completion detection starts fresh.
+        """
+        self.last_audio_time = 0.0
+        self.queue_empty_duration = 0.0
+        self.audio_levels.clear()
+        self.last_audio_level_time = 0.0
+        self.audio_level_silence_duration = 0.0
+        self.total_audio_written = 0
+        logger.debug("Reset streaming speaker tracking state")
+
     def play(self, data: bytes) -> None:
         """
         Queue audio chunk for playback.
