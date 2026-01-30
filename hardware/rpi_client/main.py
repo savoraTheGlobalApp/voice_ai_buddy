@@ -14,7 +14,6 @@ from .audio_handler import AudioHandler
 from .api_client import APIClient, ChatMessage, MemoryCandidate
 from .instruction_builder import (
     build_socratic_tutor_instructions,
-    build_greeting_prompt,
     UserMemory
 )
 from .greeting_prompts import GreetingSelector
@@ -387,74 +386,6 @@ class VoiceAIBuddy:
             except Exception as e2:
                 logger.error(f"Failed to speak fallback greeting: {e2}", exc_info=True)
                 # Continue anyway - don't block startup
-    
-    async def _handle_streaming_greeting(self) -> None:
-        """Handle streaming greeting generation and TTS."""
-        logger.info("Getting AI greeting (streaming)...")
-        
-        # Buffer for accumulating response text
-        response_text = ""
-        text_buffer = ""
-        tts_finished = asyncio.Event()
-        self._tts_finished_event = tts_finished
-        
-        # Callback for streaming chat tokens
-        async def on_chat_token(token: str) -> None:
-            nonlocal response_text, text_buffer
-            response_text += token
-            text_buffer += token
-            
-            # Send text chunks to TTS when buffer is large enough
-            if len(text_buffer) >= TTS_TEXT_CHUNK_SIZE:
-                text_to_speak = text_buffer
-                text_buffer = ""
-                if text_to_speak.strip():
-                    try:
-                        await self.api_client.send_tts_text(text_to_speak)
-                    except RuntimeError as e:
-                        logger.error(f"Failed to send TTS text: {e}")
-        
-        # Stream chat response
-        full_response = await self.api_client.chat_stream(
-            self.conversation_history,
-            on_token=on_chat_token
-        )
-        
-        # Send any remaining buffered text
-        if text_buffer.strip():
-            try:
-                await self.api_client.send_tts_text(text_buffer)
-            except RuntimeError as e:
-                logger.error(f"Failed to send remaining TTS text: {e}")
-        
-        # Flush TTS to finish current utterance
-        try:
-            await self.api_client.flush_tts()
-        except RuntimeError as e:
-            logger.error(f"Failed to flush TTS: {e}")
-        
-        logger.info(f"AI greeting (streaming): '{full_response}'")
-        
-        # Add AI response to conversation history
-        assistant_message = ChatMessage(role="assistant", content=full_response)
-        self.conversation_history.append(assistant_message)
-        
-        # Wait for TTS playback to finish
-        await self._wait_for_tts_completion(tts_finished)
-        self._tts_finished_event = None
-    
-    async def _handle_non_streaming_greeting(self) -> None:
-        """Handle non-streaming greeting generation and TTS."""
-        logger.info("Getting AI greeting (non-streaming)...")
-        response_text = await self.api_client.chat(self.conversation_history)
-        logger.info(f"AI greeting: '{response_text}'")
-        
-        # Add AI response to conversation history
-        assistant_message = ChatMessage(role="assistant", content=response_text)
-        self.conversation_history.append(assistant_message)
-        
-        # Speak the greeting
-        await self._speak_greeting_non_streaming(response_text)
     
     async def _speak_greeting_streaming(self, text: str) -> None:
         """Speak greeting using streaming TTS."""
