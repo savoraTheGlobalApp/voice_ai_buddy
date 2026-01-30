@@ -81,3 +81,13 @@ STREAMING_SPEAKER_STOP_TIMEOUT = 2.0  # Thread join timeout (seconds)
 AUDIO_CHUNK_LOG_INTERVAL = 100  # Log every N chunks
 SILENCE_CHUNK_LOG_INTERVAL = 100  # Log every N silence chunks
 
+# ============================================================================
+# Audio Feedback (Beep + Ambient Thinking Music)
+# ============================================================================
+FEEDBACK_BEEP_FREQUENCY = 880       # Hz (A5 note - pleasant, not harsh)
+FEEDBACK_BEEP_DURATION = 0.1        # seconds (100ms)
+FEEDBACK_BEEP_VOLUME = 0.3          # 0.0-1.0 (30% - audible but not jarring)
+FEEDBACK_AMBIENT_DELAY = 0.3        # seconds before ambient music starts after beep
+FEEDBACK_AMBIENT_CHUNK_MS = 100     # ms per ambient chunk queued to speaker
+FEEDBACK_AMBIENT_VOLUME = 0.15      # 0.0-1.0 (15% - subtle background)
+

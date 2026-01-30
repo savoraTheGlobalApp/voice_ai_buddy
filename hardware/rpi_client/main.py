@@ -17,6 +17,7 @@ from .instruction_builder import (
     UserMemory
 )
 from .greeting_prompts import GreetingSelector
+from .audio_feedback import AudioFeedbackManager
 from .constants import (
     MEMORY_EXTRACT_EVERY_N,
     MEMORY_EXTRACTION_TOP_K,
@@ -83,6 +84,9 @@ class VoiceAIBuddy:
         # Tracks last 15 greetings to ensure no repetition
         self.greeting_selector = GreetingSelector(max_recent=15)
 
+        # Audio feedback (beep + ambient music for perceived latency reduction)
+        self.audio_feedback: Optional[AudioFeedbackManager] = None
+
     async def initialize(self) -> None:
         """Initialize all components."""
         logger.info("Initializing Voice AI Buddy...")
@@ -134,7 +138,15 @@ class VoiceAIBuddy:
             self.streaming_speaker = self.audio_handler.start_streaming_playback(sample_rate=48000)
             self.streaming_speaker.start()
             logger.info("Initialized streaming speaker for Deepgram TTS")
-        
+
+            # Initialize audio feedback (beep + ambient) using the streaming speaker
+            ambient_path = Path(__file__).resolve().parent.parent.parent / "public" / "audio" / "processing.mp3"
+            self.audio_feedback = AudioFeedbackManager(
+                streaming_speaker=self.streaming_speaker,
+                ambient_path=str(ambient_path) if ambient_path.exists() else None,
+            )
+            logger.info("Initialized audio feedback manager")
+
         # List available devices
         devices = self.audio_handler.list_devices()
         logger.info(f"Found {len(devices)} audio devices")
@@ -203,8 +215,13 @@ class VoiceAIBuddy:
         # Start persistent TTS connection if using streaming
         if self.use_streaming:
             self._start_persistent_tts_connection()
-            # Wait a bit for connection to establish
-            await asyncio.sleep(TTS_CONNECTION_STARTUP_DELAY)
+            # Wait for TTS WebSocket to actually connect (up to 5s)
+            for _ in range(50):
+                if self.api_client.tts_websocket:
+                    break
+                await asyncio.sleep(0.1)
+            if not self.api_client.tts_websocket:
+                logger.warning("TTS WebSocket not connected after 5s, greeting may fail")
         
         # Start speaking flag watchdog
         self._start_speaking_watchdog()
@@ -298,12 +315,17 @@ class VoiceAIBuddy:
             return
         
         logger.info(f"User said: '{transcript}'")
-        
+
+        # Immediate audio feedback so user knows input was received
+        if self.audio_feedback and self.use_streaming:
+            self.audio_feedback.play_beep()
+            self.audio_feedback.start_ambient(loop=True)
+
         # Add to conversation history
         user_message = ChatMessage(role="user", content=transcript)
         self.conversation_history.append(user_message)
         self.user_msg_counter += 1
-        
+
         # Get AI response
         try:
             if self.use_streaming:
@@ -392,12 +414,19 @@ class VoiceAIBuddy:
         try:
             await self.api_client.send_tts_text(text)
             await self.api_client.flush_tts()
-            
+
             # Wait for TTS to complete
             tts_finished = asyncio.Event()
             self._tts_finished_event = tts_finished
             await self._wait_for_tts_completion(tts_finished)
             self._tts_finished_event = None
+
+            # Drain any stale TTS chunks that arrive after playback finishes,
+            # then force-clear the speaking flag so the main loop starts clean.
+            await asyncio.sleep(0.3)
+            if self.streaming_speaker:
+                self.streaming_speaker.clear_queue()
+            self.speaking.clear()
         except Exception as e:
             logger.error(f"Failed to speak greeting via streaming TTS: {e}", exc_info=True)
             raise
@@ -468,6 +497,9 @@ class VoiceAIBuddy:
             async def on_audio_chunk(audio_chunk: bytes) -> None:
                 """Play audio chunk as it arrives."""
                 if self.streaming_speaker:
+                    # Stop ambient feedback before first TTS chunk
+                    if not self.speaking.is_set() and self.audio_feedback:
+                        self.audio_feedback.stop_ambient()
                     self.streaming_speaker.play(audio_chunk)
                     # Set speaking flag on first audio chunk
                     if not self.speaking.is_set():
@@ -926,6 +958,10 @@ class VoiceAIBuddy:
             finally:
                 self._tts_connection_task = None
         
+        # Stop audio feedback if active
+        if self.audio_feedback:
+            self.audio_feedback.cleanup()
+
         # Stop streaming speaker if active
         if self.streaming_speaker:
             self.streaming_speaker.stop()
