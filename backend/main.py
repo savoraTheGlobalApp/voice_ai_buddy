@@ -3,7 +3,7 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 import os
@@ -63,7 +63,15 @@ load_dotenv()
 # Recommended: 1200ms (1.2 seconds) for real-time conversation
 DEEPGRAM_STT_ENDPOINTING_MS = 100
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from middleware.rate_limit import limiter, track_usage, get_usage_summary, get_limit_for
+
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
+
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS configuration - allow Next.js frontend
 frontend_url = os.getenv("FRONTEND_URL", "")
@@ -567,6 +575,9 @@ try:
 except ImportError as e:
     FIREBASE_SERVICES_AVAILABLE = False
     logger.warning(f"Firebase services not available: {e}")
+
+# Auth middleware
+from middleware.auth import get_current_user, require_user_match
 
 
 @app.post("/api/memories/extract", response_model=MemoryExtractResponse)
@@ -1738,17 +1749,31 @@ async def append_conversation(uid: str, session_id: str, request: ConversationAp
 # =============================================================================
 
 @app.post("/api/users/{uid}/stories/generate", response_model=StoryGenerateResponse)
-async def generate_story(uid: str, request: StoryGenerateRequest):
+@limiter.limit("50/day")
+async def generate_story(request: Request, uid: str, story_request: StoryGenerateRequest, token: dict = Depends(get_current_user)):
     """
     Generate a personalized story for a child using OpenAI.
 
     Args:
         uid: Firebase user ID (child's account)
-        request: StoryGenerateRequest with topics, values, length, setting
+        story_request: StoryGenerateRequest with topics, values, length, setting
 
     Returns:
         StoryGenerateResponse with session_id, title, and segments
     """
+    require_user_match(uid, token)
+
+    # Check tier-based rate limit
+    usage = await get_usage_summary(uid)
+    limit_str = get_limit_for("story_generate", uid)
+    daily_limit = int(limit_str.split("/")[0])
+    current = usage.get("stories_generated", 0)
+    if current >= daily_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily story limit reached ({daily_limit} stories/day). Upgrade to premium for more."
+        )
+
     # Check OpenAI API key
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -1777,14 +1802,14 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
 
     # Build the story prompt
     child_profile = ChildProfile(name=child_name, age=child_age)
-    story_request = ServiceStoryRequest(
-        topics=request.topics,
-        values=request.values,
-        length=request.length,
-        setting=request.setting
+    service_request = ServiceStoryRequest(
+        topics=story_request.topics,
+        values=story_request.values,
+        length=story_request.length,
+        setting=story_request.setting
     )
 
-    system_prompt = build_story_system_prompt(child_profile, story_request)
+    system_prompt = build_story_system_prompt(child_profile, service_request)
     user_prompt = get_story_user_prompt()
 
     # Call OpenAI API
@@ -1860,13 +1885,16 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
                         session_id=session_id,
                         title=title,
                         segments=service_segments,
-                        request=story_request,
+                        request=service_request,
                         child_name=child_name,
                         child_age=child_age
                     )
                 except Exception as e:
                     logger.warning(f"Failed to save story to Firebase: {e}")
                     # Don't fail the request, story was generated successfully
+
+            # Track usage after successful generation
+            await track_usage(uid, "stories_generated")
 
             return StoryGenerateResponse(
                 session_id=session_id,
@@ -1891,7 +1919,8 @@ async def generate_story(uid: str, request: StoryGenerateRequest):
 
 
 @app.get("/api/users/{uid}/stories")
-async def list_stories(uid: str, limit: int = 20):
+@limiter.limit("200/day")
+async def list_stories(request: Request, uid: str, limit: int = 20, token: dict = Depends(get_current_user)):
     """
     List story sessions for a user.
 
@@ -1902,6 +1931,8 @@ async def list_stories(uid: str, limit: int = 20):
     Returns:
         List of story summaries with session_id, title, created_at, status
     """
+    require_user_match(uid, token)
+
     if not FIREBASE_SERVICES_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -1926,7 +1957,8 @@ async def list_stories(uid: str, limit: int = 20):
 
 
 @app.get("/api/users/{uid}/stories/{session_id}")
-async def get_story(uid: str, session_id: str):
+@limiter.limit("200/day")
+async def get_story(request: Request, uid: str, session_id: str, token: dict = Depends(get_current_user)):
     """
     Get a specific story session.
 
@@ -1937,6 +1969,8 @@ async def get_story(uid: str, session_id: str):
     Returns:
         Full story with all segments
     """
+    require_user_match(uid, token)
+
     if not FIREBASE_SERVICES_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -1991,7 +2025,8 @@ async def get_story(uid: str, session_id: str):
 
 
 @app.patch("/api/users/{uid}/stories/{session_id}/status")
-async def update_story_status_endpoint(uid: str, session_id: str, status: str):
+@limiter.limit("100/day")
+async def update_story_status_endpoint(request: Request, uid: str, session_id: str, status: str, token: dict = Depends(get_current_user)):
     """
     Update the status of a story (e.g., mark as read or favorite).
 
@@ -2003,6 +2038,8 @@ async def update_story_status_endpoint(uid: str, session_id: str, status: str):
     Returns:
         Success message
     """
+    require_user_match(uid, token)
+
     if not FIREBASE_SERVICES_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -2030,6 +2067,21 @@ async def update_story_status_endpoint(uid: str, session_id: str, status: str):
             status_code=500,
             detail=f"Failed to update story status: {str(e)}"
         )
+
+
+# =============================================================================
+# Usage Tracking Endpoint
+# =============================================================================
+
+@app.get("/api/users/{uid}/usage")
+async def get_user_usage(request: Request, uid: str, token: dict = Depends(get_current_user)):
+    """
+    Get today's API usage summary for a user.
+    Returns current counts and tier-based limits.
+    """
+    require_user_match(uid, token)
+    usage = await get_usage_summary(uid)
+    return usage
 
 
 if __name__ == "__main__":
