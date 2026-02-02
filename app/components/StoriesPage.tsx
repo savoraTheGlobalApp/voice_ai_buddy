@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { auth } from '@/lib/firebase';
 
 // Types
 interface StorySegment {
@@ -40,56 +41,70 @@ interface StorySummary {
 // API functions
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const token = await auth.currentUser?.getIdToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function handleResponse(response: Response, fallbackMessage: string) {
+  if (response.status === 401) {
+    throw new Error('Session expired. Please sign in again.');
+  }
+  if (response.status === 429) {
+    const error = await response.json().catch(() => ({ detail: 'Rate limit reached' }));
+    throw new Error(error.detail || 'Rate limit reached. Please try again later.');
+  }
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: fallbackMessage }));
+    throw new Error(error.detail || fallbackMessage);
+  }
+}
+
 async function generateStory(uid: string, request: {
   topics: string[];
   values: string[];
   length: string;
   setting?: string;
 }): Promise<Story> {
+  const headers = await getAuthHeaders();
   const response = await fetch(`${BACKEND_URL}/api/users/${uid}/stories/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(request),
   });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Failed to generate story' }));
-    throw new Error(error.detail || 'Failed to generate story');
-  }
-
+  await handleResponse(response, 'Failed to generate story');
   return response.json();
 }
 
 async function listStories(uid: string): Promise<StorySummary[]> {
-  const response = await fetch(`${BACKEND_URL}/api/users/${uid}/stories`);
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${BACKEND_URL}/api/users/${uid}/stories`, { headers });
 
-  if (!response.ok) {
-    throw new Error('Failed to load stories');
-  }
-
+  await handleResponse(response, 'Failed to load stories');
   const data = await response.json();
   return data.stories;
 }
 
 async function getStory(uid: string, sessionId: string): Promise<Story> {
-  const response = await fetch(`${BACKEND_URL}/api/users/${uid}/stories/${sessionId}`);
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${BACKEND_URL}/api/users/${uid}/stories/${sessionId}`, { headers });
 
-  if (!response.ok) {
-    throw new Error('Failed to load story');
-  }
-
+  await handleResponse(response, 'Failed to load story');
   return response.json();
 }
 
 async function updateStoryStatus(uid: string, sessionId: string, status: string): Promise<void> {
+  const headers = await getAuthHeaders();
   const response = await fetch(
     `${BACKEND_URL}/api/users/${uid}/stories/${sessionId}/status?status=${status}`,
-    { method: 'PATCH' }
+    { method: 'PATCH', headers }
   );
 
-  if (!response.ok) {
-    throw new Error('Failed to update story status');
-  }
+  await handleResponse(response, 'Failed to update story status');
 }
 
 // Suggested options
