@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "303882939051",
+    "project_id": "voice-ai-buddy",
+    "storage_bucket": "voice-ai-buddy.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:303882939051:android:803e7a4bba2d3b5775e5ee",
+        "android_client_info": {
+          "package_name": "com.shoryak.yourstory"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDhFtZ6lnC0wkdXywbtlr26HPRC9H5yI0A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

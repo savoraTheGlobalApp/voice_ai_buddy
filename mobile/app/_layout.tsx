@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -6,6 +6,8 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
 import { SubscriptionProvider } from '../src/contexts/SubscriptionContext';
+import { initializePushNotifications } from '../src/lib/notifications';
+import { apiClient } from '../src/api/client';
 
 const queryClient = new QueryClient();
 
@@ -13,7 +15,9 @@ function RootLayoutNav() {
   const { currentUser, loading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  const notificationCleanupRef = useRef<(() => void) | null>(null);
 
+  // Handle auth-based routing
   useEffect(() => {
     if (loading) return;
 
@@ -27,6 +31,34 @@ function RootLayoutNav() {
       router.replace('/(app)/stories');
     }
   }, [currentUser, loading, segments]);
+
+  // Initialize push notifications when user is authenticated
+  useEffect(() => {
+    if (!currentUser?.uid) {
+      // Cleanup if user logs out
+      if (notificationCleanupRef.current) {
+        notificationCleanupRef.current();
+        notificationCleanupRef.current = null;
+      }
+      return;
+    }
+
+    // Initialize notifications
+    initializePushNotifications(currentUser.uid, apiClient)
+      .then((cleanup) => {
+        notificationCleanupRef.current = cleanup;
+      })
+      .catch((e) => {
+        console.log('Push notification init failed (may not be available):', e);
+      });
+
+    return () => {
+      if (notificationCleanupRef.current) {
+        notificationCleanupRef.current();
+        notificationCleanupRef.current = null;
+      }
+    };
+  }, [currentUser?.uid]);
 
   if (loading) {
     return (

@@ -2122,6 +2122,70 @@ async def get_user_usage(request: Request, uid: str, token: dict = Depends(get_c
     return usage
 
 
+# =============================================================================
+# Notification Endpoints
+# =============================================================================
+
+class FCMTokenRequest(BaseModel):
+    token: str
+    platform: str
+
+
+class NotificationOpenedRequest(BaseModel):
+    notification_id: str
+
+
+@app.post("/api/users/{uid}/fcm-token")
+async def register_fcm_token(
+    request: Request,
+    uid: str,
+    body: FCMTokenRequest,
+    token: dict = Depends(get_current_user)
+):
+    """Register or update FCM token for push notifications."""
+    require_user_match(uid, token)
+
+    from services.notification_service import store_fcm_token
+    success = await store_fcm_token(uid, body.token, body.platform)
+
+    if success:
+        return {"status": "ok", "message": "FCM token registered"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to store FCM token")
+
+
+@app.delete("/api/users/{uid}/fcm-token")
+async def remove_fcm_token_endpoint(
+    request: Request,
+    uid: str,
+    fcm_token: str,
+    token: dict = Depends(get_current_user)
+):
+    """Remove FCM token (e.g., on logout)."""
+    require_user_match(uid, token)
+
+    from services.notification_service import remove_fcm_token
+    await remove_fcm_token(uid, fcm_token)
+
+    return {"status": "ok"}
+
+
+@app.post("/api/users/{uid}/notification-opened")
+async def track_notification_opened_endpoint(
+    request: Request,
+    uid: str,
+    body: NotificationOpenedRequest,
+    token: dict = Depends(get_current_user)
+):
+    """Track when a user opens a notification."""
+    require_user_match(uid, token)
+
+    from services.notification_service import track_notification_opened
+    await track_notification_opened(uid, body.notification_id)
+
+    return {"status": "ok"}
+
+
 if __name__ == "__main__":
     import uvicorn
     
