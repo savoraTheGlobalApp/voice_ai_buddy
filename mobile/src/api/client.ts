@@ -1,7 +1,14 @@
 import { auth } from '../lib/firebase';
 
 // TODO: Move to environment variable
-const BACKEND_URL = 'https://voiceaibuddy-production.up.railway.app/';
+// Use local backend for development, deployed URL for production
+// Android emulator uses 10.0.2.2 to reach host machine's localhost
+import { Platform } from 'react-native';
+const BACKEND_URL = __DEV__
+  ? Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000'
+    : 'http://localhost:8000'
+  : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app';
 
 export async function apiClient<T>(
   endpoint: string,

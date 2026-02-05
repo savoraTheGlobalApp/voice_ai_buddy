@@ -2070,6 +2070,44 @@ async def update_story_status_endpoint(request: Request, uid: str, session_id: s
 
 
 # =============================================================================
+# Subscription Endpoint
+# =============================================================================
+
+class SubscriptionStatus(BaseModel):
+    tier: str
+    stories_used_today: int
+    stories_limit: int
+    expires_at: Optional[str] = None
+
+
+@app.get("/api/users/{uid}/subscription", response_model=SubscriptionStatus)
+async def get_subscription_status(request: Request, uid: str, token: dict = Depends(get_current_user)):
+    """
+    Get subscription status for a user.
+    Returns tier, daily usage, and limits.
+    """
+    require_user_match(uid, token)
+    usage = await get_usage_summary(uid)
+    tier = usage.get("tier", "free")
+    stories_used = usage.get("stories_generated", 0)
+    limits = usage.get("limits", {})
+
+    # Parse limit string like "2/day" to extract the number
+    limit_str = limits.get("story_generate", "2/day")
+    try:
+        stories_limit = int(str(limit_str).split("/")[0])
+    except (ValueError, AttributeError, IndexError):
+        stories_limit = 2
+
+    return SubscriptionStatus(
+        tier=tier,
+        stories_used_today=stories_used,
+        stories_limit=stories_limit,
+        expires_at=None,
+    )
+
+
+# =============================================================================
 # Usage Tracking Endpoint
 # =============================================================================
 
