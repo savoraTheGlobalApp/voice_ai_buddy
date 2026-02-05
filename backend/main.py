@@ -2186,6 +2186,167 @@ async def track_notification_opened_endpoint(
     return {"status": "ok"}
 
 
+# =============================================================================
+# Admin Campaign Endpoints
+# =============================================================================
+
+class CampaignCreateRequest(BaseModel):
+    name: str
+    active: bool = False
+    trigger: dict
+    audience: dict
+    content: dict
+    variants: list = []
+
+
+class CampaignUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
+    trigger: Optional[dict] = None
+    audience: Optional[dict] = None
+    content: Optional[dict] = None
+    variants: Optional[list] = None
+
+
+def require_admin(token: dict):
+    """Check if the user has admin privileges."""
+    # For now, just check if user is authenticated
+    # In production, check user's admin status in Firestore
+    if not token or "uid" not in token:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+@app.get("/api/admin/campaigns")
+async def list_campaigns_endpoint(
+    request: Request,
+    active_only: bool = False,
+    token: dict = Depends(get_current_user)
+):
+    """List all notification campaigns."""
+    require_admin(token)
+
+    from services.campaign_service import list_campaigns
+    campaigns = await list_campaigns(active_only=active_only)
+
+    return {
+        "campaigns": [c.to_dict() for c in campaigns],
+        "count": len(campaigns),
+    }
+
+
+@app.post("/api/admin/campaigns")
+async def create_campaign_endpoint(
+    request: Request,
+    body: CampaignCreateRequest,
+    token: dict = Depends(get_current_user)
+):
+    """Create a new notification campaign."""
+    require_admin(token)
+
+    from services.campaign_service import create_campaign
+
+    campaign_data = {
+        "name": body.name,
+        "active": body.active,
+        "trigger": body.trigger,
+        "audience": body.audience,
+        "content": body.content,
+        "variants": body.variants,
+    }
+
+    campaign = await create_campaign(campaign_data)
+    return campaign.to_dict()
+
+
+@app.get("/api/admin/campaigns/{campaign_id}")
+async def get_campaign_endpoint(
+    request: Request,
+    campaign_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """Get a specific campaign."""
+    require_admin(token)
+
+    from services.campaign_service import get_campaign
+    campaign = await get_campaign(campaign_id)
+
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    return campaign.to_dict()
+
+
+@app.put("/api/admin/campaigns/{campaign_id}")
+async def update_campaign_endpoint(
+    request: Request,
+    campaign_id: str,
+    body: CampaignUpdateRequest,
+    token: dict = Depends(get_current_user)
+):
+    """Update a campaign."""
+    require_admin(token)
+
+    from services.campaign_service import update_campaign
+
+    # Build updates dict from non-None fields
+    updates = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.active is not None:
+        updates["active"] = body.active
+    if body.trigger is not None:
+        updates["trigger"] = body.trigger
+    if body.audience is not None:
+        updates["audience"] = body.audience
+    if body.content is not None:
+        updates["content"] = body.content
+    if body.variants is not None:
+        updates["variants"] = body.variants
+
+    campaign = await update_campaign(campaign_id, updates)
+
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    return campaign.to_dict()
+
+
+@app.delete("/api/admin/campaigns/{campaign_id}")
+async def delete_campaign_endpoint(
+    request: Request,
+    campaign_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """Delete a campaign."""
+    require_admin(token)
+
+    from services.campaign_service import delete_campaign
+    success = await delete_campaign(campaign_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    return {"status": "ok", "message": "Campaign deleted"}
+
+
+@app.get("/api/admin/campaigns/{campaign_id}/stats")
+async def get_campaign_stats_endpoint(
+    request: Request,
+    campaign_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """Get campaign statistics."""
+    require_admin(token)
+
+    from services.campaign_service import get_campaign_stats
+    stats = await get_campaign_stats(campaign_id)
+
+    if stats is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    return stats
+
+
 if __name__ == "__main__":
     import uvicorn
     
