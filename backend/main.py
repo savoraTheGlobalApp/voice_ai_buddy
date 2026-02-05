@@ -3,7 +3,7 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 import os
@@ -13,6 +13,7 @@ import json
 import asyncio
 import time
 import uuid
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -2345,6 +2346,124 @@ async def get_campaign_stats_endpoint(
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     return stats
+
+
+# =============================================================================
+# Notification Scheduler Endpoint
+# =============================================================================
+
+def require_internal_key(api_key: str = Header(None, alias="X-Internal-API-Key")):
+    """Verify internal API key for scheduler endpoint."""
+    expected_key = os.getenv("INTERNAL_API_KEY", "dev-internal-key")
+    if api_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid internal API key")
+
+
+@app.post("/api/internal/process-notifications")
+async def process_notifications_endpoint(
+    request: Request,
+    _api_key: str = Depends(require_internal_key)
+):
+    """
+    Process all active notification campaigns.
+    This endpoint should be called by a cron job (e.g., every 15 minutes).
+    Protected by internal API key.
+    """
+    from services.notification_scheduler import process_all_campaigns
+
+    try:
+        stats = await process_all_campaigns()
+        return {
+            "status": "ok",
+            "stats": stats,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to process notifications: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/test/create-campaign-no-auth")
+async def create_test_campaign_no_auth(request: Request):
+    """
+    TEMPORARY: Create a test campaign without authentication.
+    Remove this endpoint in production!
+    """
+    from services.campaign_service import create_campaign
+
+    campaign_data = {
+        "name": "Test Push Notification",
+        "active": True,
+        "trigger": {
+            "type": "immediate",
+        },
+        "audience": {
+            "tier": ["free", "premium"],
+        },
+        "content": {
+            "title": "Test from Your Story! 👋",
+            "body": "Ready to create a magical story together?",
+            "deep_link": "/stories/create"
+        },
+        "variants": []
+    }
+
+    try:
+        campaign = await create_campaign(campaign_data)
+        return {
+            "status": "ok",
+            "message": "Test campaign created",
+            "campaign": campaign.to_dict()
+        }
+    except Exception as e:
+        logger.error(f"Failed to create test campaign: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/campaigns/{campaign_id}/send-test")
+async def send_test_notification_endpoint(
+    request: Request,
+    campaign_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Send a test notification for a campaign to the current user.
+    Useful for testing campaign content before activating.
+    """
+    require_admin(token)
+
+    from services.campaign_service import get_campaign, select_variant
+    from services.notification_service import send_notification_to_user
+
+    campaign = await get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    uid = token["uid"]
+
+    # Select content variant
+    content = select_variant(campaign, uid)
+
+    # Send test notification
+    title = content.get("title", "Test Notification")
+    body = content.get("body", "This is a test notification")
+    deep_link = content.get("deep_link", "")
+
+    sent_count = await send_notification_to_user(
+        uid=uid,
+        title=title,
+        body=body,
+        data={
+            "deep_link": deep_link,
+            "campaign_id": campaign_id,
+            "notification_id": f"test-{campaign_id}",
+        },
+    )
+
+    if sent_count > 0:
+        return {"status": "ok", "message": f"Test notification sent to {sent_count} device(s)"}
+    else:
+        return {"status": "error", "message": "No FCM tokens found for user"}
 
 
 if __name__ == "__main__":

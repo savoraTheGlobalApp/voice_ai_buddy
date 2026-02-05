@@ -118,10 +118,13 @@ async def list_campaigns(active_only: bool = False) -> List[NotificationCampaign
     db = get_db()
     query = db.collection("notification_campaigns")
 
+    # Note: Commenting out order_by to avoid composite index requirement for testing
+    # Uncomment once composite index (active + created_at) is created
     if active_only:
         query = query.where("active", "==", True)
 
-    docs = query.order_by("created_at", direction="DESCENDING").stream()
+    # docs = query.order_by("created_at", direction="DESCENDING").stream()
+    docs = query.stream()  # No order_by to avoid index requirement
 
     campaigns = []
     for doc in docs:
