@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Platform, Alert, PermissionsAndroid } from 'react-native';
 import { router } from 'expo-router';
 
 // Conditionally import Firebase messaging (only available in native builds)
@@ -15,10 +15,61 @@ async function getMessaging() {
   try {
     const firebaseMessaging = await import('@react-native-firebase/messaging');
     messaging = firebaseMessaging.default();
+
+    // Set up Android notification channel for better control
+    if (Platform.OS === 'android') {
+      await setupAndroidNotificationChannel();
+    }
+
     return messaging;
   } catch (e) {
     console.log('Firebase messaging not available (requires native build):', e);
     return null;
+  }
+}
+
+/**
+ * Set up Android notification channel
+ * Required for Android 8.0+ to properly display notifications
+ */
+async function setupAndroidNotificationChannel() {
+  if (Platform.OS !== 'android') return;
+
+  try {
+    // Note: react-native-firebase automatically creates a default channel
+    // You can customize it by adding channel configuration in AndroidManifest.xml
+    // or by using @notifee/react-native for more control
+    console.log('Android notification channel ready');
+  } catch (e) {
+    console.log('Failed to setup notification channel:', e);
+  }
+}
+
+/**
+ * Check if notification permissions are granted
+ * Uses Android's PermissionsAndroid API for accurate results
+ */
+export async function checkNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'web') return false;
+
+  try {
+    if (Platform.OS === 'android') {
+      // Android 13+ requires POST_NOTIFICATIONS permission
+      const granted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      );
+      console.log('Android POST_NOTIFICATIONS permission:', granted);
+      return granted;
+    } else {
+      // iOS uses Firebase messaging permission check
+      const msg = await getMessaging();
+      if (!msg) return false;
+      const authStatus = await msg.hasPermission();
+      return authStatus === 1 || authStatus === 2; // AUTHORIZED or PROVISIONAL
+    }
+  } catch (e) {
+    console.error('Failed to check notification permission:', e);
+    return false;
   }
 }
 
@@ -30,16 +81,50 @@ export async function registerForPushNotifications(): Promise<string | null> {
   if (!msg) return null;
 
   try {
-    // Request permission (iOS requires explicit permission, Android grants by default)
-    const authStatus = await msg.requestPermission();
-    const enabled =
-      authStatus === 1 || // AUTHORIZED
-      authStatus === 2;   // PROVISIONAL
+    let permissionGranted = false;
 
-    if (!enabled) {
-      console.log('Push notification permission denied');
+    if (Platform.OS === 'android') {
+      // Android 13+ requires explicit POST_NOTIFICATIONS permission
+      // First check if we already have permission
+      const hasPermission = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      );
+
+      if (hasPermission) {
+        console.log('Android notification permission already granted');
+        permissionGranted = true;
+      } else {
+        // Request permission - this will show the system dialog
+        console.log('Requesting Android POST_NOTIFICATIONS permission...');
+        const result = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
+
+        permissionGranted = result === PermissionsAndroid.RESULTS.GRANTED;
+        console.log('Android permission request result:', result, 'granted:', permissionGranted);
+
+        if (!permissionGranted) {
+          // Check if user permanently denied (never ask again was selected)
+          const canAskAgain = result !== PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
+          if (!canAskAgain) {
+            console.log('User permanently denied notification permission');
+            // Could show a dialog explaining how to enable in settings
+          }
+        }
+      }
+    } else {
+      // iOS uses Firebase messaging permission
+      const authStatus = await msg.requestPermission();
+      permissionGranted = authStatus === 1 || authStatus === 2;
+      console.log('iOS permission status:', authStatus, 'granted:', permissionGranted);
+    }
+
+    if (!permissionGranted) {
+      console.log('Push notification permission denied by user');
       return null;
     }
+
+    console.log('Notification permission granted');
 
     // Get FCM token
     const token = await msg.getToken();
@@ -98,6 +183,37 @@ function handleDeepLink(deepLink: string | undefined) {
 }
 
 /**
+ * Display a local notification (for foreground messages)
+ */
+async function displayLocalNotification(title: string, body: string, data?: any) {
+  try {
+    console.log('Displaying foreground notification:', { title, body });
+
+    // Show an in-app alert when notification arrives in foreground
+    Alert.alert(
+      title,
+      body,
+      [
+        { text: 'Dismiss', style: 'cancel' },
+        {
+          text: 'View',
+          onPress: () => {
+            // Navigate to the deep link if provided
+            const deepLink = data?.deep_link;
+            if (deepLink) {
+              handleDeepLink(deepLink);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  } catch (e) {
+    console.error('Failed to display local notification:', e);
+  }
+}
+
+/**
  * Set up notification listeners
  */
 export async function setupNotificationListeners(
@@ -109,8 +225,17 @@ export async function setupNotificationListeners(
 
   // Handle notification when app is in foreground
   const unsubscribeForeground = msg.onMessage(async (remoteMessage: any) => {
-    console.log('Foreground notification:', remoteMessage);
-    // Could show an in-app notification here
+    console.log('Foreground notification received:', remoteMessage);
+
+    // Display the notification even when app is in foreground
+    const notification = remoteMessage.notification;
+    if (notification) {
+      await displayLocalNotification(
+        notification.title || 'New Notification',
+        notification.body || '',
+        remoteMessage.data
+      );
+    }
   });
 
   // Handle notification tap when app is in background
