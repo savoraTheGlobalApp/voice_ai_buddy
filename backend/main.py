@@ -2391,21 +2391,28 @@ async def create_test_campaign_no_auth(request: Request):
     """
     from services.campaign_service import create_campaign
 
+    # Accept custom campaign data from request body
+    try:
+        body = await request.json()
+    except:
+        body = {}
+
+    # Use provided data or defaults
     campaign_data = {
-        "name": "Test Push Notification",
+        "name": body.get("name", "Test Push Notification"),
         "active": True,
-        "trigger": {
+        "trigger": body.get("trigger", {
             "type": "immediate",
-        },
-        "audience": {
+        }),
+        "audience": body.get("audience", {
             "tier": ["free", "premium"],
-        },
-        "content": {
+        }),
+        "content": body.get("content", {
             "title": "Test from Your Story! 👋",
             "body": "Ready to create a magical story together?",
             "deep_link": "/stories/create"
-        },
-        "variants": []
+        }),
+        "variants": body.get("variants", [])
     }
 
     try:
