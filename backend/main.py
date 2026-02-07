@@ -2071,6 +2071,155 @@ async def update_story_status_endpoint(request: Request, uid: str, session_id: s
 
 
 # =============================================================================
+# Static Mythological Stories (Sacred Stories)
+# =============================================================================
+
+@app.get("/api/static-stories/{story_id}")
+async def get_static_story(story_id: str):
+    """
+    Get a static mythological story by ID.
+    Public endpoint - no authentication required.
+
+    Args:
+        story_id: Story identifier (e.g., "maha-001")
+
+    Returns:
+        Complete story with all segments
+    """
+    try:
+        from services.static_story_service import get_static_story as fetch_story
+
+        story = await fetch_story(story_id)
+
+        if not story:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Story {story_id} not found"
+            )
+
+        return story
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get static story {story_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get story: {str(e)}"
+        )
+
+
+class UpdateProgressRequest(BaseModel):
+    current_segment: int
+    status: str = "in_progress"
+
+
+@app.post("/api/users/{uid}/static-stories/{story_id}/progress")
+@limiter.limit("200/day")
+async def update_static_story_progress(
+    request: Request,
+    uid: str,
+    story_id: str,
+    progress: UpdateProgressRequest,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Update user's reading progress on a static story.
+
+    Args:
+        uid: User ID
+        story_id: Story identifier
+        progress: Progress update (current_segment, status)
+
+    Returns:
+        Updated progress and any unlocked characters
+    """
+    try:
+        from services.static_story_service import update_story_progress, get_static_story as fetch_story
+        from services.gamification_service import unlock_story_characters, get_all_character_metadata
+
+        # Verify user matches token
+        if uid != token.get("uid"):
+            raise HTTPException(status_code=403, detail="Cannot update progress for another user")
+
+        # Update progress
+        updated_progress = await update_story_progress(
+            uid=uid,
+            story_id=story_id,
+            current_segment=progress.current_segment,
+            status=progress.status
+        )
+
+        # If story completed, unlock characters
+        unlocked_characters = []
+        if progress.status == "completed":
+            # Get the story to find characters
+            story_data = await fetch_story(story_id)
+
+            if story_data:
+                # Get all character metadata
+                all_char_metadata = await get_all_character_metadata()
+
+                # Unlock characters from this story
+                unlocked_ids = await unlock_story_characters(uid, story_data, all_char_metadata)
+                unlocked_characters = unlocked_ids
+
+        return {
+            "progress": updated_progress,
+            "unlocked_characters": unlocked_characters
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update progress for {uid}/{story_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update progress: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/characters")
+@limiter.limit("200/day")
+async def get_user_characters(
+    request: Request,
+    uid: str,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Get all unlocked characters for a user.
+
+    Args:
+        uid: User ID
+
+    Returns:
+        List of unlocked character cards
+    """
+    try:
+        from services.gamification_service import get_user_characters as fetch_chars
+
+        # Verify user matches token
+        if uid != token.get("uid"):
+            raise HTTPException(status_code=403, detail="Cannot access another user's characters")
+
+        characters = await fetch_chars(uid)
+
+        return {
+            "characters": characters,
+            "total_unlocked": len(characters)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get characters for {uid}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get characters: {str(e)}"
+        )
+
+
+# =============================================================================
 # Subscription Endpoint
 # =============================================================================
 
