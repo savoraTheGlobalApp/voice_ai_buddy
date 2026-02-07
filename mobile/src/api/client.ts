@@ -4,6 +4,8 @@ import { auth } from '../lib/firebase';
 // Use local backend for development, deployed URL for production
 // Android emulator uses 10.0.2.2 to reach host machine's localhost
 import { Platform } from 'react-native';
+
+// Development: Use local backend
 const BACKEND_URL = __DEV__
   ? Platform.OS === 'android'
     ? 'http://10.0.2.2:8000'

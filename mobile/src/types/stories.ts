@@ -42,3 +42,57 @@ export const SUGGESTED_VALUES = [
   'patience', 'friendship', 'gratitude', 'respect',
   'perseverance', 'empathy'
 ];
+
+// Static Mythological Stories Types
+export interface BilingualText {
+  en: string;
+  hi: string;
+}
+
+export interface StaticStorySegment {
+  segmentIndex: number;
+  narrative: BilingualText;
+  segmentType: 'opening' | 'rising' | 'climax' | 'falling' | 'resolution';
+  discussionQuestion?: BilingualText | null;
+}
+
+export interface StaticStory {
+  story_id: string;
+  title: BilingualText;
+  category: 'mahabharata' | 'ramayana' | 'gita' | 'puranas' | 'vedas' | 'yoga';
+  values: string[];
+  characters: string[];
+  segments: StaticStorySegment[];
+  metadata: {
+    reading_time: number;
+    difficulty_level: string;
+    source_text: string;
+    recommended_age: [number, number];
+    prerequisite_story_ids: string[];
+  };
+  order_index: number;
+  created_at?: string;
+}
+
+export interface StoryProgress {
+  story_id: string;
+  status: 'not_started' | 'in_progress' | 'completed';
+  current_segment: number;
+  quiz_score?: number;
+  quiz_attempts?: number;
+  is_favorite: boolean;
+  last_read_at?: string;
+  completed_at?: string;
+}
+
+export interface CharacterCard {
+  character_id: string;
+  character_name: BilingualText;
+  character_description: BilingualText;
+  character_avatar: string;
+  key_trait: BilingualText;
+  fun_fact: BilingualText;
+  rarity: 'common' | 'rare' | 'legendary';
+  stories_read: string[];
+  unlocked_at?: string;
+}
