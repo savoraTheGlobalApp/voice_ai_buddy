@@ -153,19 +153,55 @@ export default function CreateStoryScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-        <ChipSelector
-          label="What topics interest your child?"
-          suggestions={SUGGESTED_TOPICS}
-          selected={topics}
-          onToggle={toggleTopic}
-        />
+        <View style={styles.chipSection}>
+          <Text style={styles.label}>
+            What topics interest your child? {topics.length === 0 && <Text style={styles.helperText}>*</Text>}
+          </Text>
+          {topics.length === 0 && (
+            <Text style={styles.emptyStateText}>Select at least one topic to begin</Text>
+          )}
+          <View style={styles.chipContainer}>
+            {SUGGESTED_TOPICS.map((item) => {
+              const isSelected = topics.includes(item);
+              return (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.chip, isSelected && styles.chipSelected]}
+                  onPress={() => toggleTopic(item)}
+                >
+                  <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>
+                    {item}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
-        <ChipSelector
-          label="What values should the story teach?"
-          suggestions={SUGGESTED_VALUES}
-          selected={values}
-          onToggle={toggleValue}
-        />
+        <View style={styles.chipSection}>
+          <Text style={styles.label}>
+            What values should the story teach? {values.length === 0 && <Text style={styles.helperText}>*</Text>}
+          </Text>
+          {values.length === 0 && (
+            <Text style={styles.emptyStateText}>Choose values from our Vedic tradition</Text>
+          )}
+          <View style={styles.chipContainer}>
+            {SUGGESTED_VALUES.map((item) => {
+              const isSelected = values.includes(item);
+              return (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.chip, isSelected && styles.chipSelected]}
+                  onPress={() => toggleValue(item)}
+                >
+                  <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>
+                    {item}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
 
         <LengthSelector value={length} onChange={setLength} />
 
@@ -183,10 +219,22 @@ export default function CreateStoryScreen() {
 
       <View style={styles.footer}>
         {!isPremium && (
-          <Text style={styles.limitText}>
-            {dailyStoriesUsed} / {dailyStoriesLimit} stories used today
-            {limitReached && ' — Upgrade for unlimited stories'}
-          </Text>
+          <>
+            <View style={styles.progressContainer}>
+              <View style={styles.progressBar}>
+                <View
+                  style={[
+                    styles.progressFill,
+                    { width: `${(dailyStoriesUsed / dailyStoriesLimit) * 100}%` }
+                  ]}
+                />
+              </View>
+              <Text style={styles.limitText}>
+                {dailyStoriesUsed} / {dailyStoriesLimit} stories used today
+                {limitReached && ' — Upgrade for unlimited stories'}
+              </Text>
+            </View>
+          </>
         )}
         <TouchableOpacity
           style={[
@@ -250,15 +298,15 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   chipSelected: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#3b82f6',
+    backgroundColor: '#fff7ed',
+    borderColor: '#f97316',
   },
   chipText: {
     fontSize: 14,
     color: '#4b5563',
   },
   chipTextSelected: {
-    color: '#3b82f6',
+    color: '#f97316',
     fontWeight: '500',
   },
   lengthContainer: {
@@ -276,8 +324,8 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   lengthOptionSelected: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#3b82f6',
+    backgroundColor: '#fff7ed',
+    borderColor: '#f97316',
   },
   lengthLabel: {
     fontSize: 16,
@@ -285,7 +333,7 @@ const styles = StyleSheet.create({
     color: '#4b5563',
   },
   lengthLabelSelected: {
-    color: '#3b82f6',
+    color: '#f97316',
   },
   lengthSub: {
     fontSize: 12,
@@ -293,7 +341,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   lengthSubSelected: {
-    color: '#60a5fa',
+    color: '#fb923c',
   },
   input: {
     backgroundColor: '#f3f4f6',
@@ -313,13 +361,13 @@ const styles = StyleSheet.create({
     borderTopColor: '#e5e7eb',
   },
   generateButton: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#f97316',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
   },
   generateButtonDisabled: {
-    backgroundColor: '#93c5fd',
+    backgroundColor: '#fdba74',
   },
   generateButtonLimited: {
     backgroundColor: '#f59e0b',
@@ -338,5 +386,30 @@ const styles = StyleSheet.create({
   loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  helperText: {
+    color: '#f97316',
+    fontWeight: '600',
+  },
+  emptyStateText: {
+    fontSize: 13,
+    color: '#9ca3af',
+    marginBottom: 8,
+    fontStyle: 'italic',
+  },
+  progressContainer: {
+    marginBottom: 12,
+  },
+  progressBar: {
+    height: 6,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#f97316',
+    borderRadius: 3,
   },
 });
