@@ -82,7 +82,7 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 # --- Rate limit strings per tier ---
 
 RATE_LIMITS = {
-    "story_generate": {"free": "2/day", "premium": "50/day"},
+    "story_generate": {"free": "10/day", "premium": "50/day"},
     "story_read":     {"free": "30/day", "premium": "200/day"},
     "tts":            {"free": "20/day", "premium": "200/day"},
     "chat":           {"free": "30/day", "premium": "200/day"},
