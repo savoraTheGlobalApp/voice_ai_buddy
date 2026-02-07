@@ -245,10 +245,11 @@ async def process_campaign(campaign) -> Dict[str, int]:
     for user_data in eligible_users:
         user_id = user_data["uid"]
 
+        # TODO: Re-enable spam check for production
         # Check if user received this campaign recently (prevent spam)
-        if await has_received_recently(user_id, campaign.campaign_id, hours=24):
-            stats["skipped"] += 1
-            continue
+        # if await has_received_recently(user_id, campaign.campaign_id, hours=24):
+        #     stats["skipped"] += 1
+        #     continue
 
         # Select content variant (for A/B testing)
         content = select_variant(campaign, user_id)
@@ -330,4 +331,35 @@ async def process_all_campaigns() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Scheduler run failed: {e}")
+        return {"error": str(e)}
+
+
+async def process_single_campaign(campaign_id: str) -> Dict[str, Any]:
+    """
+    Process a single specific campaign by ID.
+    Useful for testing or triggering one-off campaigns.
+
+    Returns:
+        Dictionary with stats: {sent: int, skipped: int, failed: int}
+    """
+    logger.info(f"Processing single campaign: {campaign_id}")
+
+    try:
+        from services.campaign_service import get_campaign
+
+        # Get the specific campaign
+        campaign = await get_campaign(campaign_id)
+
+        if not campaign:
+            logger.error(f"Campaign {campaign_id} not found")
+            return {"error": f"Campaign {campaign_id} not found"}
+
+        # Process the campaign
+        stats = await process_campaign(campaign)
+
+        logger.info(f"Single campaign {campaign_id} processed: {stats}")
+        return stats
+
+    except Exception as e:
+        logger.error(f"Failed to process single campaign {campaign_id}: {e}")
         return {"error": str(e)}

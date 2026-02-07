@@ -2383,6 +2383,31 @@ async def process_notifications_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/internal/process-campaign/{campaign_id}")
+async def process_single_campaign_endpoint(
+    campaign_id: str,
+    _api_key: str = Depends(require_internal_key)
+):
+    """
+    Process a single specific notification campaign.
+    Useful for testing or sending one-off campaigns.
+    Protected by internal API key.
+    """
+    from services.notification_scheduler import process_single_campaign
+
+    try:
+        stats = await process_single_campaign(campaign_id)
+        return {
+            "status": "ok",
+            "campaign_id": campaign_id,
+            "stats": stats,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to process campaign {campaign_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/test/create-campaign-no-auth")
 async def create_test_campaign_no_auth(request: Request):
     """
