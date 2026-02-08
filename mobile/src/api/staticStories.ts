@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { StaticStory, StoryProgress, CharacterCard } from '../types/stories';
+import { StaticStory, StoryProgress, CharacterCard, BlockBasedContent, ExperimentInfo } from '../types/stories';
 
 interface UpdateProgressResponse {
   status: string;
@@ -58,4 +58,60 @@ export async function getUserCharacters(
   uid: string
 ): Promise<UserCharactersResponse> {
   return apiClient<UserCharactersResponse>(`/api/users/${uid}/characters`);
+}
+
+// ============================================
+// Block-Based Content API
+// ============================================
+
+interface ExperimentListResponse {
+  experiments: Array<{
+    id: string;
+    name: string;
+    description: string;
+    variants: Array<{ id: string; weight: number }>;
+    active: boolean;
+  }>;
+}
+
+/**
+ * Fetch a story as block-based content
+ *
+ * Backend automatically determines which experiments apply based on story configuration.
+ * experimentId is optional - only needed for testing/overriding default behavior.
+ */
+export async function getBlockContent(
+  storyId: string,
+  userId?: string,
+  experimentId?: string,      // Optional - backend decides if not provided
+  variantOverride?: string
+): Promise<BlockBasedContent> {
+  const params = new URLSearchParams();
+  if (userId) params.append('user_id', userId);
+  if (experimentId) params.append('experiment_id', experimentId);  // Only sent if provided
+  if (variantOverride) params.append('variant_override', variantOverride);
+
+  const queryString = params.toString();
+  const url = `/api/content/${storyId}/blocks${queryString ? `?${queryString}` : ''}`;
+
+  return apiClient<BlockBasedContent>(url);
+}
+
+/**
+ * Fetch all active experiments
+ */
+export async function getExperiments(): Promise<ExperimentListResponse> {
+  return apiClient<ExperimentListResponse>('/api/experiments');
+}
+
+/**
+ * Get user's experiment assignment
+ */
+export async function getUserExperimentAssignment(
+  uid: string,
+  experimentId: string
+): Promise<ExperimentInfo> {
+  return apiClient<ExperimentInfo>(
+    `/api/users/${uid}/experiment-assignment/${experimentId}`
+  );
 }

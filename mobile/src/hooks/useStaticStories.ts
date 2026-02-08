@@ -7,6 +7,9 @@ import {
   getStoryProgress,
   updateStoryProgress,
   getUserCharacters,
+  getBlockContent,
+  getExperiments,
+  getUserExperimentAssignment,
 } from '../api/staticStories';
 
 /**
@@ -79,5 +82,62 @@ export function useUserCharacters(userId: string | undefined) {
       return getUserCharacters(userId);
     },
     enabled: !!userId,
+  });
+}
+
+// ============================================
+// Block-Based Content Hooks
+// ============================================
+
+interface UseBlockContentOptions {
+  storyId: string;
+  userId?: string;
+  experimentId?: string;      // Optional - backend decides if not provided
+  variantOverride?: string;
+}
+
+/**
+ * Fetch story as block-based content
+ *
+ * Backend automatically determines which experiments apply based on story configuration.
+ * You typically don't need to pass experimentId - only for testing/overriding.
+ */
+export function useBlockContent({
+  storyId,
+  userId,
+  experimentId,
+  variantOverride,
+}: UseBlockContentOptions) {
+  return useQuery({
+    queryKey: ['block-content', storyId, userId, experimentId, variantOverride],
+    queryFn: () => getBlockContent(storyId, userId, experimentId, variantOverride),
+    enabled: !!storyId,
+  });
+}
+
+/**
+ * Fetch all active experiments
+ */
+export function useExperiments() {
+  return useQuery({
+    queryKey: ['experiments'],
+    queryFn: getExperiments,
+  });
+}
+
+/**
+ * Get user's experiment assignment
+ */
+export function useExperimentAssignment(
+  userId: string | undefined,
+  experimentId: string
+) {
+  return useQuery({
+    queryKey: ['experiment-assignment', userId, experimentId],
+    queryFn: () => {
+      if (!userId) throw new Error('User ID required');
+      return getUserExperimentAssignment(userId, experimentId);
+    },
+    enabled: !!userId && !!experimentId,
   });
 }
