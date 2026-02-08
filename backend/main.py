@@ -2220,6 +2220,283 @@ async def get_user_characters(
 
 
 # =============================================================================
+# Block-Based Content API (Server-Driven UI)
+# =============================================================================
+
+class BlockContentRequest(BaseModel):
+    experiment_id: Optional[str] = None
+    variant_override: Optional[str] = None
+
+
+@app.get("/api/content/{story_id}/blocks")
+async def get_story_as_blocks(
+    story_id: str,
+    user_id: Optional[str] = None,
+    experiment_id: Optional[str] = None,
+    variant_override: Optional[str] = None
+):
+    """
+    Get a story converted to block-based content format.
+
+    This endpoint returns server-driven UI blocks that the app can render
+    without knowing the specific story format.
+
+    Args:
+        story_id: Story identifier (e.g., "maha-001")
+        user_id: Optional user ID for experiment assignment
+        experiment_id: Optional experiment to apply (e.g., "katha-content-format")
+        variant_override: Optional variant override for testing
+
+    Returns:
+        BlockBasedContent with blocks array and display config
+    """
+    try:
+        from services.block_content_service import get_block_content
+
+        content = await get_block_content(
+            story_id=story_id,
+            user_id=user_id,
+            experiment_id=experiment_id,
+            variant_override=variant_override
+        )
+
+        if not content:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Story {story_id} not found"
+            )
+
+        return content
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get block content for {story_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get content: {str(e)}"
+        )
+
+
+@app.get("/api/experiments")
+async def get_experiments():
+    """
+    Get all active A/B experiments.
+
+    Returns:
+        List of experiment configurations with variants and weights
+    """
+    try:
+        from services.block_content_service import get_all_experiments
+
+        experiments = await get_all_experiments()
+        return {"experiments": experiments}
+
+    except Exception as e:
+        logger.error(f"Failed to get experiments: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get experiments: {str(e)}"
+        )
+
+
+class UpdateExperimentWeightsRequest(BaseModel):
+    variant_weights: Dict[str, int]  # e.g., {"control": 30, "bedtime": 70}
+
+
+@app.post("/api/experiments/{experiment_id}/weights")
+async def update_experiment_weights(
+    experiment_id: str,
+    request_body: UpdateExperimentWeightsRequest,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Update experiment variant weights.
+
+    This allows changing traffic allocation without code deployment.
+
+    Args:
+        experiment_id: Experiment identifier
+        variant_weights: Dict of variant_id -> weight (should sum to 100)
+
+    Returns:
+        Success status
+    """
+    try:
+        from services.block_content_service import update_experiment_weights as update_weights
+
+        # In production, you'd want admin role check here
+        # For now, any authenticated user can update (for testing)
+
+        success = await update_weights(experiment_id, request_body.variant_weights)
+
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Experiment {experiment_id} not found"
+            )
+
+        return {"success": True, "experiment_id": experiment_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update experiment weights: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update weights: {str(e)}"
+        )
+
+
+@app.get("/api/users/{uid}/experiment-assignment/{experiment_id}")
+async def get_user_experiment_assignment(
+    uid: str,
+    experiment_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Get a user's experiment assignment.
+
+    Uses deterministic hashing so the same user always gets the same variant.
+
+    Args:
+        uid: User ID
+        experiment_id: Experiment identifier
+
+    Returns:
+        Experiment assignment with variant ID and config
+    """
+    try:
+        from services.block_content_service import get_experiment_assignment
+
+        # Verify user matches token
+        if uid != token.get("uid"):
+            raise HTTPException(status_code=403, detail="Cannot access another user's assignment")
+
+        assignment = await get_experiment_assignment(uid, experiment_id)
+
+        if not assignment:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Experiment {experiment_id} not found or inactive"
+            )
+
+        return assignment
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get experiment assignment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get assignment: {str(e)}"
+        )
+
+
+@app.put("/api/users/{uid}/experiments/{experiment_id}")
+async def set_user_experiment_override(
+    uid: str,
+    experiment_id: str,
+    variant_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Set experiment variant override for a specific user.
+
+    This allows manually assigning a user to a specific variant,
+    overriding the default hash-based assignment.
+
+    Args:
+        uid: User ID
+        experiment_id: Experiment identifier
+        variant_id: Variant to assign (e.g., "control", "katha_night")
+
+    Returns:
+        Success status
+    """
+    try:
+        from services.block_content_service import set_user_experiment_override
+
+        # Verify user matches token (or is admin in production)
+        if uid != token.get("uid"):
+            raise HTTPException(status_code=403, detail="Cannot modify another user's assignment")
+
+        success = await set_user_experiment_override(uid, experiment_id, variant_id)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to set experiment override"
+            )
+
+        return {
+            "success": True,
+            "user_id": uid,
+            "experiment_id": experiment_id,
+            "variant_id": variant_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set experiment override: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set override: {str(e)}"
+        )
+
+
+@app.delete("/api/users/{uid}/experiments/{experiment_id}")
+async def remove_user_experiment_override(
+    uid: str,
+    experiment_id: str,
+    token: dict = Depends(get_current_user)
+):
+    """
+    Remove experiment variant override for a user.
+
+    This reverts the user to default hash-based assignment.
+
+    Args:
+        uid: User ID
+        experiment_id: Experiment identifier
+
+    Returns:
+        Success status
+    """
+    try:
+        from services.block_content_service import remove_user_experiment_override
+
+        # Verify user matches token (or is admin in production)
+        if uid != token.get("uid"):
+            raise HTTPException(status_code=403, detail="Cannot modify another user's assignment")
+
+        success = await remove_user_experiment_override(uid, experiment_id)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to remove experiment override"
+            )
+
+        return {
+            "success": True,
+            "user_id": uid,
+            "experiment_id": experiment_id,
+            "message": "Override removed, reverted to hash-based assignment"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to remove experiment override: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to remove override: {str(e)}"
+        )
+
+
+# =============================================================================
 # Subscription Endpoint
 # =============================================================================
 
