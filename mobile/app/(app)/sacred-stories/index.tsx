@@ -41,7 +41,7 @@ export default function SacredStoriesLibrary() {
         {/* Story Card */}
         <TouchableOpacity
           style={styles.storyCard}
-          onPress={() => router.push(`/(app)/sacred-stories/${story.story_id}`)}
+          onPress={() => router.push(`/(app)/sacred-stories/block-viewer?contentId=${story.story_id}`)}
           activeOpacity={0.7}
         >
           {/* Category Badge */}
@@ -99,6 +99,20 @@ export default function SacredStoriesLibrary() {
             <Text style={styles.charactersButtonText}>View Your Characters</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Block Viewer Test (Dev Only) */}
+        {__DEV__ && (
+          <View style={styles.devSection}>
+            <Text style={styles.devSectionTitle}>Dev Testing</Text>
+            <TouchableOpacity
+              style={styles.devButton}
+              onPress={() => router.push('/(app)/sacred-stories/block-viewer')}
+            >
+              <Text style={styles.devButtonIcon}>🧪</Text>
+              <Text style={styles.devButtonText}>Test Block-Based Content</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -251,5 +265,39 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#f97316',
+  },
+  devSection: {
+    marginTop: 24,
+    paddingTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  devSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#9ca3af',
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  devButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f3f4f6',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#9ca3af',
+    borderStyle: 'dashed',
+    gap: 8,
+  },
+  devButtonIcon: {
+    fontSize: 20,
+  },
+  devButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
   },
 });
