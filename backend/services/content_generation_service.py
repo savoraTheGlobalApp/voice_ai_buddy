@@ -1028,7 +1028,7 @@ def generate_katha_night_blocks(segments: List[Dict], characters: List[str], val
     # Hook (from first segment)
     blocks.append({
         "id": "hook-1",
-        "type": "katha_hook",
+        "type": "hook",
         "order": 0,
         "content": segments[0]["narrative"],
         "characterHighlights": characters
@@ -1055,7 +1055,7 @@ def generate_katha_night_blocks(segments: List[Dict], characters: List[str], val
     # Reflection (from last segment + discussion)
     blocks.append({
         "id": "reflection-1",
-        "type": "katha_reflection",
+        "type": "reflection",
         "order": 4,
         "content": segments[-1]["narrative"],
         "question": segments[1].get("discussionQuestion") if len(segments) > 1 else None
@@ -1074,7 +1074,7 @@ def generate_katha_night_blocks(segments: List[Dict], characters: List[str], val
 
     blocks.append({
         "id": "blessing-1",
-        "type": "katha_blessing",
+        "type": "blessing",
         "order": 6,
         "content": blessing
     })
