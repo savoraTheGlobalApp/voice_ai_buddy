@@ -409,6 +409,13 @@ def format_to_blocks(
     Returns:
         List of content blocks
     """
+    # New format: Pre-generated blocks (from content generation service)
+    # These stories have formats with blocks already generated
+    if "blocks" in format_data and not format_data.get("type"):
+        logger.info(f"Using pre-generated blocks from format ({len(format_data['blocks'])} blocks)")
+        return format_data["blocks"]
+
+    # Legacy format: Convert based on type
     format_type = format_data.get("type", "static_story")
     content = format_data.get("content", {})
     characters = metadata.get("characters", [])
