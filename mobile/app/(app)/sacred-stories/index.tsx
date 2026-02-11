@@ -1,11 +1,11 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { useStaticStory } from '../../../src/hooks/useStaticStories';
+import { useStaticStories } from '../../../src/hooks/useStaticStories';
 
 export default function SacredStoriesLibrary() {
-  // For MVP, we only have one story: maha-001
-  const { data: story, isLoading } = useStaticStory('maha-001');
+  // Fetch all available stories from backend
+  const { data, isLoading, error } = useStaticStories();
 
   if (isLoading) {
     return (
@@ -17,7 +17,7 @@ export default function SacredStoriesLibrary() {
     );
   }
 
-  if (!story) {
+  if (error || !data || data.stories.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.centerContent}>
@@ -27,6 +27,8 @@ export default function SacredStoriesLibrary() {
     );
   }
 
+  const { stories } = data;
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -34,59 +36,62 @@ export default function SacredStoriesLibrary() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Sacred Stories from Indian Mythology</Text>
           <Text style={styles.headerSubtitle}>
-            Learn timeless values through ancient tales
+            Learn timeless values through ancient tales • {stories.length} {stories.length === 1 ? 'story' : 'stories'}
           </Text>
         </View>
 
-        {/* Story Card */}
-        <TouchableOpacity
-          style={styles.storyCard}
-          onPress={() => router.push(`/(app)/sacred-stories/block-viewer?contentId=${story.story_id}`)}
-          activeOpacity={0.7}
-        >
-          {/* Category Badge */}
-          <View style={styles.categoryBadge}>
-            <Text style={styles.categoryText}>
-              {story.category.charAt(0).toUpperCase() + story.category.slice(1)}
-            </Text>
-          </View>
-
-          {/* Title - Bilingual */}
-          <Text style={styles.storyTitleEn}>{story.title.en}</Text>
-          <Text style={styles.storyTitleHi}>{story.title.hi}</Text>
-
-          {/* Metadata Row */}
-          <View style={styles.metadataRow}>
-            <View style={styles.metadataItem}>
-              <Text style={styles.metadataIcon}>⏱️</Text>
-              <Text style={styles.metadataText}>{story.metadata.reading_time} min</Text>
-            </View>
-            <View style={styles.metadataItem}>
-              <Text style={styles.metadataIcon}>👶</Text>
-              <Text style={styles.metadataText}>
-                Ages {story.metadata.recommended_age[0]}-{story.metadata.recommended_age[1]}
+        {/* Story Cards */}
+        {stories.map((story) => (
+          <TouchableOpacity
+            key={story.story_id}
+            style={styles.storyCard}
+            onPress={() => router.push(`/(app)/sacred-stories/block-viewer?contentId=${story.story_id}`)}
+            activeOpacity={0.7}
+          >
+            {/* Category Badge */}
+            <View style={styles.categoryBadge}>
+              <Text style={styles.categoryText}>
+                {story.category.charAt(0).toUpperCase() + story.category.slice(1)}
               </Text>
             </View>
-            <View style={styles.metadataItem}>
-              <Text style={styles.metadataIcon}>📚</Text>
-              <Text style={styles.metadataText}>{story.segments.length} parts</Text>
-            </View>
-          </View>
 
-          {/* Values Chips */}
-          <View style={styles.valuesContainer}>
-            {story.values.map((value) => (
-              <View key={value} style={styles.valueChip}>
-                <Text style={styles.valueText}>{value}</Text>
+            {/* Title - Bilingual */}
+            <Text style={styles.storyTitleEn}>{story.title.en}</Text>
+            <Text style={styles.storyTitleHi}>{story.title.hi}</Text>
+
+            {/* Metadata Row */}
+            <View style={styles.metadataRow}>
+              <View style={styles.metadataItem}>
+                <Text style={styles.metadataIcon}>⏱️</Text>
+                <Text style={styles.metadataText}>{story.metadata.reading_time} min</Text>
               </View>
-            ))}
-          </View>
+              <View style={styles.metadataItem}>
+                <Text style={styles.metadataIcon}>👶</Text>
+                <Text style={styles.metadataText}>
+                  Ages {story.metadata.recommended_age[0]}-{story.metadata.recommended_age[1]}
+                </Text>
+              </View>
+              <View style={styles.metadataItem}>
+                <Text style={styles.metadataIcon}>📚</Text>
+                <Text style={styles.metadataText}>{story.segment_count} parts</Text>
+              </View>
+            </View>
 
-          {/* Read Button */}
-          <View style={styles.readButton}>
-            <Text style={styles.readButtonText}>Begin the Katha →</Text>
-          </View>
-        </TouchableOpacity>
+            {/* Values Chips */}
+            <View style={styles.valuesContainer}>
+              {story.values.map((value) => (
+                <View key={value} style={styles.valueChip}>
+                  <Text style={styles.valueText}>{value}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Read Button */}
+            <View style={styles.readButton}>
+              <Text style={styles.readButtonText}>Begin the Katha →</Text>
+            </View>
+          </TouchableOpacity>
+        ))}
 
         {/* Characters Section */}
         <View style={styles.charactersSection}>

@@ -11,6 +11,50 @@ interface UserCharactersResponse {
   total_unlocked: number;
 }
 
+interface StoryListItem {
+  story_id: string;
+  title: {
+    en: string;
+    hi: string;
+  };
+  category: string;
+  values: string[];
+  characters: string[];
+  metadata: {
+    reading_time: number;
+    recommended_age: [number, number];
+    difficulty_level: string;
+  };
+  segment_count: number;
+  created_at?: string;
+}
+
+interface ListStoriesResponse {
+  stories: StoryListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Fetch list of all available static stories
+ */
+export async function listStaticStories(
+  category?: string,
+  limit: number = 100,
+  offset: number = 0
+): Promise<ListStoriesResponse> {
+  const params = new URLSearchParams();
+  if (category) params.append('category', category);
+  params.append('limit', limit.toString());
+  params.append('offset', offset.toString());
+
+  const queryString = params.toString();
+  const url = `/api/static-stories${queryString ? `?${queryString}` : ''}`;
+
+  return apiClient<ListStoriesResponse>(url);
+}
+
 /**
  * Fetch a single static story by ID
  */

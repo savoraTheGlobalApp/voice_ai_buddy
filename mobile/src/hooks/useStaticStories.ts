@@ -3,6 +3,7 @@
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  listStaticStories,
   getStaticStory,
   getStoryProgress,
   updateStoryProgress,
@@ -11,6 +12,16 @@ import {
   getExperiments,
   getUserExperimentAssignment,
 } from '../api/staticStories';
+
+/**
+ * Fetch list of all available static stories
+ */
+export function useStaticStories(category?: string, limit: number = 100, offset: number = 0) {
+  return useQuery({
+    queryKey: ['static-stories', category, limit, offset],
+    queryFn: () => listStaticStories(category, limit, offset),
+  });
+}
 
 /**
  * Fetch a single static story by ID
