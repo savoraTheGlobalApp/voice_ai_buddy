@@ -2076,6 +2076,48 @@ async def update_story_status_endpoint(request: Request, uid: str, session_id: s
 # Static Mythological Stories (Sacred Stories)
 # =============================================================================
 
+@app.get("/api/static-stories")
+async def list_static_stories(
+    category: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    List all available static stories.
+    Public endpoint - no authentication required.
+
+    Query params:
+        category: Filter by category (mahabharata, ramayana, krishna, etc.)
+        limit: Maximum number of stories to return (default: 100)
+        offset: Number of stories to skip (default: 0)
+
+    Returns:
+        List of story metadata (without full segments for performance)
+    """
+    try:
+        from services.static_story_service import list_static_stories as fetch_stories
+
+        stories = await fetch_stories(
+            category=category,
+            limit=limit,
+            offset=offset
+        )
+
+        return {
+            "stories": stories,
+            "total": len(stories),
+            "limit": limit,
+            "offset": offset
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list static stories: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list stories: {str(e)}"
+        )
+
+
 @app.get("/api/static-stories/{story_id}")
 async def get_static_story(story_id: str):
     """

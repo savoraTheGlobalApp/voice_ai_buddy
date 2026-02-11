@@ -45,6 +45,82 @@ async def get_static_story(story_id: str) -> Optional[Dict[str, Any]]:
         raise
 
 
+async def list_static_stories(
+    category: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """
+    List all available static stories from Firestore.
+    Returns story metadata without full segments for performance.
+
+    Args:
+        category: Optional category filter (mahabharata, ramayana, etc.)
+        limit: Maximum number of stories to return
+        offset: Number of stories to skip
+
+    Returns:
+        List of story metadata dictionaries
+    """
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+
+        if not is_firebase_available():
+            logger.warning("Firebase not available")
+            return []
+
+        db = get_db()
+
+        # Get all stories first (Firestore ordering with missing fields is tricky)
+        query = db.collection("static_stories")
+
+        # Filter by category if provided
+        if category:
+            query = query.where("category", "==", category)
+
+        # Execute query
+        docs = query.stream()
+        all_stories = []
+
+        for doc in docs:
+            story_data = doc.to_dict()
+
+            # Return lightweight version without full segments
+            # This improves performance for listing many stories
+            story_metadata = {
+                "story_id": doc.id,
+                "title": story_data.get("title"),
+                "category": story_data.get("category"),
+                "values": story_data.get("values", []),
+                "characters": story_data.get("characters", []),
+                "metadata": story_data.get("metadata", {}),
+                "created_at": story_data.get("created_at"),
+                # Include segment count but not full segments
+                "segment_count": len(story_data.get("segments", []))
+            }
+
+            all_stories.append(story_metadata)
+
+        # Sort by created_at (newest first), handling missing timestamps
+        # Stories without created_at go to the end
+        all_stories.sort(
+            key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True
+        )
+
+        # Apply pagination in Python
+        start_idx = offset
+        end_idx = offset + limit if limit > 0 else len(all_stories)
+        stories = all_stories[start_idx:end_idx]
+
+        logger.info(f"Retrieved {len(stories)} static stories (category: {category or 'all'})")
+        return stories
+
+    except Exception as e:
+        logger.error(f"Failed to list static stories: {e}")
+        raise
+
+
 async def get_user_story_progress(uid: str, story_id: str) -> Optional[Dict[str, Any]]:
     """
     Get user's progress on a specific story.
