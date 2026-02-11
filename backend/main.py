@@ -2297,6 +2297,9 @@ async def get_story_as_blocks(
     try:
         from services.block_content_service import get_block_content
 
+        # Debug logging
+        logger.info(f"Block content request: story_id={story_id}, user_id={user_id}, experiment_id={experiment_id}")
+
         content = await get_block_content(
             story_id=story_id,
             user_id=user_id,
