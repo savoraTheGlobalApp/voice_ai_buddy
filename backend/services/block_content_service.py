@@ -497,6 +497,7 @@ def story_to_blocks_with_format(
             "difficulty_level": metadata.get("difficulty_level", "beginner")
         },
         "format_used": format_name or story.get("default_format", "standard"),
+        "cover_image_url": story.get("cover_image_url"),
         "created_at": story.get("created_at")
     }
 

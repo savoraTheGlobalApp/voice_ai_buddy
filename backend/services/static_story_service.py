@@ -95,6 +95,7 @@ async def list_static_stories(
                 "characters": story_data.get("characters", []),
                 "metadata": story_data.get("metadata", {}),
                 "created_at": story_data.get("created_at"),
+                "cover_image_url": story_data.get("cover_image_url"),
                 # Include segment count but not full segments
                 "segment_count": len(story_data.get("segments", []))
             }
