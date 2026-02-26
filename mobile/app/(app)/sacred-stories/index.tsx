@@ -1,3 +1,4 @@
+import { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -27,6 +28,12 @@ const CATEGORY_CONFIG: Record<string, { label: string; gradient: [string, string
   emotions:      { label: 'Emotions',          gradient: ['#db2777', '#4a0020'], emoji: '❤️' },
   moral_values:  { label: 'Moral Values',      gradient: ['#15803d', '#052e16'], emoji: '🌟' },
 };
+
+/** Convert a portrait Cloudinary URL (ar_9:16) to landscape (ar_16:9) for the hero banner. */
+function toHeroUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  return url.includes('ar_9:16') ? url.replace('ar_9:16', 'ar_16:9') : url;
+}
 
 function getCategoryConfig(category: string) {
   return CATEGORY_CONFIG[category] ?? {
@@ -159,9 +166,9 @@ function HeroBanner({ story }: { story: StoryItem }) {
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={() => router.push(dest)}>
       {story.cover_image_url ? (
-        <View style={styles.hero}>
+        <View style={[styles.hero, { overflow: 'hidden' }]}>
           <Image
-            source={{ uri: story.cover_image_url }}
+            source={{ uri: toHeroUrl(story.cover_image_url) }}
             style={StyleSheet.absoluteFill}
             resizeMode="cover"
           />
@@ -178,6 +185,61 @@ function HeroBanner({ story }: { story: StoryItem }) {
         </LinearGradient>
       )}
     </TouchableOpacity>
+  );
+}
+
+function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const flatListRef = useRef<FlatList<StoryItem>>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startTimer = () => {
+    if (stories.length <= 1) return;
+    timerRef.current = setInterval(() => {
+      setActiveIndex((prev) => {
+        const next = (prev + 1) % stories.length;
+        flatListRef.current?.scrollToIndex({ animated: true, index: next });
+        return next;
+      });
+    }, 2000);
+  };
+
+  useEffect(() => {
+    startTimer();
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [stories.length]);
+
+  const onMomentumScrollEnd = (e: any) => {
+    const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    setActiveIndex(index);
+    // Reset timer so the next auto-advance starts fresh after a manual swipe
+    if (timerRef.current) clearInterval(timerRef.current);
+    startTimer();
+  };
+
+  return (
+    <View>
+      <FlatList
+        ref={flatListRef}
+        data={stories}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(item) => item.story_id}
+        getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        onScrollToIndexFailed={() => {}}
+        renderItem={({ item }) => <HeroBanner story={item} />}
+      />
+      {/* Dot indicators */}
+      {stories.length > 1 && (
+        <View style={styles.dotsRow}>
+          {stories.map((_, i) => (
+            <View key={i} style={[styles.dot, i === activeIndex && styles.dotActive]} />
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -210,18 +272,18 @@ export default function SacredStoriesLibrary() {
     return acc;
   }, {});
 
-  // Featured story: pick first from mahabharata, fallback to first story
-  const featured = stories.find((s) => s.category === 'mahabharata') ?? stories[0];
-
-  // Only render the four active categories, in this fixed order
+  // Only render the five active categories, in this fixed order
   const categoryOrder = ['mahabharata', 'ramayana', 'habits', 'emotions', 'moral_values'].filter((c) => grouped[c]);
+
+  // Featured carousel: first story from each category (up to 5)
+  const featuredStories = categoryOrder.map((c) => grouped[c][0]).filter(Boolean);
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
       <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll}>
-        {/* Hero banner */}
-        <HeroBanner story={featured} />
+        {/* Auto-advancing featured carousel */}
+        <FeaturedCarousel stories={featuredStories} />
 
         {/* Category rows */}
         <View style={styles.rows}>
@@ -356,6 +418,27 @@ const styles = StyleSheet.create({
     color: '#0a0a0a',
     fontSize: 14,
     fontWeight: '700',
+  },
+
+  // Carousel dots
+  dotsRow: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  dotActive: {
+    backgroundColor: '#fff',
+    width: 18,
   },
 
   // Category rows
