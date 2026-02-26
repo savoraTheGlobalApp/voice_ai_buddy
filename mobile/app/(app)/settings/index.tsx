@@ -27,7 +27,7 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Profile</Text>
           <View style={styles.card}>
             <View style={styles.row}>
-              <Ionicons name="person-circle" size={48} color="#3b82f6" />
+              <Ionicons name="person-circle" size={48} color="#f97316" />
               <View style={styles.profileInfo}>
                 <Text style={styles.profileName}>{userData?.name}</Text>
                 <Text style={styles.profileEmail}>{userData?.email}</Text>
@@ -45,7 +45,7 @@ export default function SettingsScreen() {
                 <Ionicons
                   name={isPremium ? 'star' : 'star-outline'}
                   size={16}
-                  color={isPremium ? '#fff' : '#6b7280'}
+                  color={isPremium ? '#fff' : '#4b5563'}
                 />
                 <Text style={[styles.tierText, isPremium && styles.tierTextPremium]}>
                   {isPremium ? 'Premium' : 'Free Plan'}
@@ -62,7 +62,7 @@ export default function SettingsScreen() {
                     styles.usageBar,
                     {
                       width: `${Math.min(100, (dailyStoriesUsed / dailyStoriesLimit) * 100)}%`,
-                      backgroundColor: storiesRemaining === 0 ? '#ef4444' : '#3b82f6',
+                      backgroundColor: storiesRemaining === 0 ? '#ef4444' : '#f97316',
                     },
                   ]}
                 />
@@ -90,9 +90,9 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Account</Text>
           <View style={styles.card}>
             <TouchableOpacity style={styles.actionRow} onPress={restorePurchases}>
-              <Ionicons name="refresh" size={20} color="#374151" />
+              <Ionicons name="refresh" size={20} color="#9ca3af" />
               <Text style={styles.actionText}>Restore Purchases</Text>
-              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+              <Ionicons name="chevron-forward" size={20} color="#4b5563" />
             </TouchableOpacity>
 
             <View style={styles.divider} />
@@ -100,7 +100,7 @@ export default function SettingsScreen() {
             <TouchableOpacity style={styles.actionRow} onPress={logout}>
               <Ionicons name="log-out" size={20} color="#ef4444" />
               <Text style={[styles.actionText, { color: '#ef4444' }]}>Sign Out</Text>
-              <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+              <Ionicons name="chevron-forward" size={20} color="#4b5563" />
             </TouchableOpacity>
           </View>
         </View>
@@ -118,7 +118,7 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#0a0a0a',
   },
   content: {
     padding: 16,
@@ -128,18 +128,20 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6b7280',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4b5563',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 1,
     marginBottom: 8,
     marginLeft: 4,
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: '#1a1a1a',
     borderRadius: 16,
     padding: 16,
+    borderWidth: 1,
+    borderColor: '#2a2a2a',
   },
   row: {
     flexDirection: 'row',
@@ -151,7 +153,7 @@ const styles = StyleSheet.create({
   profileName: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#111827',
+    color: '#fff',
   },
   profileEmail: {
     fontSize: 14,
@@ -165,14 +167,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#2a2a2a',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     gap: 6,
   },
   tierBadgePremium: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#f97316',
   },
   tierText: {
     fontSize: 14,
@@ -187,16 +189,16 @@ const styles = StyleSheet.create({
   },
   usageLabel: {
     fontSize: 14,
-    color: '#374151',
+    color: '#9ca3af',
     fontWeight: '500',
     marginBottom: 8,
   },
   usageBarContainer: {
-    height: 8,
-    backgroundColor: '#e5e7eb',
+    height: 6,
+    backgroundColor: '#2a2a2a',
     borderRadius: 4,
     overflow: 'hidden',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   usageBar: {
     height: '100%',
@@ -210,7 +212,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#f97316',
     borderRadius: 12,
     padding: 14,
     gap: 8,
@@ -229,15 +231,15 @@ const styles = StyleSheet.create({
   actionText: {
     flex: 1,
     fontSize: 16,
-    color: '#374151',
+    color: '#d1d5db',
   },
   divider: {
     height: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#2a2a2a',
   },
   versionText: {
     fontSize: 12,
-    color: '#9ca3af',
+    color: '#374151',
     textAlign: 'center',
     marginTop: 8,
   },

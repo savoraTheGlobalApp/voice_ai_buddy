@@ -4,9 +4,10 @@ export default function SettingsLayout() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: '#3b82f6' },
+        headerStyle: { backgroundColor: '#0a0a0a' },
         headerTintColor: '#fff',
-        headerTitleStyle: { fontWeight: '600' },
+        headerTitleStyle: { fontWeight: '700', color: '#fff' },
+        headerShadowVisible: false,
       }}
     >
       <Stack.Screen name="index" options={{ title: 'Settings' }} />
