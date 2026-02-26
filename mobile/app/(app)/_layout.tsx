@@ -16,9 +16,7 @@ export default function AppLayout() {
     >
       <Tabs.Screen
         name="stories"
-        options={{
-          href: null, // hidden from tab bar
-        }}
+        options={{ href: null }}
       />
       <Tabs.Screen
         name="sacred-stories"
