@@ -289,6 +289,7 @@ export interface BlockBasedContent {
     difficulty_level: string;
   };
   experiment?: ExperimentInfo;
+  cover_image_url?: string;
   created_at?: string;
 }
 

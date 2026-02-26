@@ -26,6 +26,7 @@ interface StoryListItem {
     difficulty_level: string;
   };
   segment_count: number;
+  cover_image_url?: string;
   created_at?: string;
 }
 
