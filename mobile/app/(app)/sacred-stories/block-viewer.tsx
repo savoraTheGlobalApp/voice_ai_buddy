@@ -390,12 +390,12 @@ export default function BlockViewerScreen() {
 
   if (isLoading && !useFallback) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
+      <View style={styles.slidesRoot}>
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color="#f97316" />
-          <Text style={styles.loadingText}>Loading content...</Text>
+          <Text style={[styles.loadingText, { color: '#9ca3af' }]}>Loading...</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
