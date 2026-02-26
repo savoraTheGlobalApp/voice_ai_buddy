@@ -5,24 +5,25 @@ export default function AppLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: '#3b82f6',
-        tabBarInactiveTintColor: '#9ca3af',
+        tabBarActiveTintColor: '#f97316',
+        tabBarInactiveTintColor: '#6b7280',
+        tabBarStyle: {
+          backgroundColor: '#0a0a0a',
+          borderTopColor: '#1a1a1a',
+        },
         headerShown: false,
       }}
     >
       <Tabs.Screen
         name="stories"
         options={{
-          title: 'Stories',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="book" size={size} color={color} />
-          ),
+          href: null, // hidden from tab bar
         }}
       />
       <Tabs.Screen
         name="sacred-stories"
         options={{
-          title: 'Sacred Stories',
+          title: 'Collection',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="library" size={size} color={color} />
           ),

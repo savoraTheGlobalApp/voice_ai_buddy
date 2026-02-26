@@ -28,7 +28,7 @@ function RootLayoutNav() {
       router.replace('/(auth)/sign-in');
     } else if (currentUser && inAuthGroup) {
       // Redirect to app if authenticated
-      router.replace('/(app)/stories');
+      router.replace('/(app)/sacred-stories');
     }
   }, [currentUser, loading, segments]);
 

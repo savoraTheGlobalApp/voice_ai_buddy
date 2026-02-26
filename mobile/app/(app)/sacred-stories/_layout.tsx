@@ -5,19 +5,20 @@ export default function SacredStoriesLayout() {
     <Stack
       screenOptions={{
         headerStyle: {
-          backgroundColor: '#f97316', // Saffron orange
+          backgroundColor: '#0a0a0a',
         },
         headerTintColor: '#fff',
         headerTitleStyle: {
-          fontWeight: 'bold',
+          fontWeight: '700',
+          color: '#fff',
         },
+        headerShadowVisible: false,
       }}
     >
       <Stack.Screen
         name="index"
         options={{
-          title: 'Sacred Stories',
-          headerTitle: 'Sacred Stories 📖',
+          title: 'Collection',
         }}
       />
       <Stack.Screen
@@ -28,10 +29,15 @@ export default function SacredStoriesLayout() {
         }}
       />
       <Stack.Screen
+        name="custom"
+        options={{
+          title: 'Create Story',
+        }}
+      />
+      <Stack.Screen
         name="characters"
         options={{
           title: 'Character Collection',
-          headerTitle: 'Character Collection 👥',
         }}
       />
     </Stack>
