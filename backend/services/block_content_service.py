@@ -477,8 +477,12 @@ def story_to_blocks_with_format(
     blocks = format_to_blocks(format_data, metadata)
 
     # Get display config from format
+    # Pre-generated blocks (new format: has "blocks" key, no "type") → scroll/visual slides
+    # Legacy conversions (static_story, katha_night) set display explicitly in get_format_from_story
+    has_pregenerated_blocks = "blocks" in format_data and not format_data.get("type")
+    default_navigation = "scroll" if has_pregenerated_blocks else "paginated"
     display = format_data.get("display", {
-        "navigation": "paginated",
+        "navigation": default_navigation,
         "theme": "adventure",
         "showProgress": True
     })
