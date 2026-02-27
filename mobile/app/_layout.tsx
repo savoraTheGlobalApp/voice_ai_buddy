@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
 import { SubscriptionProvider } from '../src/contexts/SubscriptionContext';
+import { ThemeProvider } from '../src/contexts/ThemeContext';
 import { initializePushNotifications } from '../src/lib/notifications';
 import { apiClient } from '../src/api/client';
 
@@ -79,14 +80,16 @@ function RootLayoutNav() {
 export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
-      <SafeAreaProvider>
-        <StatusBar style="auto" />
-        <AuthProvider>
-          <SubscriptionProvider>
-            <RootLayoutNav />
-          </SubscriptionProvider>
-        </AuthProvider>
-      </SafeAreaProvider>
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <StatusBar style="auto" />
+          <AuthProvider>
+            <SubscriptionProvider>
+              <RootLayoutNav />
+            </SubscriptionProvider>
+          </AuthProvider>
+        </SafeAreaProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

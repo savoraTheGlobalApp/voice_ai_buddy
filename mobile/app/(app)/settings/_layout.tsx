@@ -1,12 +1,14 @@
 import { Stack } from 'expo-router';
+import { useTheme } from '../../../src/contexts/ThemeContext';
 
 export default function SettingsLayout() {
+  const { colors } = useTheme();
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: '#0a0a0a' },
-        headerTintColor: '#fff',
-        headerTitleStyle: { fontWeight: '700', color: '#fff' },
+        headerStyle: { backgroundColor: colors.headerBg },
+        headerTintColor: colors.text,
+        headerTitleStyle: { fontWeight: '700', color: colors.text },
         headerShadowVisible: false,
       }}
     >

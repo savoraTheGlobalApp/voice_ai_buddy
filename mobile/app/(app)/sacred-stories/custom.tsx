@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import { useGenerateStory } from '../../../src/hooks/useStories';
 import { useSubscription } from '../../../src/contexts/SubscriptionContext';
 import Paywall from '../../../src/components/Paywall';
 import { SUGGESTED_TOPICS, SUGGESTED_VALUES, StoryRequest } from '../../../src/types/stories';
+import { useTheme } from '../../../src/contexts/ThemeContext';
+import type { ThemeColors } from '../../../src/theme/colors';
 
 type StoryLength = 'short' | 'medium' | 'long';
 
@@ -46,6 +48,8 @@ function ChipSelector({
   selected: string[];
   onToggle: (item: string) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   return (
     <View style={styles.section}>
       <Text style={styles.label}>{label}</Text>
@@ -76,6 +80,8 @@ function LengthSelector({
   value: StoryLength;
   onChange: (l: StoryLength) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const options: { value: StoryLength; label: string; desc: string }[] = [
     { value: 'short',  label: 'Short',  desc: '3 parts' },
     { value: 'medium', label: 'Medium', desc: '5 parts' },
@@ -119,6 +125,9 @@ export default function CustomStoryScreen() {
   const generateStory = useGenerateStory();
   const { dailyStoriesUsed, dailyStoriesLimit, isPremium, refreshStatus } = useSubscription();
   const limitReached = dailyStoriesUsed >= dailyStoriesLimit;
+
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const toggle = (
     list: string[],
@@ -189,7 +198,7 @@ export default function CustomStoryScreen() {
           <TextInput
             style={styles.input}
             placeholder="e.g., underwater kingdom, ancient India"
-            placeholderTextColor="#4b5563"
+            placeholderTextColor={colors.textTertiary}
             value={setting}
             onChangeText={setSetting}
           />
@@ -232,161 +241,163 @@ export default function CustomStoryScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-  },
-  content: {
-    padding: 20,
-    paddingBottom: 120,
-  },
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    content: {
+      padding: 20,
+      paddingBottom: 120,
+    },
 
-  // Category banner
-  banner: {
-    marginBottom: 28,
-  },
-  bannerLabel: {
-    color: '#f97316',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    marginBottom: 6,
-  },
-  bannerTitle: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  bannerSub: {
-    color: '#6b7280',
-    fontSize: 14,
-    lineHeight: 20,
-  },
+    // Category banner
+    banner: {
+      marginBottom: 28,
+    },
+    bannerLabel: {
+      color: c.accent,
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 1.5,
+      marginBottom: 6,
+    },
+    bannerTitle: {
+      color: c.text,
+      fontSize: 22,
+      fontWeight: '800',
+      marginBottom: 6,
+    },
+    bannerSub: {
+      color: c.textTertiary,
+      fontSize: 14,
+      lineHeight: 20,
+    },
 
-  // Sections
-  section: {
-    marginBottom: 28,
-  },
-  label: {
-    color: '#d1d5db',
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 12,
-    letterSpacing: 0.3,
-  },
+    // Sections
+    section: {
+      marginBottom: 28,
+    },
+    label: {
+      color: c.textSecondary,
+      fontSize: 14,
+      fontWeight: '600',
+      marginBottom: 12,
+      letterSpacing: 0.3,
+    },
 
-  // Chips
-  chipContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  chip: {
-    backgroundColor: '#1a1a1a',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: '#2a2a2a',
-  },
-  chipSelected: {
-    backgroundColor: 'rgba(249,115,22,0.12)',
-    borderColor: '#f97316',
-  },
-  chipText: {
-    fontSize: 13,
-    color: '#9ca3af',
-  },
-  chipTextSelected: {
-    color: '#f97316',
-    fontWeight: '600',
-  },
+    // Chips
+    chipContainer: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    chip: {
+      backgroundColor: c.surface,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: c.surfaceBorder,
+    },
+    chipSelected: {
+      backgroundColor: 'rgba(249,115,22,0.12)',
+      borderColor: c.accent,
+    },
+    chipText: {
+      fontSize: 13,
+      color: c.textTertiary,
+    },
+    chipTextSelected: {
+      color: c.accent,
+      fontWeight: '600',
+    },
 
-  // Length
-  lengthRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  lengthOption: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#2a2a2a',
-  },
-  lengthOptionSelected: {
-    backgroundColor: 'rgba(249,115,22,0.12)',
-    borderColor: '#f97316',
-  },
-  lengthLabel: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#9ca3af',
-  },
-  lengthLabelSelected: {
-    color: '#f97316',
-  },
-  lengthDesc: {
-    fontSize: 11,
-    color: '#4b5563',
-    marginTop: 3,
-  },
-  lengthDescSelected: {
-    color: '#fb923c',
-  },
+    // Length
+    lengthRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    lengthOption: {
+      flex: 1,
+      backgroundColor: c.surface,
+      paddingVertical: 14,
+      borderRadius: 12,
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderColor: c.surfaceBorder,
+    },
+    lengthOptionSelected: {
+      backgroundColor: 'rgba(249,115,22,0.12)',
+      borderColor: c.accent,
+    },
+    lengthLabel: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: c.textTertiary,
+    },
+    lengthLabelSelected: {
+      color: c.accent,
+    },
+    lengthDesc: {
+      fontSize: 11,
+      color: c.textTertiary,
+      marginTop: 3,
+    },
+    lengthDescSelected: {
+      color: '#fb923c',
+    },
 
-  // Setting input
-  input: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 14,
-    color: '#fff',
-    borderWidth: 1.5,
-    borderColor: '#2a2a2a',
-  },
+    // Setting input
+    input: {
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      padding: 14,
+      fontSize: 14,
+      color: c.text,
+      borderWidth: 1.5,
+      borderColor: c.surfaceBorder,
+    },
 
-  // Footer
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 20,
-    backgroundColor: '#0a0a0a',
-    borderTopWidth: 1,
-    borderTopColor: '#1a1a1a',
-  },
-  limitText: {
-    fontSize: 12,
-    color: '#6b7280',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  generateBtn: {
-    backgroundColor: '#f97316',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-  },
-  generateBtnDisabled: {
-    backgroundColor: '#7c2d12',
-    opacity: 0.6,
-  },
-  generateBtnLimited: {
-    backgroundColor: '#d97706',
-  },
-  generateBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  loadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-});
+    // Footer
+    footer: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      padding: 20,
+      backgroundColor: c.background,
+      borderTopWidth: 1,
+      borderTopColor: c.divider,
+    },
+    limitText: {
+      fontSize: 12,
+      color: c.textTertiary,
+      textAlign: 'center',
+      marginBottom: 10,
+    },
+    generateBtn: {
+      backgroundColor: c.accent,
+      borderRadius: 12,
+      padding: 16,
+      alignItems: 'center',
+    },
+    generateBtnDisabled: {
+      backgroundColor: '#7c2d12',
+      opacity: 0.6,
+    },
+    generateBtnLimited: {
+      backgroundColor: '#d97706',
+    },
+    generateBtnText: {
+      color: '#fff',
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    loadingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
+import { useTheme } from '../../../src/contexts/ThemeContext';
+import type { ThemeColors } from '../../../src/theme/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_WIDTH = 140;
@@ -56,6 +58,8 @@ interface StoryItem {
 
 function StoryCard({ story, onPress }: { story: StoryItem; onPress: () => void }) {
   const config = getCategoryConfig(story.category);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={styles.card}>
@@ -91,6 +95,8 @@ function StoryCard({ story, onPress }: { story: StoryItem; onPress: () => void }
 }
 
 function AddCustomStoryCard({ category }: { category: string }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   return (
     <TouchableOpacity
       style={styles.addCard}
@@ -105,6 +111,8 @@ function AddCustomStoryCard({ category }: { category: string }) {
 
 function CategoryRow({ category, stories }: { category: string; stories: StoryItem[] }) {
   const config = getCategoryConfig(category);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   return (
     <View style={styles.categoryRow}>
@@ -134,6 +142,8 @@ function CategoryRow({ category, stories }: { category: string; stories: StoryIt
 
 function HeroBanner({ story }: { story: StoryItem }) {
   const config = getCategoryConfig(story.category);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const dest = `/(app)/sacred-stories/block-viewer?contentId=${story.story_id}` as const;
 
   const heroContent = (
@@ -173,13 +183,13 @@ function HeroBanner({ story }: { story: StoryItem }) {
             resizeMode="cover"
           />
           <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.6)', '#0a0a0a']}
+            colors={['transparent', 'rgba(0,0,0,0.6)', colors.background]}
             style={StyleSheet.absoluteFill}
           />
           {heroContent}
         </View>
       ) : (
-        <LinearGradient colors={[config.gradient[0], config.gradient[1], '#0a0a0a']} style={styles.hero}>
+        <LinearGradient colors={[config.gradient[0], config.gradient[1], colors.background]} style={styles.hero}>
           <Text style={styles.heroEmoji}>{config.emoji}</Text>
           {heroContent}
         </LinearGradient>
@@ -233,9 +243,9 @@ function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
       />
       {/* Dot indicators */}
       {stories.length > 1 && (
-        <View style={styles.dotsRow}>
+        <View style={dotsStyles.dotsRow}>
           {stories.map((_, i) => (
-            <View key={i} style={[styles.dot, i === activeIndex && styles.dotActive]} />
+            <View key={i} style={[dotsStyles.dot, i === activeIndex && dotsStyles.dotActive]} />
           ))}
         </View>
       )}
@@ -243,8 +253,33 @@ function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
   );
 }
 
+// Dot styles are always overlaid on image — keep as static
+const dotsStyles = StyleSheet.create({
+  dotsRow: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  dotActive: {
+    backgroundColor: '#fff',
+    width: 18,
+  },
+});
+
 export default function SacredStoriesLibrary() {
   const { data, isLoading, error } = useStaticStories();
+  const { colors, theme } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   if (isLoading) {
     return (
@@ -280,7 +315,10 @@ export default function SacredStoriesLibrary() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
+      <StatusBar
+        barStyle={theme === 'light' ? 'dark-content' : 'light-content'}
+        backgroundColor={colors.background}
+      />
       <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll}>
         {/* Auto-advancing featured carousel */}
         <FeaturedCarousel stories={featuredStories} />
@@ -310,256 +348,239 @@ export default function SacredStoriesLibrary() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-  },
-  scroll: {
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: '#0a0a0a',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 12,
-  },
-  loadingText: {
-    color: '#9ca3af',
-    fontSize: 15,
-  },
-  errorText: {
-    color: '#ef4444',
-    fontSize: 15,
-  },
+function createStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: c.background,
+    },
+    scroll: {
+      flex: 1,
+    },
+    loadingContainer: {
+      flex: 1,
+      backgroundColor: c.background,
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 12,
+    },
+    loadingText: {
+      color: c.textTertiary,
+      fontSize: 15,
+    },
+    errorText: {
+      color: '#ef4444',
+      fontSize: 15,
+    },
 
-  // Hero
-  hero: {
-    width: SCREEN_WIDTH,
-    height: HERO_HEIGHT,
-    justifyContent: 'flex-end',
-  },
-  heroEmoji: {
-    position: 'absolute',
-    top: 32,
-    right: 24,
-    fontSize: 96,
-    opacity: 0.4,
-  },
-  heroContent: {
-    padding: 20,
-    paddingBottom: 24,
-  },
-  heroBadgeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  heroBadge: {
-    backgroundColor: '#f97316',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  heroBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  heroAgeChip: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  heroAgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  heroTitle: {
-    color: '#fff',
-    fontSize: 26,
-    fontWeight: '800',
-    lineHeight: 32,
-    marginBottom: 4,
-  },
-  heroTitleHi: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 16,
-    marginBottom: 12,
-  },
-  heroValues: {
-    flexDirection: 'row',
-    gap: 6,
-    marginBottom: 18,
-  },
-  heroValueChip: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
-  },
-  heroValueText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  heroButton: {
-    backgroundColor: '#fff',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 6,
-  },
-  heroButtonText: {
-    color: '#0a0a0a',
-    fontSize: 14,
-    fontWeight: '700',
-  },
+    // Hero
+    hero: {
+      width: SCREEN_WIDTH,
+      height: HERO_HEIGHT,
+      justifyContent: 'flex-end',
+    },
+    heroEmoji: {
+      position: 'absolute',
+      top: 32,
+      right: 24,
+      fontSize: 96,
+      opacity: 0.4,
+    },
+    heroContent: {
+      padding: 20,
+      paddingBottom: 24,
+    },
+    heroBadgeRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 10,
+    },
+    heroBadge: {
+      backgroundColor: '#f97316',
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 4,
+    },
+    heroBadgeText: {
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1,
+    },
+    heroAgeChip: {
+      backgroundColor: 'rgba(255,255,255,0.15)',
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 4,
+    },
+    heroAgeText: {
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    heroTitle: {
+      color: '#fff',
+      fontSize: 26,
+      fontWeight: '800',
+      lineHeight: 32,
+      marginBottom: 4,
+    },
+    heroTitleHi: {
+      color: 'rgba(255,255,255,0.6)',
+      fontSize: 16,
+      marginBottom: 12,
+    },
+    heroValues: {
+      flexDirection: 'row',
+      gap: 6,
+      marginBottom: 18,
+    },
+    heroValueChip: {
+      backgroundColor: 'rgba(255,255,255,0.15)',
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 20,
+    },
+    heroValueText: {
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '500',
+    },
+    heroButton: {
+      backgroundColor: '#fff',
+      alignSelf: 'flex-start',
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      borderRadius: 6,
+    },
+    heroButtonText: {
+      color: '#0a0a0a',
+      fontSize: 14,
+      fontWeight: '700',
+    },
 
-  // Carousel dots
-  dotsRow: {
-    position: 'absolute',
-    bottom: 12,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-  },
-  dotActive: {
-    backgroundColor: '#fff',
-    width: 18,
-  },
+    // Category rows
+    rows: {
+      paddingTop: 8,
+      paddingBottom: 40,
+    },
+    categoryRow: {
+      marginBottom: 28,
+    },
+    categoryHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      marginBottom: 10,
+    },
+    categoryLabel: {
+      color: c.text,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    categoryCount: {
+      color: c.textTertiary,
+      fontSize: 13,
+    },
+    rowContent: {
+      paddingHorizontal: 16,
+      gap: 10,
+    },
 
-  // Category rows
-  rows: {
-    paddingTop: 8,
-    paddingBottom: 40,
-  },
-  categoryRow: {
-    marginBottom: 28,
-  },
-  categoryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    marginBottom: 10,
-  },
-  categoryLabel: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  categoryCount: {
-    color: '#6b7280',
-    fontSize: 13,
-  },
-  rowContent: {
-    paddingHorizontal: 16,
-    gap: 10,
-  },
+    // Story card
+    card: {
+      width: CARD_WIDTH,
+      height: CARD_HEIGHT,
+      borderRadius: 10,
+      overflow: 'hidden',
+    },
+    cardGradient: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    cardEmoji: {
+      fontSize: 52,
+      opacity: 0.85,
+      marginBottom: 20,
+    },
+    cardOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      padding: 10,
+      paddingTop: 20,
+    },
+    cardTitle: {
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '700',
+      lineHeight: 16,
+    },
+    cardMeta: {
+      color: 'rgba(255,255,255,0.6)',
+      fontSize: 10,
+      marginTop: 2,
+    },
 
-  // Story card
-  card: {
-    width: CARD_WIDTH,
-    height: CARD_HEIGHT,
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  cardGradient: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardEmoji: {
-    fontSize: 52,
-    opacity: 0.85,
-    marginBottom: 20,
-  },
-  cardOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 10,
-    paddingTop: 20,
-  },
-  cardTitle: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-    lineHeight: 16,
-  },
-  cardMeta: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 10,
-    marginTop: 2,
-  },
+    // Add custom story card
+    addCard: {
+      width: CARD_WIDTH,
+      height: CARD_HEIGHT,
+      borderRadius: 10,
+      borderWidth: 1.5,
+      borderColor: 'rgba(249,115,22,0.4)',
+      borderStyle: 'dashed',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 6,
+    },
+    addCardPlus: {
+      color: '#f97316',
+      fontSize: 28,
+      fontWeight: '300',
+      lineHeight: 32,
+    },
+    addCardLabel: {
+      color: '#f97316',
+      fontSize: 11,
+      fontWeight: '600',
+      textAlign: 'center',
+      opacity: 0.85,
+    },
 
-  // Add custom story card
-  addCard: {
-    width: CARD_WIDTH,
-    height: CARD_HEIGHT,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: 'rgba(249,115,22,0.4)',
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
-  },
-  addCardPlus: {
-    color: '#f97316',
-    fontSize: 28,
-    fontWeight: '300',
-    lineHeight: 32,
-  },
-  addCardLabel: {
-    color: '#f97316',
-    fontSize: 11,
-    fontWeight: '600',
-    textAlign: 'center',
-    opacity: 0.85,
-  },
-
-  // Characters row
-  charactersRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginTop: 4,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 12,
-    padding: 16,
-    gap: 12,
-  },
-  charactersEmoji: {
-    fontSize: 28,
-  },
-  charactersTitle: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  charactersSub: {
-    color: '#6b7280',
-    fontSize: 12,
-    marginTop: 2,
-  },
-  charactersArrow: {
-    color: '#6b7280',
-    fontSize: 22,
-    marginLeft: 'auto',
-  },
-});
+    // Characters row
+    charactersRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginHorizontal: 16,
+      marginTop: 4,
+      backgroundColor: c.surface,
+      borderRadius: 12,
+      padding: 16,
+      gap: 12,
+      borderWidth: 1,
+      borderColor: c.surfaceBorder,
+    },
+    charactersEmoji: {
+      fontSize: 28,
+    },
+    charactersTitle: {
+      color: c.text,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    charactersSub: {
+      color: c.textTertiary,
+      fontSize: 12,
+      marginTop: 2,
+    },
+    charactersArrow: {
+      color: c.textTertiary,
+      fontSize: 22,
+      marginLeft: 'auto',
+    },
+  });
+}
