@@ -1,7 +1,7 @@
 /**
  * Animated cat avatar for the narrator screen.
- * - Idle: gentle float up/down
- * - Speaking: mouth opens/closes + ears twitch + soundwave dots
+ * - Idle: gentle float up/down + periodic eye blink
+ * - Speaking: mouth opens/closes + ear twitches + glow ring + radio-wave rings
  */
 import { useEffect, useRef } from 'react';
 import { View, Animated, StyleSheet, Easing } from 'react-native';
@@ -13,39 +13,56 @@ interface Props {
 }
 
 export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 160 }: Props) {
-  const floatAnim = useRef(new Animated.Value(0)).current;
-  const mouthAnim = useRef(new Animated.Value(0)).current;
-  const earLAnim = useRef(new Animated.Value(0)).current;
-  const earRAnim = useRef(new Animated.Value(0)).current;
-  const loadingAnim = useRef(new Animated.Value(1)).current;
-  const wave1Anim = useRef(new Animated.Value(0)).current;
-  const wave2Anim = useRef(new Animated.Value(0)).current;
-  const wave3Anim = useRef(new Animated.Value(0)).current;
+  const floatAnim    = useRef(new Animated.Value(0)).current;
+  const mouthAnim    = useRef(new Animated.Value(0)).current;
+  const earLAnim     = useRef(new Animated.Value(0)).current;
+  const earRAnim     = useRef(new Animated.Value(0)).current;
+  const loadingAnim  = useRef(new Animated.Value(1)).current;
+  const eyeBlinkAnim = useRef(new Animated.Value(1)).current;
+  const glowScale    = useRef(new Animated.Value(1)).current;
+  const glowOpacity  = useRef(new Animated.Value(0)).current;
+
+  // Radio-wave rings: [scale, opacity] pairs
+  const ring1Scale   = useRef(new Animated.Value(1)).current;
+  const ring1Opacity = useRef(new Animated.Value(0)).current;
+  const ring2Scale   = useRef(new Animated.Value(1)).current;
+  const ring2Opacity = useRef(new Animated.Value(0)).current;
+  const ring3Scale   = useRef(new Animated.Value(1)).current;
+  const ring3Opacity = useRef(new Animated.Value(0)).current;
 
   const floatLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const mouthLoopRef = useRef<Animated.CompositeAnimation | null>(null);
-  const waveLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const glowLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
+  const waveLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
 
   // Gentle floating — always active
   useEffect(() => {
     floatLoopRef.current = Animated.loop(
       Animated.sequence([
         Animated.timing(floatAnim, {
-          toValue: -8,
-          duration: 1400,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
+          toValue: -8, duration: 1400,
+          easing: Easing.inOut(Easing.sin), useNativeDriver: true,
         }),
         Animated.timing(floatAnim, {
-          toValue: 0,
-          duration: 1400,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
+          toValue: 0, duration: 1400,
+          easing: Easing.inOut(Easing.sin), useNativeDriver: true,
         }),
       ])
     );
     floatLoopRef.current.start();
     return () => floatLoopRef.current?.stop();
+  }, []);
+
+  // Eye blink — always active, every ~4 s
+  useEffect(() => {
+    const blink = () => {
+      Animated.sequence([
+        Animated.timing(eyeBlinkAnim, { toValue: 0.08, duration: 40, useNativeDriver: true }),
+        Animated.timing(eyeBlinkAnim, { toValue: 1, duration: 40, useNativeDriver: true }),
+      ]).start();
+    };
+    const interval = setInterval(blink, 4000);
+    return () => clearInterval(interval);
   }, []);
 
   // Loading pulse
@@ -62,18 +79,22 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
     }
   }, [isLoading]);
 
-  // Mouth + ear + soundwave animation while speaking
+  // Speaking animations: mouth, glow ring, radio waves, ear twitches
   useEffect(() => {
     mouthLoopRef.current?.stop();
+    glowLoopRef.current?.stop();
     waveLoopRef.current?.stop();
     mouthLoopRef.current = null;
+    glowLoopRef.current = null;
     waveLoopRef.current = null;
 
     if (!isSpeaking) {
       mouthAnim.setValue(0);
-      wave1Anim.setValue(0);
-      wave2Anim.setValue(0);
-      wave3Anim.setValue(0);
+      glowScale.setValue(1);
+      glowOpacity.setValue(0);
+      ring1Scale.setValue(1); ring1Opacity.setValue(0);
+      ring2Scale.setValue(1); ring2Opacity.setValue(0);
+      ring3Scale.setValue(1); ring3Opacity.setValue(0);
       return;
     }
 
@@ -81,40 +102,57 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
     mouthLoopRef.current = Animated.loop(
       Animated.sequence([
         Animated.timing(mouthAnim, {
-          toValue: 1,
-          duration: 180,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          toValue: 1, duration: 180,
+          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
         }),
         Animated.timing(mouthAnim, {
-          toValue: 0,
-          duration: 180,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
+          toValue: 0, duration: 180,
+          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
         }),
       ])
     );
     mouthLoopRef.current.start();
 
-    // Soundwave dots — staggered
-    waveLoopRef.current = Animated.loop(
-      Animated.parallel([
-        Animated.sequence([
-          Animated.timing(wave1Anim, { toValue: -6, duration: 260, useNativeDriver: true }),
-          Animated.timing(wave1Anim, { toValue: 0, duration: 260, useNativeDriver: true }),
+    // Glow ring pulse
+    glowLoopRef.current = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(glowScale, { toValue: 1.06, duration: 500, useNativeDriver: true }),
+          Animated.timing(glowOpacity, { toValue: 0.35, duration: 500, useNativeDriver: true }),
         ]),
-        Animated.sequence([
-          Animated.delay(80),
-          Animated.timing(wave2Anim, { toValue: -6, duration: 260, useNativeDriver: true }),
-          Animated.timing(wave2Anim, { toValue: 0, duration: 260, useNativeDriver: true }),
-        ]),
-        Animated.sequence([
-          Animated.delay(160),
-          Animated.timing(wave3Anim, { toValue: -6, duration: 260, useNativeDriver: true }),
-          Animated.timing(wave3Anim, { toValue: 0, duration: 260, useNativeDriver: true }),
+        Animated.parallel([
+          Animated.timing(glowScale, { toValue: 0.97, duration: 500, useNativeDriver: true }),
+          Animated.timing(glowOpacity, { toValue: 0.1, duration: 500, useNativeDriver: true }),
         ]),
       ])
     );
+    glowLoopRef.current.start();
+
+    // Radio-wave ring helper
+    const ringAnim = (scale: Animated.Value, opacity: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.parallel([
+            Animated.timing(scale, { toValue: 1.9, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0, duration: 700, useNativeDriver: true }),
+          ]),
+          Animated.parallel([
+            Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0.6, duration: 0, useNativeDriver: true }),
+          ]),
+        ])
+      );
+
+    waveLoopRef.current = Animated.parallel([
+      ringAnim(ring1Scale, ring1Opacity, 0),
+      ringAnim(ring2Scale, ring2Opacity, 300),
+      ringAnim(ring3Scale, ring3Opacity, 600),
+    ]);
+    // Seed initial opacity so rings are visible immediately
+    ring1Opacity.setValue(0.6);
+    ring2Opacity.setValue(0.6);
+    ring3Opacity.setValue(0.6);
     waveLoopRef.current.start();
 
     // Occasional ear twitches
@@ -129,28 +167,26 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
 
     return () => {
       mouthLoopRef.current?.stop();
+      glowLoopRef.current?.stop();
       waveLoopRef.current?.stop();
       clearInterval(earTimer);
       mouthAnim.setValue(0);
       earLAnim.setValue(0);
       earRAnim.setValue(0);
-      wave1Anim.setValue(0);
-      wave2Anim.setValue(0);
-      wave3Anim.setValue(0);
     };
   }, [isSpeaking]);
 
-  const headSize = size * 0.62;
-  const earSize = size * 0.20;
-  const eyeSize = size * 0.10;
-  const pupilSize = size * 0.055;
-  const noseSize = size * 0.055;
-  const mouthW = size * 0.22;
+  const headSize   = size * 0.62;
+  const earSize    = size * 0.20;
+  const eyeSize    = size * 0.10;
+  const pupilSize  = size * 0.055;
+  const noseSize   = size * 0.055;
+  const mouthW     = size * 0.22;
   const mouthBaseH = size * 0.035;
+  const ringSize   = headSize * 0.38;
 
   const mouthScaleY = mouthAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 3.5],
+    inputRange: [0, 1], outputRange: [1, 3.5],
   });
 
   return (
@@ -160,28 +196,39 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
         { opacity: loadingAnim, transform: [{ translateY: floatAnim }] },
       ]}
     >
+      {/* Glow ring — behind head */}
+      <Animated.View
+        style={{
+          width: headSize * 1.18,
+          height: headSize * 1.18,
+          borderRadius: headSize * 0.59,
+          backgroundColor: 'rgba(249,115,22,0.25)',
+          position: 'absolute',
+          top: size * 0.12 - headSize * 0.09,
+          left: (size - headSize * 1.18) / 2,
+          transform: [{ scale: glowScale }],
+          opacity: glowOpacity,
+        }}
+      />
+
       {/* Left ear */}
       <Animated.View
         style={{
-          width: earSize,
-          height: earSize * 1.2,
+          width: earSize, height: earSize * 1.2,
           borderRadius: earSize * 0.3,
           backgroundColor: '#e8a020',
           position: 'absolute',
-          top: size * 0.04,
-          left: size * 0.10,
+          top: size * 0.04, left: size * 0.10,
           transform: [{ rotate: '-12deg' }, { translateY: earLAnim }],
         }}
       />
       <View
         style={{
-          width: earSize * 0.55,
-          height: earSize * 0.7,
+          width: earSize * 0.55, height: earSize * 0.7,
           borderRadius: earSize * 0.2,
           backgroundColor: '#f9c8a0',
           position: 'absolute',
-          top: size * 0.07,
-          left: size * 0.145,
+          top: size * 0.07, left: size * 0.145,
           transform: [{ rotate: '-12deg' }],
         }}
       />
@@ -189,25 +236,21 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
       {/* Right ear */}
       <Animated.View
         style={{
-          width: earSize,
-          height: earSize * 1.2,
+          width: earSize, height: earSize * 1.2,
           borderRadius: earSize * 0.3,
           backgroundColor: '#e8a020',
           position: 'absolute',
-          top: size * 0.04,
-          right: size * 0.10,
+          top: size * 0.04, right: size * 0.10,
           transform: [{ rotate: '12deg' }, { translateY: earRAnim }],
         }}
       />
       <View
         style={{
-          width: earSize * 0.55,
-          height: earSize * 0.7,
+          width: earSize * 0.55, height: earSize * 0.7,
           borderRadius: earSize * 0.2,
           backgroundColor: '#f9c8a0',
           position: 'absolute',
-          top: size * 0.07,
-          right: size * 0.145,
+          top: size * 0.07, right: size * 0.145,
           transform: [{ rotate: '12deg' }],
         }}
       />
@@ -215,8 +258,7 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
       {/* Head */}
       <View
         style={{
-          width: headSize,
-          height: headSize,
+          width: headSize, height: headSize,
           borderRadius: headSize / 2,
           backgroundColor: '#f5c030',
           position: 'absolute',
@@ -234,27 +276,26 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
         {/* Eyes */}
         <View style={{ flexDirection: 'row', gap: headSize * 0.22, marginBottom: headSize * 0.04, marginTop: -headSize * 0.06 }}>
           {[0, 1].map((i) => (
-            <View
+            <Animated.View
               key={i}
               style={{
-                width: eyeSize,
-                height: eyeSize,
+                width: eyeSize, height: eyeSize,
                 borderRadius: eyeSize / 2,
                 backgroundColor: '#fff',
                 alignItems: 'center',
                 justifyContent: 'center',
+                transform: [{ scaleY: eyeBlinkAnim }],
               }}
             >
               <View style={{ width: pupilSize, height: pupilSize, borderRadius: pupilSize / 2, backgroundColor: '#2d1a00' }} />
-            </View>
+            </Animated.View>
           ))}
         </View>
 
         {/* Nose */}
         <View
           style={{
-            width: noseSize,
-            height: noseSize * 0.65,
+            width: noseSize, height: noseSize * 0.65,
             borderRadius: noseSize * 0.3,
             backgroundColor: '#f97070',
             marginBottom: headSize * 0.03,
@@ -264,8 +305,7 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
         {/* Mouth */}
         <Animated.View
           style={{
-            width: mouthW,
-            height: mouthBaseH,
+            width: mouthW, height: mouthBaseH,
             borderRadius: mouthBaseH,
             backgroundColor: '#6b2a0a',
             transform: [{ scaleY: mouthScaleY }],
@@ -291,13 +331,26 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
         )}
       </View>
 
-      {/* Soundwave dots */}
+      {/* Radio-wave rings — right side of avatar */}
       {isSpeaking && (
-        <View style={styles.waveRow}>
-          {([wave1Anim, wave2Anim, wave3Anim] as Animated.Value[]).map((anim, i) => (
+        <View style={[styles.ringsContainer, { right: -ringSize * 0.2, top: size * 0.28 }]}>
+          {([
+            [ring1Scale, ring1Opacity],
+            [ring2Scale, ring2Opacity],
+            [ring3Scale, ring3Opacity],
+          ] as [Animated.Value, Animated.Value][]).map(([scale, opacity], i) => (
             <Animated.View
               key={i}
-              style={[styles.waveDot, { transform: [{ translateY: anim }] }]}
+              style={[
+                styles.ring,
+                {
+                  width: ringSize, height: ringSize,
+                  borderRadius: ringSize / 2,
+                  position: 'absolute',
+                  transform: [{ scale }],
+                  opacity,
+                },
+              ]}
             />
           ))}
         </View>
@@ -307,17 +360,16 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
 }
 
 const styles = StyleSheet.create({
-  waveRow: {
+  ringsContainer: {
     position: 'absolute',
-    bottom: 2,
-    flexDirection: 'row',
-    gap: 5,
-    alignSelf: 'center',
+    width: 60,
+    height: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  waveDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(249,115,22,0.85)',
+  ring: {
+    borderWidth: 2,
+    borderColor: 'rgba(249,115,22,0.7)',
+    backgroundColor: 'transparent',
   },
 });

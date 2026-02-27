@@ -4,6 +4,7 @@ import { Audio } from 'expo-av';
 export interface NarratorState {
   isPlaying: boolean;
   isLoading: boolean;
+  isFinished: boolean;
   hasAudio: boolean;
   toggle: () => void;
   stop: () => void;
@@ -13,6 +14,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
   const soundRef = useRef<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
 
   // Clean up the current sound object
   const unloadSound = useCallback(async () => {
@@ -41,6 +43,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
     const load = async () => {
       await unloadSound();
       if (cancelled) return;
+      setIsFinished(false);
 
       try {
         setIsLoading(true);
@@ -59,9 +62,9 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
             if (cancelled) return;
             if (status.isLoaded) {
               setIsPlaying(status.isPlaying);
-              // Auto-stop state when playback finishes
               if (status.didJustFinish) {
                 setIsPlaying(false);
+                setIsFinished(true);
               }
             }
           }
@@ -107,6 +110,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
       } else {
         // Replay from beginning if finished
         if (status.positionMillis >= (status.durationMillis ?? 0) - 200) {
+          setIsFinished(false);
           await sound.replayAsync();
         } else {
           await sound.playAsync();
@@ -124,6 +128,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
   return {
     isPlaying,
     isLoading,
+    isFinished,
     hasAudio: !!audioUrl,
     toggle,
     stop,
