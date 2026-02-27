@@ -534,7 +534,7 @@ EXPERIMENTS = {
                 }
             }
         ],
-        "active": True
+        "active": False
     },
     "story-length": {
         "id": "story-length",
