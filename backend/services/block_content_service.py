@@ -477,15 +477,17 @@ def story_to_blocks_with_format(
     blocks = format_to_blocks(format_data, metadata)
 
     # Get display config from format
-    # Pre-generated blocks (new format: has "blocks" key, no "type") → scroll/visual slides
-    # Legacy conversions (static_story, katha_night) set display explicitly in get_format_from_story
+    # Pre-generated blocks (new format: has "blocks" key, no "type") always use scroll navigation
+    # regardless of any stale "paginated" value stored in Firestore from before the visual slides format existed.
+    # Legacy conversions (static_story, katha_night) keep their explicit display config unchanged.
     has_pregenerated_blocks = "blocks" in format_data and not format_data.get("type")
-    default_navigation = "scroll" if has_pregenerated_blocks else "paginated"
     display = format_data.get("display", {
-        "navigation": default_navigation,
+        "navigation": "paginated",
         "theme": "adventure",
         "showProgress": True
     })
+    if has_pregenerated_blocks:
+        display = {**display, "navigation": "scroll"}
 
     # Build BlockBasedContent
     return {
