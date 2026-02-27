@@ -424,46 +424,7 @@ export default function BlockViewerScreen() {
     );
   }
 
-  // 'scroll' → VisualStorySlides (visual slide cards)
-  // anything else (e.g. 'paginated') → ContentViewer (katha_night legacy format)
-  const isScrollMode = displayContent.display.navigation === 'scroll';
-
-  if (!isScrollMode) {
-    return (
-      <>
-        <Stack.Screen
-          options={{
-            title: displayContent.title[language],
-            headerRight: () => (
-              <TouchableOpacity onPress={toggleLanguage} style={styles.langToggle}>
-                <Text style={styles.langToggleText}>
-                  {language === 'en' ? 'हिं' : 'EN'}
-                </Text>
-              </TouchableOpacity>
-            ),
-          }}
-        />
-        <SafeAreaView style={styles.container} edges={['bottom']}>
-          {__DEV__ && displayContent.experiment && (
-            <View style={styles.experimentBadge}>
-              <Text style={styles.experimentText}>
-                {`Exp: ${displayContent.experiment.experimentId} | Var: ${displayContent.experiment.variantId}`}
-              </Text>
-            </View>
-          )}
-          <ContentViewer
-            content={displayContent}
-            language={language}
-            onLanguageToggle={toggleLanguage}
-            onComplete={handleComplete}
-            onQuizAnswer={handleQuizAnswer}
-          />
-        </SafeAreaView>
-      </>
-    );
-  }
-
-  // Standard format — visual slides
+  // All stories use visual slides format
   return (
     <>
       <Stack.Screen
