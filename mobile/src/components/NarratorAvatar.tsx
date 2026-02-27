@@ -1,46 +1,157 @@
 /**
- * Animated cat avatar for the narrator screen.
- * - Idle: gentle float up/down + periodic eye blink
- * - Speaking: mouth opens/closes + ear twitches + glow ring + radio-wave rings
+ * Narrator avatar — full-body SVG creature.
+ *
+ * Design:
+ *  - Chubby rounded head + oval body + stubby arms + curling tail
+ *  - Big expressive eyes (rx constant, ry animated for blink/emotion)
+ *  - Curved eyebrows animated up/down per emotion
+ *  - Smile path (idle) ↔ open oval with teeth (speaking)
+ *  - Rapid mouth open/close loop while speaking ("talks a lot")
+ *  - Pink blush circles, intensity driven by block type
+ *  - Glow halo + expanding radio-wave rings while speaking
+ *  - Whole-creature float on native driver; everything else JS-thread
+ *
+ * Props:
+ *  isSpeaking  — drives mouth, glow, rings
+ *  isLoading   — opacity pulse
+ *  blockType   — drives emotion expression (eyes, brows, blush)
+ *  size        — base size; SVG canvas is size × size*1.44
  */
 import { useEffect, useRef } from 'react';
-import { View, Animated, StyleSheet, Easing } from 'react-native';
+import { Animated, Easing } from 'react-native';
+import Svg, { Circle, Ellipse, Path, G } from 'react-native-svg';
+
+const AnimatedCircle  = Animated.createAnimatedComponent(Circle);
+const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
+const AnimatedPath    = Animated.createAnimatedComponent(Path);
+const AnimatedG       = Animated.createAnimatedComponent(G);
+
+// ── Emotion system ─────────────────────────────────────────────────────────────
+
+type Emotion = 'excited' | 'warm' | 'thoughtful' | 'peaceful' | 'playful' | 'proud';
+
+const BLOCK_EMOTION: Record<string, Emotion> = {
+  hook:            'excited',
+  story_body:      'warm',
+  text:            'warm',
+  reflection:      'thoughtful',
+  discussion:      'thoughtful',
+  blessing:        'peaceful',
+  quiz:            'playful',
+  value_highlight: 'proud',
+  character_intro: 'excited',
+};
+
+// Eye ry scale relative to eyeRyBase (1.0 = normal, >1 = wide, <1 = sleepy)
+const EMOTION_EYE: Record<Emotion, number> = {
+  excited:    1.18,
+  warm:       1.00,
+  thoughtful: 0.60,
+  peaceful:   0.38,
+  playful:    1.15,
+  proud:      1.00,
+};
+
+// Eyebrow translateY: negative = raised (happy/excited), positive = lowered (sad/peaceful)
+const EMOTION_BROW: Record<Emotion, number> = {
+  excited:    -4,
+  warm:        0,
+  thoughtful:  2,
+  peaceful:    3,
+  playful:    -3,
+  proud:      -1,
+};
+
+const EMOTION_BLUSH: Record<Emotion, number> = {
+  excited:    0.45,
+  warm:       0.28,
+  thoughtful: 0.20,
+  peaceful:   0.58,
+  playful:    0.40,
+  proud:      0.20,
+};
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   isSpeaking: boolean;
   isLoading?: boolean;
+  blockType?: string;
   size?: number;
 }
 
-export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 160 }: Props) {
-  const floatAnim    = useRef(new Animated.Value(0)).current;
-  const mouthAnim    = useRef(new Animated.Value(0)).current;
-  const earLAnim     = useRef(new Animated.Value(0)).current;
-  const earRAnim     = useRef(new Animated.Value(0)).current;
-  const loadingAnim  = useRef(new Animated.Value(1)).current;
-  const eyeBlinkAnim = useRef(new Animated.Value(1)).current;
-  const glowScale    = useRef(new Animated.Value(1)).current;
-  const glowOpacity  = useRef(new Animated.Value(0)).current;
+export default function NarratorAvatar({
+  isSpeaking,
+  isLoading = false,
+  blockType,
+  size = 170,
+}: Props) {
+  const s = size;
 
-  // Radio-wave rings: [scale, opacity] pairs
-  const ring1Scale   = useRef(new Animated.Value(1)).current;
-  const ring1Opacity = useRef(new Animated.Value(0)).current;
-  const ring2Scale   = useRef(new Animated.Value(1)).current;
-  const ring2Opacity = useRef(new Animated.Value(0)).current;
-  const ring3Scale   = useRef(new Animated.Value(1)).current;
-  const ring3Opacity = useRef(new Animated.Value(0)).current;
+  // ── Animated values (all declared at top level — hooks rule) ────────────────
 
-  const floatLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  // Native driver — on outer Animated.View:
+  const floatAnim   = useRef(new Animated.Value(0)).current;
+  const loadingAnim = useRef(new Animated.Value(1)).current;
+
+  // JS-thread — drive SVG props (useNativeDriver: false):
+  const eyeOpenAnim   = useRef(new Animated.Value(1.0)).current;   // eye ry scale
+  const browY         = useRef(new Animated.Value(0)).current;     // eyebrow translateY
+  const blushOpacity  = useRef(new Animated.Value(0.28)).current;
+  const mouthOpenAnim = useRef(new Animated.Value(0)).current;     // 0=smile, 1=open
+  const mouthRyAnim   = useRef(new Animated.Value(s * 0.030)).current; // open-mouth ry (px)
+  const glowOpacity   = useRef(new Animated.Value(0)).current;
+  const ring1S = useRef(new Animated.Value(1)).current;
+  const ring1O = useRef(new Animated.Value(0)).current;
+  const ring2S = useRef(new Animated.Value(1)).current;
+  const ring2O = useRef(new Animated.Value(0)).current;
+  const ring3S = useRef(new Animated.Value(1)).current;
+  const ring3O = useRef(new Animated.Value(0)).current;
+
   const mouthLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const glowLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
   const waveLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
+  const emotionEyeRef = useRef(1.0); // tracks current emotion eye target for blink restore
 
-  // Gentle floating — always active
+  // ── Geometry (all proportional to s) ────────────────────────────────────────
+
+  // SVG canvas is wider than s to give rings room on the right
+  const svgW  = s * 1.26;
+  const topPad = s * 0.07;  // ears extend above headCY-headR; shift everything down
+  const svgH  = s * 1.44 + topPad;
+
+  const headCX = s * 0.50;
+  const headCY = s * 0.41;
+  const headR  = s * 0.330;
+
+  const lEarCX = s * 0.272; const lEarCY = s * 0.095;
+  const rEarCX = s * 0.728; const rEarCY = s * 0.095;
+
+  const eyeRx     = s * 0.092;
+  const eyeRyBase = s * 0.092;
+  const lEyeCX = s * 0.352; const lEyeCY = s * 0.378;
+  const rEyeCX = s * 0.648; const rEyeCY = s * 0.378;
+  const pupilR = s * 0.054;
+  const hlR    = s * 0.024;  // highlight dot
+
+  const mouthCX = s * 0.500;
+  const mouthCY = s * 0.548;
+  const mouthRX = s * 0.118;
+
+  const bodyCX = s * 0.500; const bodyCY = s * 1.078;
+  const bodyRX = s * 0.268; const bodyRY = s * 0.182;
+
+  // Radio rings: center = right edge of head
+  const ringsX    = headCX + headR * 0.90;
+  const ringsY    = headCY;
+  const ringBaseR = s * 0.120;
+
+  // ── Float — always active, native driver ────────────────────────────────────
   useEffect(() => {
-    floatLoopRef.current = Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(floatAnim, {
-          toValue: -8, duration: 1400,
+          toValue: -9, duration: 1400,
           easing: Easing.inOut(Easing.sin), useNativeDriver: true,
         }),
         Animated.timing(floatAnim, {
@@ -49,29 +160,17 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
         }),
       ])
     );
-    floatLoopRef.current.start();
-    return () => floatLoopRef.current?.stop();
+    loop.start();
+    return () => loop.stop();
   }, []);
 
-  // Eye blink — always active, every ~4 s
-  useEffect(() => {
-    const blink = () => {
-      Animated.sequence([
-        Animated.timing(eyeBlinkAnim, { toValue: 0.08, duration: 40, useNativeDriver: true }),
-        Animated.timing(eyeBlinkAnim, { toValue: 1, duration: 40, useNativeDriver: true }),
-      ]).start();
-    };
-    const interval = setInterval(blink, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Loading pulse
+  // ── Loading pulse — native driver ────────────────────────────────────────────
   useEffect(() => {
     if (isLoading) {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(loadingAnim, { toValue: 0.5, duration: 500, useNativeDriver: true }),
-          Animated.timing(loadingAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+          Animated.timing(loadingAnim, { toValue: 0.4, duration: 500, useNativeDriver: true }),
+          Animated.timing(loadingAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
         ])
       ).start();
     } else {
@@ -79,297 +178,290 @@ export default function NarratorAvatar({ isSpeaking, isLoading = false, size = 1
     }
   }, [isLoading]);
 
-  // Speaking animations: mouth, glow ring, radio waves, ear twitches
+  // ── Eye blink — always active ────────────────────────────────────────────────
+  useEffect(() => {
+    const blink = () => {
+      Animated.sequence([
+        Animated.timing(eyeOpenAnim, { toValue: 0.08, duration: 45, useNativeDriver: false }),
+        Animated.timing(eyeOpenAnim, { toValue: emotionEyeRef.current, duration: 65, useNativeDriver: false }),
+      ]).start();
+    };
+    // Randomise interval slightly so it feels alive
+    let id: ReturnType<typeof setTimeout>;
+    const schedule = () => { id = setTimeout(() => { blink(); schedule(); }, 3500 + Math.random() * 2500); };
+    schedule();
+    return () => clearTimeout(id);
+  }, []);
+
+  // ── Emotion — triggered by blockType change ──────────────────────────────────
+  useEffect(() => {
+    const em = BLOCK_EMOTION[blockType ?? ''] ?? 'warm';
+    emotionEyeRef.current = EMOTION_EYE[em];
+    Animated.parallel([
+      Animated.timing(eyeOpenAnim,  { toValue: EMOTION_EYE[em],   duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
+      Animated.timing(browY,        { toValue: EMOTION_BROW[em],  duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
+      Animated.timing(blushOpacity, { toValue: EMOTION_BLUSH[em], duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
+    ]).start();
+  }, [blockType]);
+
+  // ── Speaking animations ──────────────────────────────────────────────────────
   useEffect(() => {
     mouthLoopRef.current?.stop();
     glowLoopRef.current?.stop();
     waveLoopRef.current?.stop();
-    mouthLoopRef.current = null;
-    glowLoopRef.current = null;
-    waveLoopRef.current = null;
 
     if (!isSpeaking) {
-      mouthAnim.setValue(0);
-      glowScale.setValue(1);
-      glowOpacity.setValue(0);
-      ring1Scale.setValue(1); ring1Opacity.setValue(0);
-      ring2Scale.setValue(1); ring2Opacity.setValue(0);
-      ring3Scale.setValue(1); ring3Opacity.setValue(0);
+      Animated.timing(mouthOpenAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+      Animated.timing(glowOpacity,   { toValue: 0, duration: 300, useNativeDriver: false }).start();
+      ring1S.setValue(1); ring1O.setValue(0);
+      ring2S.setValue(1); ring2O.setValue(0);
+      ring3S.setValue(1); ring3O.setValue(0);
       return;
     }
 
-    // Mouth open/close loop
+    // Open mouth
+    Animated.timing(mouthOpenAnim, { toValue: 1, duration: 180, useNativeDriver: false }).start();
+
+    // Rapid open/close loop — "talks a lot"
     mouthLoopRef.current = Animated.loop(
       Animated.sequence([
-        Animated.timing(mouthAnim, {
-          toValue: 1, duration: 180,
-          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
-        }),
-        Animated.timing(mouthAnim, {
-          toValue: 0, duration: 180,
-          easing: Easing.inOut(Easing.ease), useNativeDriver: true,
-        }),
+        Animated.timing(mouthRyAnim, { toValue: s * 0.078, duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(mouthRyAnim, { toValue: s * 0.026, duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
       ])
     );
     mouthLoopRef.current.start();
 
-    // Glow ring pulse
+    // Glow halo pulse
     glowLoopRef.current = Animated.loop(
       Animated.sequence([
-        Animated.parallel([
-          Animated.timing(glowScale, { toValue: 1.06, duration: 500, useNativeDriver: true }),
-          Animated.timing(glowOpacity, { toValue: 0.35, duration: 500, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(glowScale, { toValue: 0.97, duration: 500, useNativeDriver: true }),
-          Animated.timing(glowOpacity, { toValue: 0.1, duration: 500, useNativeDriver: true }),
-        ]),
+        Animated.timing(glowOpacity, { toValue: 0.42, duration: 480, useNativeDriver: false }),
+        Animated.timing(glowOpacity, { toValue: 0.10, duration: 480, useNativeDriver: false }),
       ])
     );
     glowLoopRef.current.start();
 
-    // Radio-wave ring helper
-    const ringAnim = (scale: Animated.Value, opacity: Animated.Value, delay: number) =>
+    // Expanding radio-wave rings
+    const ringAnim = (sc: Animated.Value, op: Animated.Value, delay: number) =>
       Animated.loop(
         Animated.sequence([
           Animated.delay(delay),
           Animated.parallel([
-            Animated.timing(scale, { toValue: 1.9, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-            Animated.timing(opacity, { toValue: 0, duration: 700, useNativeDriver: true }),
+            Animated.timing(sc, { toValue: 2.2, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: false }),
+            Animated.timing(op, { toValue: 0,   duration: 700, useNativeDriver: false }),
           ]),
           Animated.parallel([
-            Animated.timing(scale, { toValue: 1, duration: 0, useNativeDriver: true }),
-            Animated.timing(opacity, { toValue: 0.6, duration: 0, useNativeDriver: true }),
+            Animated.timing(sc, { toValue: 1,    duration: 0, useNativeDriver: false }),
+            Animated.timing(op, { toValue: 0.65, duration: 0, useNativeDriver: false }),
           ]),
         ])
       );
-
+    ring1O.setValue(0.65); ring2O.setValue(0.65); ring3O.setValue(0.65);
     waveLoopRef.current = Animated.parallel([
-      ringAnim(ring1Scale, ring1Opacity, 0),
-      ringAnim(ring2Scale, ring2Opacity, 300),
-      ringAnim(ring3Scale, ring3Opacity, 600),
+      ringAnim(ring1S, ring1O, 0),
+      ringAnim(ring2S, ring2O, 265),
+      ringAnim(ring3S, ring3O, 530),
     ]);
-    // Seed initial opacity so rings are visible immediately
-    ring1Opacity.setValue(0.6);
-    ring2Opacity.setValue(0.6);
-    ring3Opacity.setValue(0.6);
     waveLoopRef.current.start();
-
-    // Occasional ear twitches
-    const earTimer = setInterval(() => {
-      Animated.sequence([
-        Animated.timing(earLAnim, { toValue: -4, duration: 100, useNativeDriver: true }),
-        Animated.timing(earLAnim, { toValue: 0, duration: 100, useNativeDriver: true }),
-        Animated.timing(earRAnim, { toValue: -4, duration: 100, useNativeDriver: true }),
-        Animated.timing(earRAnim, { toValue: 0, duration: 100, useNativeDriver: true }),
-      ]).start();
-    }, 2800);
 
     return () => {
       mouthLoopRef.current?.stop();
       glowLoopRef.current?.stop();
       waveLoopRef.current?.stop();
-      clearInterval(earTimer);
-      mouthAnim.setValue(0);
-      earLAnim.setValue(0);
-      earRAnim.setValue(0);
     };
   }, [isSpeaking]);
 
-  const headSize   = size * 0.62;
-  const earSize    = size * 0.20;
-  const eyeSize    = size * 0.10;
-  const pupilSize  = size * 0.055;
-  const noseSize   = size * 0.055;
-  const mouthW     = size * 0.22;
-  const mouthBaseH = size * 0.035;
-  const ringSize   = headSize * 0.38;
+  // ── Derived interpolations ───────────────────────────────────────────────────
 
-  const mouthScaleY = mouthAnim.interpolate({
-    inputRange: [0, 1], outputRange: [1, 3.5],
+  // Eye ry in pixels, clamped at both blink (0.08) and wide (1.18) ends
+  const eyeRyAnim = eyeOpenAnim.interpolate({
+    inputRange: [0.08, 1.0, 1.18],
+    outputRange: [eyeRyBase * 0.06, eyeRyBase, eyeRyBase * 1.10],
+    extrapolate: 'clamp',
   });
 
+  // Smile fades out when mouth opens
+  const smileOpacity = mouthOpenAnim.interpolate({
+    inputRange: [0, 0.45], outputRange: [1, 0], extrapolate: 'clamp',
+  });
+
+  // Open mouth fades in
+  const openMouthOpacity = mouthOpenAnim.interpolate({
+    inputRange: [0.55, 1], outputRange: [0, 1], extrapolate: 'clamp',
+  });
+
+  // Ring radii interpolated from scale
+  const r1R = ring1S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
+  const r2R = ring2S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
+  const r3R = ring3S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
+
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <Animated.View
-      style={[
-        { width: size, height: size + 20, alignItems: 'center' },
-        { opacity: loadingAnim, transform: [{ translateY: floatAnim }] },
-      ]}
+      style={{
+        width: svgW,
+        height: svgH,
+        opacity: loadingAnim,
+        transform: [{ translateY: floatAnim }],
+      }}
     >
-      {/* Glow ring — behind head */}
-      <Animated.View
-        style={{
-          width: headSize * 1.18,
-          height: headSize * 1.18,
-          borderRadius: headSize * 0.59,
-          backgroundColor: 'rgba(249,115,22,0.25)',
-          position: 'absolute',
-          top: size * 0.12 - headSize * 0.09,
-          left: (size - headSize * 1.18) / 2,
-          transform: [{ scale: glowScale }],
-          opacity: glowOpacity,
-        }}
-      />
+      <Svg width={svgW} height={svgH}>
+        {/* Shift entire creature down so ears aren't clipped at the top */}
+        <G transform={`translate(0 ${topPad})`}>
 
-      {/* Left ear */}
-      <Animated.View
-        style={{
-          width: earSize, height: earSize * 1.2,
-          borderRadius: earSize * 0.3,
-          backgroundColor: '#e8a020',
-          position: 'absolute',
-          top: size * 0.04, left: size * 0.10,
-          transform: [{ rotate: '-12deg' }, { translateY: earLAnim }],
-        }}
-      />
-      <View
-        style={{
-          width: earSize * 0.55, height: earSize * 0.7,
-          borderRadius: earSize * 0.2,
-          backgroundColor: '#f9c8a0',
-          position: 'absolute',
-          top: size * 0.07, left: size * 0.145,
-          transform: [{ rotate: '-12deg' }],
-        }}
-      />
-
-      {/* Right ear */}
-      <Animated.View
-        style={{
-          width: earSize, height: earSize * 1.2,
-          borderRadius: earSize * 0.3,
-          backgroundColor: '#e8a020',
-          position: 'absolute',
-          top: size * 0.04, right: size * 0.10,
-          transform: [{ rotate: '12deg' }, { translateY: earRAnim }],
-        }}
-      />
-      <View
-        style={{
-          width: earSize * 0.55, height: earSize * 0.7,
-          borderRadius: earSize * 0.2,
-          backgroundColor: '#f9c8a0',
-          position: 'absolute',
-          top: size * 0.07, right: size * 0.145,
-          transform: [{ rotate: '12deg' }],
-        }}
-      />
-
-      {/* Head */}
-      <View
-        style={{
-          width: headSize, height: headSize,
-          borderRadius: headSize / 2,
-          backgroundColor: '#f5c030',
-          position: 'absolute',
-          top: size * 0.12,
-          left: (size - headSize) / 2,
-          alignItems: 'center',
-          justifyContent: 'center',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 4 },
-          shadowOpacity: 0.25,
-          shadowRadius: 8,
-          elevation: 6,
-        }}
-      >
-        {/* Eyes */}
-        <View style={{ flexDirection: 'row', gap: headSize * 0.22, marginBottom: headSize * 0.04, marginTop: -headSize * 0.06 }}>
-          {[0, 1].map((i) => (
-            <Animated.View
-              key={i}
-              style={{
-                width: eyeSize, height: eyeSize,
-                borderRadius: eyeSize / 2,
-                backgroundColor: '#fff',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transform: [{ scaleY: eyeBlinkAnim }],
-              }}
-            >
-              <View style={{ width: pupilSize, height: pupilSize, borderRadius: pupilSize / 2, backgroundColor: '#2d1a00' }} />
-            </Animated.View>
-          ))}
-        </View>
-
-        {/* Nose */}
-        <View
-          style={{
-            width: noseSize, height: noseSize * 0.65,
-            borderRadius: noseSize * 0.3,
-            backgroundColor: '#f97070',
-            marginBottom: headSize * 0.03,
-          }}
+        {/* ── Glow halo behind head ──────────────────────────────────── */}
+        <AnimatedCircle
+          cx={headCX} cy={headCY} r={s * 0.415}
+          fill="rgba(249,115,22,0.28)"
+          opacity={glowOpacity}
         />
 
-        {/* Mouth */}
-        <Animated.View
-          style={{
-            width: mouthW, height: mouthBaseH,
-            borderRadius: mouthBaseH,
-            backgroundColor: '#6b2a0a',
-            transform: [{ scaleY: mouthScaleY }],
-          }}
+        {/* ── Radio-wave rings (right side of head) ─────────────────── */}
+        {([
+          [r1R, ring1O],
+          [r2R, ring2O],
+          [r3R, ring3O],
+        ] as const).map(([r, op], i) => (
+          <AnimatedCircle
+            key={i}
+            cx={ringsX} cy={ringsY}
+            // @ts-ignore — AnimatedInterpolation is valid here
+            r={r}
+            fill="none"
+            stroke="rgba(249,115,22,0.75)"
+            strokeWidth={2}
+            opacity={op}
+          />
+        ))}
+
+        {/* ── Left ear ──────────────────────────────────────────────── */}
+        <G transform={`rotate(-22, ${lEarCX}, ${lEarCY})`}>
+          <Ellipse cx={lEarCX} cy={lEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
+          <Ellipse cx={lEarCX} cy={lEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
+        </G>
+
+        {/* ── Right ear ─────────────────────────────────────────────── */}
+        <G transform={`rotate(22, ${rEarCX}, ${rEarCY})`}>
+          <Ellipse cx={rEarCX} cy={rEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
+          <Ellipse cx={rEarCX} cy={rEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
+        </G>
+
+        {/* ── Head ──────────────────────────────────────────────────── */}
+        <Circle cx={headCX} cy={headCY} r={headR} fill="#f5c030" />
+
+        {/* ── Eyebrows — translateY is a first-class RNSVG prop, safe to animate */}
+        {/* @ts-ignore — Animated.Value is valid here at runtime */}
+        <AnimatedG translateY={browY}>
+          {/* Left brow — gentle arch */}
+          <Path
+            d={`M ${s * 0.258},${s * 0.292} Q ${s * 0.350},${s * 0.242} ${s * 0.442},${s * 0.280}`}
+            stroke="#6b2a0a" strokeWidth={s * 0.022} strokeLinecap="round" fill="none"
+          />
+          {/* Right brow */}
+          <Path
+            d={`M ${s * 0.558},${s * 0.280} Q ${s * 0.650},${s * 0.242} ${s * 0.742},${s * 0.292}`}
+            stroke="#6b2a0a" strokeWidth={s * 0.022} strokeLinecap="round" fill="none"
+          />
+        </AnimatedG>
+
+        {/* ── Left eye (big, expressive) ─────────────────────────────── */}
+        {/* @ts-ignore */}
+        <AnimatedEllipse cx={lEyeCX} cy={lEyeCY} rx={eyeRx} ry={eyeRyAnim} fill="white" />
+        <Circle cx={lEyeCX + s * 0.010} cy={lEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
+        <Circle cx={lEyeCX + s * 0.033} cy={lEyeCY - s * 0.022} r={hlR} fill="white" />
+
+        {/* ── Right eye ─────────────────────────────────────────────── */}
+        {/* @ts-ignore */}
+        <AnimatedEllipse cx={rEyeCX} cy={rEyeCY} rx={eyeRx} ry={eyeRyAnim} fill="white" />
+        <Circle cx={rEyeCX + s * 0.010} cy={rEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
+        <Circle cx={rEyeCX + s * 0.033} cy={rEyeCY - s * 0.022} r={hlR} fill="white" />
+
+        {/* ── Blush circles ─────────────────────────────────────────── */}
+        {/* @ts-ignore */}
+        <AnimatedEllipse cx={s * 0.232} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" opacity={blushOpacity} />
+        {/* @ts-ignore */}
+        <AnimatedEllipse cx={s * 0.768} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" opacity={blushOpacity} />
+
+        {/* ── Nose ──────────────────────────────────────────────────── */}
+        <Ellipse cx={s * 0.500} cy={s * 0.482} rx={s * 0.038} ry={s * 0.025} fill="#f97070" />
+
+        {/* ── Whiskers (2 per side) ─────────────────────────────────── */}
+        {[
+          [s*0.160, s*0.492, s*0.320, s*0.492,  -5],
+          [s*0.155, s*0.516, s*0.316, s*0.516,   5],
+          [s*0.684, s*0.492, s*0.840, s*0.492,   5],
+          [s*0.684, s*0.516, s*0.845, s*0.516,  -5],
+        ].map(([x1, y1, x2, y2, angle], i) => (
+          <Path
+            key={i}
+            d={`M ${x1},${y1} L ${x2},${y2}`}
+            stroke="rgba(80,40,0,0.22)"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            transform={`rotate(${angle} ${(x1 + x2) / 2} ${(y1 + y2) / 2})`}
+          />
+        ))}
+
+        {/* ── Mouth: idle smile ─────────────────────────────────────── */}
+        {/* @ts-ignore */}
+        <AnimatedPath
+          d={`M ${s * 0.368},${mouthCY} Q ${mouthCX},${s * 0.622} ${s * 0.632},${mouthCY}`}
+          stroke="#6b2a0a" strokeWidth={s * 0.028} strokeLinecap="round" fill="none"
+          opacity={smileOpacity}
         />
 
-        {/* Whiskers */}
-        {([-1, 1] as const).map((side) =>
-          [0, 1, 2].map((row) => (
-            <View
-              key={`w-${side}-${row}`}
-              style={{
-                position: 'absolute',
-                width: headSize * 0.28,
-                height: 1.5,
-                backgroundColor: 'rgba(80,40,0,0.28)',
-                top: headSize * (0.56 + row * 0.055),
-                left: side === -1 ? headSize * 0.02 : headSize * 0.7,
-                transform: [{ rotate: side === -1 ? `${-5 + row * 5}deg` : `${5 - row * 5}deg` }],
-              }}
-            />
-          ))
-        )}
-      </View>
+        {/* ── Mouth: open oval (speaking) ───────────────────────────── */}
+        {/* @ts-ignore */}
+        <AnimatedEllipse
+          cx={mouthCX} cy={mouthCY}
+          rx={mouthRX} ry={mouthRyAnim}
+          fill="#6b2a0a"
+          opacity={openMouthOpacity}
+        />
+        {/* Teeth strip — inside open mouth */}
+        {/* @ts-ignore */}
+        <AnimatedEllipse
+          cx={mouthCX} cy={mouthCY - s * 0.008}
+          rx={mouthRX * 0.78} ry={s * 0.018}
+          fill="white"
+          opacity={openMouthOpacity}
+        />
 
-      {/* Radio-wave rings — right side of avatar */}
-      {isSpeaking && (
-        <View style={[styles.ringsContainer, { right: -ringSize * 0.2, top: size * 0.28 }]}>
-          {([
-            [ring1Scale, ring1Opacity],
-            [ring2Scale, ring2Opacity],
-            [ring3Scale, ring3Opacity],
-          ] as [Animated.Value, Animated.Value][]).map(([scale, opacity], i) => (
-            <Animated.View
-              key={i}
-              style={[
-                styles.ring,
-                {
-                  width: ringSize, height: ringSize,
-                  borderRadius: ringSize / 2,
-                  position: 'absolute',
-                  transform: [{ scale }],
-                  opacity,
-                },
-              ]}
-            />
-          ))}
-        </View>
-      )}
+        {/* ── Body (oval torso) ─────────────────────────────────────── */}
+        <Ellipse cx={bodyCX} cy={bodyCY} rx={bodyRX} ry={bodyRY} fill="#f5c030" />
+        {/* Belly highlight patch */}
+        <Ellipse
+          cx={bodyCX} cy={bodyCY + s * 0.022}
+          rx={bodyRX * 0.54} ry={bodyRY * 0.60}
+          fill="#f9d86a"
+        />
+
+        {/* ── Left arm (stubby, angled outward) ────────────────────── */}
+        <G transform={`rotate(30, ${s * 0.192}, ${s * 1.056})`}>
+          <Ellipse cx={s * 0.192} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
+          {/* Paw hint */}
+          <Ellipse cx={s * 0.192} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
+        </G>
+
+        {/* ── Right arm ─────────────────────────────────────────────── */}
+        <G transform={`rotate(-30, ${s * 0.808}, ${s * 1.056})`}>
+          <Ellipse cx={s * 0.808} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
+          {/* Paw hint */}
+          <Ellipse cx={s * 0.808} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
+        </G>
+
+        {/* ── Tail (right side of body, curling upward) ─────────────── */}
+        <Path
+          d={`M ${s * 0.742},${s * 1.082} C ${s * 0.830},${s * 1.152} ${s * 0.905},${s * 1.020} ${s * 0.882},${s * 0.910}`}
+          stroke="#e8a020"
+          strokeWidth={s * 0.072}
+          strokeLinecap="round"
+          fill="none"
+        />
+        {/* Tail tip — lighter colour */}
+        <Circle cx={s * 0.882} cy={s * 0.910} r={s * 0.042} fill="#f9c050" />
+
+        </G>{/* end topPad translate */}
+      </Svg>
     </Animated.View>
   );
 }
-
-const styles = StyleSheet.create({
-  ringsContainer: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ring: {
-    borderWidth: 2,
-    borderColor: 'rgba(249,115,22,0.7)',
-    backgroundColor: 'transparent',
-  },
-});

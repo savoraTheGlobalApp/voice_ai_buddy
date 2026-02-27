@@ -340,7 +340,8 @@ export default function NarratorScreen() {
               <NarratorAvatar
                 isSpeaking={narrator.isPlaying}
                 isLoading={narrator.isLoading}
-                size={SCREEN_WIDTH * 0.42}
+                blockType={currentBlock?.type}
+                size={SCREEN_WIDTH * 0.44}
               />
               {narrator.hasAudio && (
                 <TouchableOpacity
