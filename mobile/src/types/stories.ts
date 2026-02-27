@@ -148,6 +148,8 @@ export interface BaseContentBlock {
   id: string;
   type: string;
   order: number;
+  audio_url_en?: string;
+  audio_url_hi?: string;
 }
 
 // Text block - simple narrative text

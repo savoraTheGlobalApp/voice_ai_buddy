@@ -1,16 +1,18 @@
 import { Stack } from 'expo-router';
+import { useTheme } from '../../../src/contexts/ThemeContext';
 
 export default function SacredStoriesLayout() {
+  const { colors } = useTheme();
   return (
     <Stack
       screenOptions={{
         headerStyle: {
-          backgroundColor: '#0a0a0a',
+          backgroundColor: colors.headerBg,
         },
-        headerTintColor: '#fff',
+        headerTintColor: colors.text,
         headerTitleStyle: {
           fontWeight: '700',
-          color: '#fff',
+          color: colors.text,
         },
         headerShadowVisible: false,
       }}
@@ -38,6 +40,13 @@ export default function SacredStoriesLayout() {
         name="characters"
         options={{
           title: 'Character Collection',
+        }}
+      />
+      <Stack.Screen
+        name="narrator"
+        options={{
+          title: '',
+          headerTransparent: true,
         }}
       />
     </Stack>

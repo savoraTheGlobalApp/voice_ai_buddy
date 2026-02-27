@@ -11,11 +11,13 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { ContentViewer } from '../../../src/components/blocks/ContentViewer';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
+import { useTheme } from '../../../src/contexts/ThemeContext';
 import type { BlockBasedContent, ContentBlock } from '../../../src/types/stories';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -356,6 +358,7 @@ export default function BlockViewerScreen() {
     variantOverride?: string;
   }>();
   const { currentUser } = useAuth();
+  const { colors } = useTheme();
 
   const storyId = contentId || 'maha-001';
   const [language, setLanguage] = useState<Language>('en');
@@ -390,10 +393,10 @@ export default function BlockViewerScreen() {
 
   if (isLoading && !useFallback) {
     return (
-      <View style={styles.slidesRoot}>
+      <View style={[styles.slidesRoot, { backgroundColor: colors.background }]}>
         <View style={styles.centerContent}>
           <ActivityIndicator size="large" color="#f97316" />
-          <Text style={[styles.loadingText, { color: '#9ca3af' }]}>Loading...</Text>
+          <Text style={[styles.loadingText, { color: colors.textTertiary }]}>Loading...</Text>
         </View>
       </View>
     );
@@ -468,6 +471,14 @@ export default function BlockViewerScreen() {
           title: '',
           headerTransparent: true,
           headerBackTitle: '',
+          headerRight: () => (
+            <TouchableOpacity
+              onPress={() => router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`)}
+              style={{ paddingHorizontal: 6 }}
+            >
+              <Ionicons name="headset-outline" size={24} color="#fff" />
+            </TouchableOpacity>
+          ),
         }}
       />
       <View style={styles.slidesRoot}>
