@@ -14,7 +14,6 @@ import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
-import { ContentViewer } from '../../../src/components/blocks/ContentViewer';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
 import { useTheme } from '../../../src/contexts/ThemeContext';
@@ -387,9 +386,6 @@ export default function BlockViewerScreen() {
     router.back();
   }, []);
 
-  const handleQuizAnswer = useCallback((_blockId: string, _isCorrect: boolean) => {
-    // Extend for analytics
-  }, []);
 
   if (isLoading && !useFallback) {
     return (
