@@ -17,7 +17,11 @@ import { useAuth } from '../../../src/contexts/AuthContext';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
 import { useTheme } from '../../../src/contexts/ThemeContext';
+import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
+import type { SoundName } from '../../../src/hooks/useSoundEffects';
 import type { BlockBasedContent, ContentBlock } from '../../../src/types/stories';
+
+type PlayFn = (name: SoundName) => void;
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -274,6 +278,7 @@ interface VisualStorySlidesProps {
   language: Language;
   onToggleLang: () => void;
   onComplete: () => void;
+  play: PlayFn;
 }
 
 function VisualStorySlides({
@@ -281,6 +286,7 @@ function VisualStorySlides({
   language,
   onToggleLang,
   onComplete,
+  play,
 }: VisualStorySlidesProps) {
   const slides = useMemo(
     () => content.blocks.filter((b: ContentBlock) => !SKIP_TYPES.has(b.type)),
@@ -300,7 +306,8 @@ function VisualStorySlides({
   const onMomentumScrollEnd = useCallback((e: any) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
     setCurrentSlide(index);
-  }, []);
+    play('categorySwitch');
+  }, [play]);
 
   const coverUrl = content.cover_image_url;
   const category = content.category;
@@ -361,6 +368,7 @@ export default function BlockViewerScreen() {
   const storyId = contentId || 'maha-001';
   const [language, setLanguage] = useState<Language>('en');
   const [useFallback, setUseFallback] = useState(false);
+  const { play } = useSoundEffects();
 
   const { data: content, isLoading, error, refetch } = useBlockContent({
     storyId,
@@ -378,12 +386,14 @@ export default function BlockViewerScreen() {
   }, [error, useFallback]);
 
   const toggleLanguage = useCallback(() => {
+    play('nameSelect');
     setLanguage((prev) => (prev === 'en' ? 'hi' : 'en'));
-  }, []);
+  }, [play]);
 
   const handleComplete = useCallback(() => {
+    play('nameConfirmed');
     router.back();
-  }, []);
+  }, [play]);
 
 
 
@@ -436,10 +446,12 @@ export default function BlockViewerScreen() {
           language={language}
           onToggleLang={toggleLanguage}
           onComplete={handleComplete}
+          play={play}
         />
         {/* Narrator button — positioned above bottom actions, clear of header */}
         <TouchableOpacity
           onPress={() => {
+            play('tabFocus');
             router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`);
           }}
           style={[styles.narratorBtn, { top: safeTop + 60 }]}

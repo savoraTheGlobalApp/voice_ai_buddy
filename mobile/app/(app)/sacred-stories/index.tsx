@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -15,12 +15,16 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import { useTheme } from '../../../src/contexts/ThemeContext';
+import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
+import type { SoundName } from '../../../src/hooks/useSoundEffects';
 import type { ThemeColors } from '../../../src/theme/colors';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_WIDTH = 140;
 const CARD_HEIGHT = 200;
 const HERO_HEIGHT = 340;
+
+type PlayFn = (name: SoundName) => void;
 
 // Category display config: label, gradient colors, cover emoji
 const CATEGORY_CONFIG: Record<string, { label: string; gradient: [string, string]; emoji: string }> = {
@@ -56,13 +60,18 @@ interface StoryItem {
   cover_image_url?: string;
 }
 
-function StoryCard({ story, onPress }: { story: StoryItem; onPress: () => void }) {
+function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => void; play: PlayFn }) {
   const config = getCategoryConfig(story.category);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const handlePress = useCallback(() => {
+    play('startStory');
+    onPress();
+  }, [play, onPress]);
+
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={styles.card}>
+    <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={styles.card}>
       {story.cover_image_url ? (
         <View style={styles.cardGradient}>
           <Image
@@ -94,14 +103,17 @@ function StoryCard({ story, onPress }: { story: StoryItem; onPress: () => void }
   );
 }
 
-function AddCustomStoryCard({ category }: { category: string }) {
+function AddCustomStoryCard({ category, play }: { category: string; play: PlayFn }) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   return (
     <TouchableOpacity
       style={styles.addCard}
       activeOpacity={0.7}
-      onPress={() => router.push(`/(app)/sacred-stories/custom?category=${category}`)}
+      onPress={() => {
+        play('nameSelect');
+        router.push(`/(app)/sacred-stories/custom?category=${category}`);
+      }}
     >
       <Text style={styles.addCardPlus}>+</Text>
       <Text style={styles.addCardLabel}>Custom{'\n'}Story</Text>
@@ -109,7 +121,7 @@ function AddCustomStoryCard({ category }: { category: string }) {
   );
 }
 
-function CategoryRow({ category, stories }: { category: string; stories: StoryItem[] }) {
+function CategoryRow({ category, stories, play }: { category: string; stories: StoryItem[]; play: PlayFn }) {
   const config = getCategoryConfig(category);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -126,10 +138,11 @@ function CategoryRow({ category, stories }: { category: string; stories: StoryIt
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.rowContent}
-        ListFooterComponent={<AddCustomStoryCard category={category} />}
+        ListFooterComponent={<AddCustomStoryCard category={category} play={play} />}
         renderItem={({ item }) => (
           <StoryCard
             story={item}
+            play={play}
             onPress={() =>
               router.push(`/(app)/sacred-stories/block-viewer?contentId=${item.story_id}`)
             }
@@ -140,11 +153,16 @@ function CategoryRow({ category, stories }: { category: string; stories: StoryIt
   );
 }
 
-function HeroBanner({ story }: { story: StoryItem }) {
+function HeroBanner({ story, play }: { story: StoryItem; play: PlayFn }) {
   const config = getCategoryConfig(story.category);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const dest = `/(app)/sacred-stories/block-viewer?contentId=${story.story_id}` as const;
+
+  const handlePress = useCallback(() => {
+    play('startStory');
+    router.push(dest);
+  }, [play, dest]);
 
   const heroContent = (
     <View style={styles.heroContent}>
@@ -167,14 +185,14 @@ function HeroBanner({ story }: { story: StoryItem }) {
           </View>
         ))}
       </View>
-      <TouchableOpacity style={styles.heroButton} onPress={() => router.push(dest)}>
+      <TouchableOpacity style={styles.heroButton} onPress={handlePress}>
         <Text style={styles.heroButtonText}>▶  Begin the Katha</Text>
       </TouchableOpacity>
     </View>
   );
 
   return (
-    <TouchableOpacity activeOpacity={0.9} onPress={() => router.push(dest)}>
+    <TouchableOpacity activeOpacity={0.9} onPress={handlePress}>
       {story.cover_image_url ? (
         <View style={[styles.hero, { overflow: 'hidden' }]}>
           <Image
@@ -198,10 +216,11 @@ function HeroBanner({ story }: { story: StoryItem }) {
   );
 }
 
-function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
+function FeaturedCarousel({ stories, play }: { stories: StoryItem[]; play: PlayFn }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const flatListRef = useRef<FlatList<StoryItem>>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isManualSwipeRef = useRef(false);
 
   const startTimer = () => {
     if (stories.length <= 1) return;
@@ -219,13 +238,26 @@ function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [stories.length]);
 
+  const onScrollBeginDrag = useCallback(() => {
+    isManualSwipeRef.current = true;
+  }, []);
+
   const onMomentumScrollEnd = (e: any) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
     setActiveIndex(index);
+    // Only play sound on manual swipes, not auto-advance
+    if (isManualSwipeRef.current) {
+      play('categorySwitch');
+      isManualSwipeRef.current = false;
+    }
     // Reset timer so the next auto-advance starts fresh after a manual swipe
     if (timerRef.current) clearInterval(timerRef.current);
     startTimer();
   };
+
+  const renderItem = useCallback(({ item }: { item: StoryItem }) => (
+    <HeroBanner story={item} play={play} />
+  ), [play]);
 
   return (
     <View>
@@ -237,9 +269,10 @@ function FeaturedCarousel({ stories }: { stories: StoryItem[] }) {
         showsHorizontalScrollIndicator={false}
         keyExtractor={(item) => item.story_id}
         getItemLayout={(_, index) => ({ length: SCREEN_WIDTH, offset: SCREEN_WIDTH * index, index })}
+        onScrollBeginDrag={onScrollBeginDrag}
         onMomentumScrollEnd={onMomentumScrollEnd}
         onScrollToIndexFailed={() => {}}
-        renderItem={({ item }) => <HeroBanner story={item} />}
+        renderItem={renderItem}
       />
       {/* Dot indicators */}
       {stories.length > 1 && (
@@ -280,6 +313,7 @@ export default function SacredStoriesLibrary() {
   const { data, isLoading, error } = useStaticStories();
   const { colors, theme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { play } = useSoundEffects();
 
   if (isLoading) {
     return (
@@ -308,7 +342,7 @@ export default function SacredStoriesLibrary() {
   }, {});
 
   // Only render the five active categories, in this fixed order
-  const categoryOrder = ['mahabharata', 'ramayana', 'habits', 'emotions', 'moral_values'].filter((c) => grouped[c]);
+  const categoryOrder = ['ramayana', 'habits', 'emotions', 'moral_values', 'mahabharata'].filter((c) => grouped[c]);
 
   // Featured carousel: first story from each category (up to 5)
   const featuredStories = categoryOrder.map((c) => grouped[c][0]).filter(Boolean);
@@ -321,18 +355,21 @@ export default function SacredStoriesLibrary() {
       />
       <ScrollView showsVerticalScrollIndicator={false} style={styles.scroll}>
         {/* Auto-advancing featured carousel */}
-        <FeaturedCarousel stories={featuredStories} />
+        <FeaturedCarousel stories={featuredStories} play={play} />
 
         {/* Category rows */}
         <View style={styles.rows}>
           {categoryOrder.map((category) => (
-            <CategoryRow key={category} category={category} stories={grouped[category]} />
+            <CategoryRow key={category} category={category} stories={grouped[category]} play={play} />
           ))}
 
           {/* Characters link */}
           <TouchableOpacity
             style={styles.charactersRow}
-            onPress={() => router.push('/(app)/sacred-stories/characters')}
+            onPress={() => {
+              play('nameSelect');
+              router.push('/(app)/sacred-stories/characters');
+            }}
             activeOpacity={0.8}
           >
             <Text style={styles.charactersEmoji}>👥</Text>
