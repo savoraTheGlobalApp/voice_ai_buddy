@@ -31,6 +31,15 @@ export default function AppLayout() {
       />
       <Tabs.Screen
         name="sacred-stories"
+        listeners={({ navigation }) => ({
+          tabPress: (e) => {
+            // Always reset the sacred-stories stack to index when tapping Library.
+            // Without this, navigating from Play → narrator leaves [index, narrator]
+            // on the stack and tapping Library shows the narrator instead of the library.
+            e.preventDefault();
+            navigation.navigate('sacred-stories', { screen: 'index' });
+          },
+        })}
         options={{
           title: 'Library',
           tabBarIcon: ({ color, size }) => (

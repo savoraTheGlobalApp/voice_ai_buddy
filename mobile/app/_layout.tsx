@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
+import { CompanionProvider } from '../src/contexts/CompanionContext';
 import { SubscriptionProvider } from '../src/contexts/SubscriptionContext';
 import { ThemeProvider } from '../src/contexts/ThemeContext';
 import { initializePushNotifications } from '../src/lib/notifications';
@@ -85,7 +86,9 @@ export default function RootLayout() {
           <StatusBar style="auto" />
           <AuthProvider>
             <SubscriptionProvider>
-              <RootLayoutNav />
+              <CompanionProvider>
+                <RootLayoutNav />
+              </CompanionProvider>
             </SubscriptionProvider>
           </AuthProvider>
         </SafeAreaProvider>
