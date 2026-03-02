@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
@@ -145,13 +145,11 @@ interface VisualSlideProps {
   language: Language;
   coverUrl?: string;
   category: string;
-  totalSlides: number;
-  currentSlide: number;
   onToggleLang: () => void;
   onFinish: () => void;
 }
 
-function VisualSlide({
+const VisualSlide = memo(function VisualSlide({
   block,
   slideIndex,
   isActive,
@@ -159,8 +157,6 @@ function VisualSlide({
   language,
   coverUrl,
   category,
-  totalSlides,
-  currentSlide,
   onToggleLang,
   onFinish,
 }: VisualSlideProps) {
@@ -236,11 +232,6 @@ function VisualSlide({
         pointerEvents="none"
       />
 
-      {/* Top safe area: progress bar */}
-      <SafeAreaView edges={['top']} style={slideStyles.topArea}>
-        <SlideProgressBar total={totalSlides} current={currentSlide} />
-      </SafeAreaView>
-
       {/* Bottom: text overlay */}
       <SafeAreaView edges={['bottom']} style={slideStyles.bottomArea}>
         {label ? (
@@ -274,7 +265,7 @@ function VisualSlide({
       </SafeAreaView>
     </View>
   );
-}
+});
 
 // ── VisualStorySlides ────────────────────────────────────────────────────────
 
@@ -292,7 +283,7 @@ function VisualStorySlides({
   onComplete,
 }: VisualStorySlidesProps) {
   const slides = useMemo(
-    () => content.blocks.filter((b) => !SKIP_TYPES.has(b.type)),
+    () => content.blocks.filter((b: ContentBlock) => !SKIP_TYPES.has(b.type)),
     [content.blocks]
   );
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -313,38 +304,45 @@ function VisualStorySlides({
 
   const coverUrl = content.cover_image_url;
   const category = content.category;
+  const totalSlides = slides.length;
+
+  const renderItem = useCallback(({ item, index }: { item: ContentBlock; index: number }) => (
+    <VisualSlide
+      block={item}
+      slideIndex={index}
+      isActive={index === activeSlide}
+      isLast={index === totalSlides - 1}
+      language={language}
+      coverUrl={coverUrl}
+      category={category}
+      onToggleLang={onToggleLang}
+      onFinish={onComplete}
+    />
+  ), [activeSlide, totalSlides, language, coverUrl, category, onToggleLang, onComplete]);
 
   return (
-    <FlatList
-      data={slides}
-      horizontal
-      pagingEnabled
-      showsHorizontalScrollIndicator={false}
-      keyExtractor={(_, i) => String(i)}
-      onMomentumScrollEnd={onMomentumScrollEnd}
-      onViewableItemsChanged={onViewableItemsChanged}
-      viewabilityConfig={viewabilityConfig}
-      getItemLayout={(_, index) => ({
-        length: SCREEN_WIDTH,
-        offset: SCREEN_WIDTH * index,
-        index,
-      })}
-      renderItem={({ item, index }) => (
-        <VisualSlide
-          block={item}
-          slideIndex={index}
-          isActive={index === activeSlide}
-          isLast={index === slides.length - 1}
-          language={language}
-          coverUrl={coverUrl}
-          category={category}
-          totalSlides={slides.length}
-          currentSlide={currentSlide}
-          onToggleLang={onToggleLang}
-          onFinish={onComplete}
-        />
-      )}
-    />
+    <View style={{ flex: 1 }}>
+      <FlatList
+        data={slides}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(_, i) => String(i)}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
+        getItemLayout={(_, index) => ({
+          length: SCREEN_WIDTH,
+          offset: SCREEN_WIDTH * index,
+          index,
+        })}
+        renderItem={renderItem}
+      />
+      {/* Progress bar overlay — rendered once, not inside every slide */}
+      <SafeAreaView edges={['top']} style={slideStyles.progressOverlay} pointerEvents="none">
+        <SlideProgressBar total={totalSlides} current={currentSlide} />
+      </SafeAreaView>
+    </View>
   );
 }
 
@@ -358,6 +356,7 @@ export default function BlockViewerScreen() {
   }>();
   const { currentUser } = useAuth();
   const { colors } = useTheme();
+  const { top: safeTop } = useSafeAreaInsets();
 
   const storyId = contentId || 'maha-001';
   const [language, setLanguage] = useState<Language>('en');
@@ -385,6 +384,7 @@ export default function BlockViewerScreen() {
   const handleComplete = useCallback(() => {
     router.back();
   }, []);
+
 
 
   if (isLoading && !useFallback) {
@@ -428,14 +428,6 @@ export default function BlockViewerScreen() {
           title: '',
           headerTransparent: true,
           headerBackTitle: '',
-          headerRight: () => (
-            <TouchableOpacity
-              onPress={() => router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`)}
-              style={{ paddingHorizontal: 6 }}
-            >
-              <Ionicons name="headset-outline" size={24} color="#fff" />
-            </TouchableOpacity>
-          ),
         }}
       />
       <View style={styles.slidesRoot}>
@@ -445,6 +437,17 @@ export default function BlockViewerScreen() {
           onToggleLang={toggleLanguage}
           onComplete={handleComplete}
         />
+        {/* Narrator button — positioned above bottom actions, clear of header */}
+        <TouchableOpacity
+          onPress={() => {
+            router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`);
+          }}
+          style={[styles.narratorBtn, { top: safeTop + 60 }]}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="headset-outline" size={20} color="#fff" />
+          <Text style={styles.narratorBtnLabel}>Listen</Text>
+        </TouchableOpacity>
       </View>
     </>
   );
@@ -473,6 +476,13 @@ const slideStyles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
+  },
+  progressOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   progressBar: {
     flexDirection: 'row',
@@ -558,6 +568,25 @@ const styles = StyleSheet.create({
   slidesRoot: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  narratorBtn: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 100,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  narratorBtnLabel: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
   },
   container: {
     flex: 1,
