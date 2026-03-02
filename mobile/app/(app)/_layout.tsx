@@ -21,11 +21,20 @@ export default function AppLayout() {
         options={{ href: null }}
       />
       <Tabs.Screen
+        name="play"
+        options={{
+          title: 'Play',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="play-circle" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="sacred-stories"
         options={{
-          title: 'Collection',
+          title: 'Library',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="library" size={size} color={color} />
+            <Ionicons name="library-outline" size={size} color={color} />
           ),
         }}
       />

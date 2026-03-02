@@ -28,8 +28,8 @@ function RootLayoutNav() {
       // Redirect to sign-in if not authenticated
       router.replace('/(auth)/sign-in');
     } else if (currentUser && inAuthGroup) {
-      // Redirect to app if authenticated — lands on Collection (first tab)
-      router.replace('/(app)/sacred-stories');
+      // Redirect to app if authenticated — lands on Play (first tab)
+      router.replace('/(app)/play');
     }
   }, [currentUser, loading, segments]);
 
