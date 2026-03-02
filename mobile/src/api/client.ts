@@ -8,9 +8,9 @@ import { Platform } from 'react-native';
 // Development: Use local backend
 // Production: Use Railway backend (PR #33)
 const BACKEND_URL = __DEV__
-  ? Platform.OS === 'android'
-    ? 'http://10.0.2.2:8000'
-    : 'http://localhost:8000'
+  ? Platform.OS === 'ios'
+    ? 'http://localhost:8000'
+    : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app'
   : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app';
 
 export async function apiClient<T>(
