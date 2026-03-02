@@ -1,32 +1,32 @@
 /**
- * Narrator avatar — full-body SVG creature.
+ * NarratorAvatar — full-body creature, Samsung-safe.
  *
- * Design:
- *  - Chubby rounded head + oval body + stubby arms + curling tail
- *  - Big expressive eyes (rx constant, ry animated for blink/emotion)
- *  - Curved eyebrows animated up/down per emotion
- *  - Smile path (idle) ↔ open oval with teeth (speaking)
- *  - Rapid mouth open/close loop while speaking ("talks a lot")
- *  - Pink blush circles, intensity driven by block type
- *  - Glow halo + expanding radio-wave rings while speaking
- *  - Whole-creature float on native driver; everything else JS-thread
+ * All animations use Animated.View layers with useNativeDriver: true,
+ * avoiding animated SVG prop bridge that crashes on some Android OEMs
+ * (Samsung Galaxy A12, Mali GPU, Android 10/11).
+ *
+ * Layer order (bottom → top):
+ *  1. Glow halo       — Animated.View, opacity
+ *  2. Radio rings ×3  — Animated.View, scale + opacity
+ *  3. Base static SVG — ears, head, body, arms, tail, nose, whiskers
+ *  4. Eye whites ×2   — Animated.View, scaleY (blink / emotion)
+ *  5. Pupils + highlights — static Svg overlay
+ *  6. Eyebrows        — Animated.View, translateY
+ *  7. Blush           — Animated.View, opacity
+ *  8. Smile           — Animated.View, opacity
+ *  9. Open mouth      — Animated.View, opacity + scaleY
  *
  * Props:
  *  isSpeaking  — drives mouth, glow, rings
  *  isLoading   — opacity pulse
- *  blockType   — drives emotion expression (eyes, brows, blush)
- *  size        — base size; SVG canvas is size × size*1.44
+ *  blockType   — drives emotion (eyes, brows, blush)
+ *  size        — base size (SVG canvas: size × size*1.44)
  */
 import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
 import Svg, { Circle, Ellipse, Path, G } from 'react-native-svg';
 
-const AnimatedCircle  = Animated.createAnimatedComponent(Circle);
-const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
-const AnimatedPath    = Animated.createAnimatedComponent(Path);
-const AnimatedG       = Animated.createAnimatedComponent(G);
-
-// ── Emotion system ─────────────────────────────────────────────────────────────
+// ── Emotion system ──────────────────────────────────────────────────────────
 
 type Emotion = 'excited' | 'warm' | 'thoughtful' | 'peaceful' | 'playful' | 'proud';
 
@@ -42,7 +42,7 @@ const BLOCK_EMOTION: Record<string, Emotion> = {
   character_intro: 'excited',
 };
 
-// Eye ry scale relative to eyeRyBase (1.0 = normal, >1 = wide, <1 = sleepy)
+// Eye scaleY: 1.0 = normal open. >1 = wide. <1 = squint. 0.06 = blink-closed.
 const EMOTION_EYE: Record<Emotion, number> = {
   excited:    1.18,
   warm:       1.00,
@@ -52,7 +52,7 @@ const EMOTION_EYE: Record<Emotion, number> = {
   proud:      1.00,
 };
 
-// Eyebrow translateY: negative = raised (happy/excited), positive = lowered (sad/peaceful)
+// Eyebrow translateY: negative = raised (happy), positive = lowered (calm)
 const EMOTION_BROW: Record<Emotion, number> = {
   excited:    -4,
   warm:        0,
@@ -71,7 +71,7 @@ const EMOTION_BLUSH: Record<Emotion, number> = {
   proud:      0.20,
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
   isSpeaking: boolean;
@@ -87,20 +87,66 @@ export default function NarratorAvatar({
   size = 170,
 }: Props) {
   const s = size;
+  const tp = s * 0.07; // topPad — ears extend above head; shift everything down
 
-  // ── Animated values (all declared at top level — hooks rule) ────────────────
+  // ── Geometry (proportional to s) ─────────────────────────────────────────
 
-  // Native driver — on outer Animated.View:
+  const svgW = s * 1.26;
+  const svgH = s * 1.44 + tp;
+
+  const headCX = s * 0.50;
+  const headCY = s * 0.41;
+  const headR  = s * 0.330;
+
+  const lEarCX = s * 0.272; const lEarCY = s * 0.095;
+  const rEarCX = s * 0.728; const rEarCY = s * 0.095;
+
+  const eyeRx     = s * 0.092;
+  const eyeRyBase = s * 0.092; // rx == ry so scaleY squishes a circle
+  const lEyeCX = s * 0.352; const lEyeCY = s * 0.378;
+  const rEyeCX = s * 0.648; const rEyeCY = s * 0.378;
+  const pupilR = s * 0.054;
+  const hlR    = s * 0.024;
+
+  const mouthCX    = s * 0.500;
+  const mouthCY    = s * 0.548;
+  const mouthRX    = s * 0.118;
+  const mouthRyMax = s * 0.078; // full-open mouth ry
+
+  const bodyCX = s * 0.500; const bodyCY = s * 1.078;
+  const bodyRX = s * 0.268; const bodyRY = s * 0.182;
+
+  // Radio-ring origin: right edge of head
+  const ringsX    = headCX + headR * 0.90;
+  const ringsY    = headCY;
+  const ringBaseR = s * 0.120;
+
+  // ── Animated values — ALL useNativeDriver: true ──────────────────────────
+
+  // Outer wrapper: float (translateY) + loading (opacity) — native ✅
   const floatAnim   = useRef(new Animated.Value(0)).current;
   const loadingAnim = useRef(new Animated.Value(1)).current;
 
-  // JS-thread — drive SVG props (useNativeDriver: false):
-  const eyeOpenAnim   = useRef(new Animated.Value(1.0)).current;   // eye ry scale
-  const browY         = useRef(new Animated.Value(0)).current;     // eyebrow translateY
-  const blushOpacity  = useRef(new Animated.Value(0.28)).current;
-  const mouthOpenAnim = useRef(new Animated.Value(0)).current;     // 0=smile, 1=open
-  const mouthRyAnim   = useRef(new Animated.Value(s * 0.030)).current; // open-mouth ry (px)
-  const glowOpacity   = useRef(new Animated.Value(0)).current;
+  // Eye whites: scaleY (1.0=open, 0.06=blink-closed) — native ✅
+  const eyeScaleY      = useRef(new Animated.Value(1.0)).current;
+  const emotionEyeRef  = useRef(1.0); // tracks emotion target for blink restore
+
+  // Eyebrows: translateY — native ✅
+  const browY = useRef(new Animated.Value(0)).current;
+
+  // Blush: opacity — native ✅
+  const blushOpacity = useRef(new Animated.Value(0.28)).current;
+
+  // Mouth: independent opacity values (no interpolation = native driver ok ✅)
+  const smileOpacity     = useRef(new Animated.Value(1)).current;
+  const openMouthOpacity = useRef(new Animated.Value(0)).current;
+  // mouthScaleY: 0.333 = min-open (s*0.026/s*0.078), 1.0 = max-open — native ✅
+  const mouthScaleY = useRef(new Animated.Value(0.333)).current;
+
+  // Glow halo: opacity — native ✅
+  const glowOpacity = useRef(new Animated.Value(0)).current;
+
+  // Radio rings: scale + opacity per ring — native ✅
   const ring1S = useRef(new Animated.Value(1)).current;
   const ring1O = useRef(new Animated.Value(0)).current;
   const ring2S = useRef(new Animated.Value(1)).current;
@@ -111,42 +157,8 @@ export default function NarratorAvatar({
   const mouthLoopRef = useRef<Animated.CompositeAnimation | null>(null);
   const glowLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
   const waveLoopRef  = useRef<Animated.CompositeAnimation | null>(null);
-  const emotionEyeRef = useRef(1.0); // tracks current emotion eye target for blink restore
 
-  // ── Geometry (all proportional to s) ────────────────────────────────────────
-
-  // SVG canvas is wider than s to give rings room on the right
-  const svgW  = s * 1.26;
-  const topPad = s * 0.07;  // ears extend above headCY-headR; shift everything down
-  const svgH  = s * 1.44 + topPad;
-
-  const headCX = s * 0.50;
-  const headCY = s * 0.41;
-  const headR  = s * 0.330;
-
-  const lEarCX = s * 0.272; const lEarCY = s * 0.095;
-  const rEarCX = s * 0.728; const rEarCY = s * 0.095;
-
-  const eyeRx     = s * 0.092;
-  const eyeRyBase = s * 0.092;
-  const lEyeCX = s * 0.352; const lEyeCY = s * 0.378;
-  const rEyeCX = s * 0.648; const rEyeCY = s * 0.378;
-  const pupilR = s * 0.054;
-  const hlR    = s * 0.024;  // highlight dot
-
-  const mouthCX = s * 0.500;
-  const mouthCY = s * 0.548;
-  const mouthRX = s * 0.118;
-
-  const bodyCX = s * 0.500; const bodyCY = s * 1.078;
-  const bodyRX = s * 0.268; const bodyRY = s * 0.182;
-
-  // Radio rings: center = right edge of head
-  const ringsX    = headCX + headR * 0.90;
-  const ringsY    = headCY;
-  const ringBaseR = s * 0.120;
-
-  // ── Float — always active, native driver ────────────────────────────────────
+  // ── Float — always active ─────────────────────────────────────────────────
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
@@ -164,7 +176,7 @@ export default function NarratorAvatar({
     return () => loop.stop();
   }, []);
 
-  // ── Loading pulse — native driver ────────────────────────────────────────────
+  // ── Loading pulse ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (isLoading) {
       Animated.loop(
@@ -178,55 +190,58 @@ export default function NarratorAvatar({
     }
   }, [isLoading]);
 
-  // ── Eye blink — always active ────────────────────────────────────────────────
+  // ── Eye blink — always active ─────────────────────────────────────────────
   useEffect(() => {
     const blink = () => {
       Animated.sequence([
-        Animated.timing(eyeOpenAnim, { toValue: 0.08, duration: 45, useNativeDriver: false }),
-        Animated.timing(eyeOpenAnim, { toValue: emotionEyeRef.current, duration: 65, useNativeDriver: false }),
+        Animated.timing(eyeScaleY, { toValue: 0.06, duration: 45, useNativeDriver: true }),
+        Animated.timing(eyeScaleY, { toValue: emotionEyeRef.current, duration: 65, useNativeDriver: true }),
       ]).start();
     };
-    // Randomise interval slightly so it feels alive
     let id: ReturnType<typeof setTimeout>;
-    const schedule = () => { id = setTimeout(() => { blink(); schedule(); }, 3500 + Math.random() * 2500); };
+    const schedule = () => {
+      id = setTimeout(() => { blink(); schedule(); }, 3500 + Math.random() * 2500);
+    };
     schedule();
     return () => clearTimeout(id);
   }, []);
 
-  // ── Emotion — triggered by blockType change ──────────────────────────────────
+  // ── Emotion — triggered by blockType ─────────────────────────────────────
   useEffect(() => {
     const em = BLOCK_EMOTION[blockType ?? ''] ?? 'warm';
     emotionEyeRef.current = EMOTION_EYE[em];
     Animated.parallel([
-      Animated.timing(eyeOpenAnim,  { toValue: EMOTION_EYE[em],   duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
-      Animated.timing(browY,        { toValue: EMOTION_BROW[em],  duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
-      Animated.timing(blushOpacity, { toValue: EMOTION_BLUSH[em], duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: false }),
+      Animated.timing(eyeScaleY,   { toValue: EMOTION_EYE[em],   duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.timing(browY,       { toValue: EMOTION_BROW[em],  duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.timing(blushOpacity,{ toValue: EMOTION_BLUSH[em], duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: true }),
     ]).start();
   }, [blockType]);
 
-  // ── Speaking animations ──────────────────────────────────────────────────────
+  // ── Speaking animations ───────────────────────────────────────────────────
   useEffect(() => {
     mouthLoopRef.current?.stop();
     glowLoopRef.current?.stop();
     waveLoopRef.current?.stop();
 
     if (!isSpeaking) {
-      Animated.timing(mouthOpenAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
-      Animated.timing(glowOpacity,   { toValue: 0, duration: 300, useNativeDriver: false }).start();
+      Animated.timing(smileOpacity,     { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(openMouthOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+      Animated.timing(glowOpacity,      { toValue: 0, duration: 300, useNativeDriver: true }).start();
       ring1S.setValue(1); ring1O.setValue(0);
       ring2S.setValue(1); ring2O.setValue(0);
       ring3S.setValue(1); ring3O.setValue(0);
       return;
     }
 
-    // Open mouth
-    Animated.timing(mouthOpenAnim, { toValue: 1, duration: 180, useNativeDriver: false }).start();
+    // Crossfade smile → open mouth
+    Animated.timing(smileOpacity,     { toValue: 0, duration: 180, useNativeDriver: true }).start();
+    Animated.timing(openMouthOpacity, { toValue: 1, duration: 180, useNativeDriver: true }).start();
 
-    // Rapid open/close loop — "talks a lot"
+    // Rapid talking loop (scaleY 0.333 ↔ 1.0)
     mouthLoopRef.current = Animated.loop(
       Animated.sequence([
-        Animated.timing(mouthRyAnim, { toValue: s * 0.078, duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
-        Animated.timing(mouthRyAnim, { toValue: s * 0.026, duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(mouthScaleY, { toValue: 1.0,   duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(mouthScaleY, { toValue: 0.333, duration: 148, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ])
     );
     mouthLoopRef.current.start();
@@ -234,8 +249,8 @@ export default function NarratorAvatar({
     // Glow halo pulse
     glowLoopRef.current = Animated.loop(
       Animated.sequence([
-        Animated.timing(glowOpacity, { toValue: 0.42, duration: 480, useNativeDriver: false }),
-        Animated.timing(glowOpacity, { toValue: 0.10, duration: 480, useNativeDriver: false }),
+        Animated.timing(glowOpacity, { toValue: 0.42, duration: 480, useNativeDriver: true }),
+        Animated.timing(glowOpacity, { toValue: 0.10, duration: 480, useNativeDriver: true }),
       ])
     );
     glowLoopRef.current.start();
@@ -246,12 +261,12 @@ export default function NarratorAvatar({
         Animated.sequence([
           Animated.delay(delay),
           Animated.parallel([
-            Animated.timing(sc, { toValue: 2.2, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: false }),
-            Animated.timing(op, { toValue: 0,   duration: 700, useNativeDriver: false }),
+            Animated.timing(sc, { toValue: 2.2, duration: 700, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+            Animated.timing(op, { toValue: 0,   duration: 700, useNativeDriver: true }),
           ]),
           Animated.parallel([
-            Animated.timing(sc, { toValue: 1,    duration: 0, useNativeDriver: false }),
-            Animated.timing(op, { toValue: 0.65, duration: 0, useNativeDriver: false }),
+            Animated.timing(sc, { toValue: 1,    duration: 0, useNativeDriver: true }),
+            Animated.timing(op, { toValue: 0.65, duration: 0, useNativeDriver: true }),
           ]),
         ])
       );
@@ -270,31 +285,18 @@ export default function NarratorAvatar({
     };
   }, [isSpeaking]);
 
-  // ── Derived interpolations ───────────────────────────────────────────────────
-
-  // Eye ry in pixels, clamped at both blink (0.08) and wide (1.18) ends
-  const eyeRyAnim = eyeOpenAnim.interpolate({
-    inputRange: [0.08, 1.0, 1.18],
-    outputRange: [eyeRyBase * 0.06, eyeRyBase, eyeRyBase * 1.10],
-    extrapolate: 'clamp',
+  // ── Position helper: center (cx, cy) in SVG-inner space → absolute style ──
+  // cx/cy are coordinates inside the G translate(0, topPad) group.
+  // Screen absolute = tp + cy for vertical.
+  const abs = (cx: number, cy: number, w: number, h: number) => ({
+    position: 'absolute' as const,
+    left: cx - w / 2,
+    top:  tp + cy - h / 2,
+    width:  w,
+    height: h,
   });
 
-  // Smile fades out when mouth opens
-  const smileOpacity = mouthOpenAnim.interpolate({
-    inputRange: [0, 0.45], outputRange: [1, 0], extrapolate: 'clamp',
-  });
-
-  // Open mouth fades in
-  const openMouthOpacity = mouthOpenAnim.interpolate({
-    inputRange: [0.55, 1], outputRange: [0, 1], extrapolate: 'clamp',
-  });
-
-  // Ring radii interpolated from scale
-  const r1R = ring1S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
-  const r2R = ring2S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
-  const r3R = ring3S.interpolate({ inputRange: [1, 2.2], outputRange: [ringBaseR, ringBaseR * 2.2], extrapolate: 'clamp' });
-
-  // ── Render ───────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Animated.View
       style={{
@@ -304,164 +306,248 @@ export default function NarratorAvatar({
         transform: [{ translateY: floatAnim }],
       }}
     >
-      <Svg width={svgW} height={svgH}>
-        {/* Shift entire creature down so ears aren't clipped at the top */}
-        <G transform={`translate(0 ${topPad})`}>
+      {/* ── Layer 1: Glow halo behind head ─────────────────────────────── */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          abs(headCX, headCY, s * 0.830, s * 0.830),
+          {
+            borderRadius: s * 0.415,
+            backgroundColor: 'rgb(249,115,22)',
+            opacity: glowOpacity,
+          },
+        ]}
+      />
 
-        {/* ── Glow halo behind head ──────────────────────────────────── */}
-        <AnimatedCircle
-          cx={headCX} cy={headCY} r={s * 0.415}
-          fill="rgba(249,115,22,0.28)"
-          opacity={glowOpacity}
+      {/* ── Layer 2: Radio-wave rings ×3 ───────────────────────────────── */}
+      {([
+        [ring1S, ring1O],
+        [ring2S, ring2O],
+        [ring3S, ring3O],
+      ] as const).map(([sc, op], i) => (
+        <Animated.View
+          key={i}
+          pointerEvents="none"
+          style={[
+            abs(ringsX, ringsY, ringBaseR * 2, ringBaseR * 2),
+            {
+              borderRadius: ringBaseR,
+              borderWidth: 2,
+              borderColor: 'rgba(249,115,22,0.85)',
+              opacity: op,
+              transform: [{ scale: sc }],
+            },
+          ]}
         />
+      ))}
 
-        {/* ── Radio-wave rings (right side of head) ─────────────────── */}
-        {([
-          [r1R, ring1O],
-          [r2R, ring2O],
-          [r3R, ring3O],
-        ] as const).map(([r, op], i) => (
-          <AnimatedCircle
-            key={i}
-            cx={ringsX} cy={ringsY}
-            // @ts-ignore — AnimatedInterpolation is valid here
-            r={r}
-            fill="none"
-            stroke="rgba(249,115,22,0.75)"
-            strokeWidth={2}
-            opacity={op}
-          />
-        ))}
-
-        {/* ── Left ear ──────────────────────────────────────────────── */}
-        <G transform={`rotate(-22, ${lEarCX}, ${lEarCY})`}>
-          <Ellipse cx={lEarCX} cy={lEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
-          <Ellipse cx={lEarCX} cy={lEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
-        </G>
-
-        {/* ── Right ear ─────────────────────────────────────────────── */}
-        <G transform={`rotate(22, ${rEarCX}, ${rEarCY})`}>
-          <Ellipse cx={rEarCX} cy={rEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
-          <Ellipse cx={rEarCX} cy={rEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
-        </G>
-
-        {/* ── Head ──────────────────────────────────────────────────── */}
-        <Circle cx={headCX} cy={headCY} r={headR} fill="#f5c030" />
-
-        {/* ── Eyebrows — translateY is a first-class RNSVG prop, safe to animate */}
-        {/* @ts-ignore — Animated.Value is valid here at runtime */}
-        <AnimatedG translateY={browY}>
-          {/* Left brow — gentle arch */}
+      {/* ── Layer 3: Base static SVG (no animated props) ────────────────── */}
+      <Svg
+        width={svgW}
+        height={svgH}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        <G transform={`translate(0 ${tp})`}>
+          {/* Left ear */}
+          <G transform={`rotate(-22, ${lEarCX}, ${lEarCY})`}>
+            <Ellipse cx={lEarCX} cy={lEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
+            <Ellipse cx={lEarCX} cy={lEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
+          </G>
+          {/* Right ear */}
+          <G transform={`rotate(22, ${rEarCX}, ${rEarCY})`}>
+            <Ellipse cx={rEarCX} cy={rEarCY} rx={s * 0.100} ry={s * 0.134} fill="#e8a020" />
+            <Ellipse cx={rEarCX} cy={rEarCY + s * 0.018} rx={s * 0.056} ry={s * 0.085} fill="#f9c8a0" />
+          </G>
+          {/* Head */}
+          <Circle cx={headCX} cy={headCY} r={headR} fill="#f5c030" />
+          {/* Nose */}
+          <Ellipse cx={s * 0.500} cy={s * 0.482} rx={s * 0.038} ry={s * 0.025} fill="#f97070" />
+          {/* Whiskers (2 per side) */}
+          {[
+            [s*0.160, s*0.492, s*0.320, s*0.492,  -5],
+            [s*0.155, s*0.516, s*0.316, s*0.516,   5],
+            [s*0.684, s*0.492, s*0.840, s*0.492,   5],
+            [s*0.684, s*0.516, s*0.845, s*0.516,  -5],
+          ].map(([x1, y1, x2, y2, angle], wi) => (
+            <Path
+              key={wi}
+              d={`M ${x1},${y1} L ${x2},${y2}`}
+              stroke="rgba(80,40,0,0.22)"
+              strokeWidth={1.5}
+              strokeLinecap="round"
+              transform={`rotate(${angle} ${(x1 + x2) / 2} ${(y1 + y2) / 2})`}
+            />
+          ))}
+          {/* Body */}
+          <Ellipse cx={bodyCX} cy={bodyCY} rx={bodyRX} ry={bodyRY} fill="#f5c030" />
+          {/* Belly highlight */}
+          <Ellipse cx={bodyCX} cy={bodyCY + s * 0.022} rx={bodyRX * 0.54} ry={bodyRY * 0.60} fill="#f9d86a" />
+          {/* Left arm */}
+          <G transform={`rotate(30, ${s * 0.192}, ${s * 1.056})`}>
+            <Ellipse cx={s * 0.192} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
+            <Ellipse cx={s * 0.192} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
+          </G>
+          {/* Right arm */}
+          <G transform={`rotate(-30, ${s * 0.808}, ${s * 1.056})`}>
+            <Ellipse cx={s * 0.808} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
+            <Ellipse cx={s * 0.808} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
+          </G>
+          {/* Tail */}
           <Path
-            d={`M ${s * 0.258},${s * 0.292} Q ${s * 0.350},${s * 0.242} ${s * 0.442},${s * 0.280}`}
+            d={`M ${s * 0.742},${s * 1.082} C ${s * 0.830},${s * 1.152} ${s * 0.905},${s * 1.020} ${s * 0.882},${s * 0.910}`}
+            stroke="#e8a020"
+            strokeWidth={s * 0.072}
+            strokeLinecap="round"
+            fill="none"
+          />
+          <Circle cx={s * 0.882} cy={s * 0.910} r={s * 0.042} fill="#f9c050" />
+        </G>
+      </Svg>
+
+      {/* ── Layer 4: Eye whites — scaleY animated for blink / emotion ──── */}
+      {[
+        { cx: lEyeCX, cy: lEyeCY },
+        { cx: rEyeCX, cy: rEyeCY },
+      ].map(({ cx, cy }, i) => (
+        <Animated.View
+          key={i}
+          pointerEvents="none"
+          style={[
+            abs(cx, cy, eyeRx * 2, eyeRyBase * 2),
+            { transform: [{ scaleY: eyeScaleY }] },
+          ]}
+        >
+          {/* Static SVG circle (rx==ry so scaleY turns it into the right ellipse) */}
+          <Svg width={eyeRx * 2} height={eyeRyBase * 2}>
+            <Ellipse
+              cx={eyeRx}
+              cy={eyeRyBase}
+              rx={eyeRx}
+              ry={eyeRyBase}
+              fill="white"
+            />
+          </Svg>
+        </Animated.View>
+      ))}
+
+      {/* ── Layer 5: Pupils + highlights (static, always above eye whites) */}
+      <Svg
+        width={svgW}
+        height={svgH}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        <G transform={`translate(0 ${tp})`}>
+          <Circle cx={lEyeCX + s * 0.010} cy={lEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
+          <Circle cx={lEyeCX + s * 0.033} cy={lEyeCY - s * 0.022} r={hlR}    fill="white" />
+          <Circle cx={rEyeCX + s * 0.010} cy={rEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
+          <Circle cx={rEyeCX + s * 0.033} cy={rEyeCY - s * 0.022} r={hlR}    fill="white" />
+        </G>
+      </Svg>
+
+      {/* ── Layer 6: Eyebrows — translateY animated for emotion ─────────── */}
+      {/*
+          Brow strip: y range s*0.242–s*0.292 in SVG-inner space.
+          Container top = tp + s*0.220, height = s*0.120.
+          Local SVG coords = original_y − s*0.220.
+            s*0.292 → s*0.072 local
+            s*0.242 → s*0.022 local
+            s*0.280 → s*0.060 local
+      */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: tp + s * 0.220,
+          width: svgW,
+          height: s * 0.120,
+          transform: [{ translateY: browY }],
+        }}
+      >
+        <Svg width={svgW} height={s * 0.120}>
+          {/* Left brow */}
+          <Path
+            d={`M ${s * 0.258},${s * 0.072} Q ${s * 0.350},${s * 0.022} ${s * 0.442},${s * 0.060}`}
             stroke="#6b2a0a" strokeWidth={s * 0.022} strokeLinecap="round" fill="none"
           />
           {/* Right brow */}
           <Path
-            d={`M ${s * 0.558},${s * 0.280} Q ${s * 0.650},${s * 0.242} ${s * 0.742},${s * 0.292}`}
+            d={`M ${s * 0.558},${s * 0.060} Q ${s * 0.650},${s * 0.022} ${s * 0.742},${s * 0.072}`}
             stroke="#6b2a0a" strokeWidth={s * 0.022} strokeLinecap="round" fill="none"
           />
-        </AnimatedG>
+        </Svg>
+      </Animated.View>
 
-        {/* ── Left eye (big, expressive) ─────────────────────────────── */}
-        {/* @ts-ignore */}
-        <AnimatedEllipse cx={lEyeCX} cy={lEyeCY} rx={eyeRx} ry={eyeRyAnim} fill="white" />
-        <Circle cx={lEyeCX + s * 0.010} cy={lEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
-        <Circle cx={lEyeCX + s * 0.033} cy={lEyeCY - s * 0.022} r={hlR} fill="white" />
+      {/* ── Layer 7: Blush — opacity animated for emotion ───────────────── */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: 0, left: 0,
+          width: svgW, height: svgH,
+          opacity: blushOpacity,
+        }}
+      >
+        <Svg width={svgW} height={svgH}>
+          <G transform={`translate(0 ${tp})`}>
+            <Ellipse cx={s * 0.232} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" />
+            <Ellipse cx={s * 0.768} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" />
+          </G>
+        </Svg>
+      </Animated.View>
 
-        {/* ── Right eye ─────────────────────────────────────────────── */}
-        {/* @ts-ignore */}
-        <AnimatedEllipse cx={rEyeCX} cy={rEyeCY} rx={eyeRx} ry={eyeRyAnim} fill="white" />
-        <Circle cx={rEyeCX + s * 0.010} cy={rEyeCY + s * 0.010} r={pupilR} fill="#2d1a00" />
-        <Circle cx={rEyeCX + s * 0.033} cy={rEyeCY - s * 0.022} r={hlR} fill="white" />
+      {/* ── Layer 8: Idle smile — fades out when speaking ───────────────── */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          top: 0, left: 0,
+          width: svgW, height: svgH,
+          opacity: smileOpacity,
+        }}
+      >
+        <Svg width={svgW} height={svgH}>
+          <G transform={`translate(0 ${tp})`}>
+            <Path
+              d={`M ${s * 0.368},${mouthCY} Q ${mouthCX},${s * 0.622} ${s * 0.632},${mouthCY}`}
+              stroke="#6b2a0a" strokeWidth={s * 0.028} strokeLinecap="round" fill="none"
+            />
+          </G>
+        </Svg>
+      </Animated.View>
 
-        {/* ── Blush circles ─────────────────────────────────────────── */}
-        {/* @ts-ignore */}
-        <AnimatedEllipse cx={s * 0.232} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" opacity={blushOpacity} />
-        {/* @ts-ignore */}
-        <AnimatedEllipse cx={s * 0.768} cy={s * 0.490} rx={s * 0.092} ry={s * 0.058} fill="rgb(255,105,105)" opacity={blushOpacity} />
-
-        {/* ── Nose ──────────────────────────────────────────────────── */}
-        <Ellipse cx={s * 0.500} cy={s * 0.482} rx={s * 0.038} ry={s * 0.025} fill="#f97070" />
-
-        {/* ── Whiskers (2 per side) ─────────────────────────────────── */}
-        {[
-          [s*0.160, s*0.492, s*0.320, s*0.492,  -5],
-          [s*0.155, s*0.516, s*0.316, s*0.516,   5],
-          [s*0.684, s*0.492, s*0.840, s*0.492,   5],
-          [s*0.684, s*0.516, s*0.845, s*0.516,  -5],
-        ].map(([x1, y1, x2, y2, angle], i) => (
-          <Path
-            key={i}
-            d={`M ${x1},${y1} L ${x2},${y2}`}
-            stroke="rgba(80,40,0,0.22)"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            transform={`rotate(${angle} ${(x1 + x2) / 2} ${(y1 + y2) / 2})`}
+      {/* ── Layer 9: Open mouth — opacity + scaleY when speaking ────────── */}
+      {/*
+          View sized mouthRX*2 × mouthRyMax*2 (full-open dimensions).
+          Centered at (mouthCX, mouthCY) in SVG-inner space.
+          scaleY: 0.333 = s*0.026 effective ry (min), 1.0 = s*0.078 (max).
+          Local SVG coords: mouth center = (mouthRX, mouthRyMax).
+      */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          abs(mouthCX, mouthCY, mouthRX * 2, mouthRyMax * 2),
+          {
+            opacity: openMouthOpacity,
+            transform: [{ scaleY: mouthScaleY }],
+          },
+        ]}
+      >
+        <Svg width={mouthRX * 2} height={mouthRyMax * 2}>
+          {/* Dark oval */}
+          <Ellipse
+            cx={mouthRX} cy={mouthRyMax}
+            rx={mouthRX} ry={mouthRyMax}
+            fill="#6b2a0a"
           />
-        ))}
-
-        {/* ── Mouth: idle smile ─────────────────────────────────────── */}
-        {/* @ts-ignore */}
-        <AnimatedPath
-          d={`M ${s * 0.368},${mouthCY} Q ${mouthCX},${s * 0.622} ${s * 0.632},${mouthCY}`}
-          stroke="#6b2a0a" strokeWidth={s * 0.028} strokeLinecap="round" fill="none"
-          opacity={smileOpacity}
-        />
-
-        {/* ── Mouth: open oval (speaking) ───────────────────────────── */}
-        {/* @ts-ignore */}
-        <AnimatedEllipse
-          cx={mouthCX} cy={mouthCY}
-          rx={mouthRX} ry={mouthRyAnim}
-          fill="#6b2a0a"
-          opacity={openMouthOpacity}
-        />
-        {/* Teeth strip — inside open mouth */}
-        {/* @ts-ignore */}
-        <AnimatedEllipse
-          cx={mouthCX} cy={mouthCY - s * 0.008}
-          rx={mouthRX * 0.78} ry={s * 0.018}
-          fill="white"
-          opacity={openMouthOpacity}
-        />
-
-        {/* ── Body (oval torso) ─────────────────────────────────────── */}
-        <Ellipse cx={bodyCX} cy={bodyCY} rx={bodyRX} ry={bodyRY} fill="#f5c030" />
-        {/* Belly highlight patch */}
-        <Ellipse
-          cx={bodyCX} cy={bodyCY + s * 0.022}
-          rx={bodyRX * 0.54} ry={bodyRY * 0.60}
-          fill="#f9d86a"
-        />
-
-        {/* ── Left arm (stubby, angled outward) ────────────────────── */}
-        <G transform={`rotate(30, ${s * 0.192}, ${s * 1.056})`}>
-          <Ellipse cx={s * 0.192} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
-          {/* Paw hint */}
-          <Ellipse cx={s * 0.192} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
-        </G>
-
-        {/* ── Right arm ─────────────────────────────────────────────── */}
-        <G transform={`rotate(-30, ${s * 0.808}, ${s * 1.056})`}>
-          <Ellipse cx={s * 0.808} cy={s * 1.056} rx={s * 0.074} ry={s * 0.142} fill="#e8a020" />
-          {/* Paw hint */}
-          <Ellipse cx={s * 0.808} cy={s * 1.192} rx={s * 0.062} ry={s * 0.042} fill="#f5c030" />
-        </G>
-
-        {/* ── Tail (right side of body, curling upward) ─────────────── */}
-        <Path
-          d={`M ${s * 0.742},${s * 1.082} C ${s * 0.830},${s * 1.152} ${s * 0.905},${s * 1.020} ${s * 0.882},${s * 0.910}`}
-          stroke="#e8a020"
-          strokeWidth={s * 0.072}
-          strokeLinecap="round"
-          fill="none"
-        />
-        {/* Tail tip — lighter colour */}
-        <Circle cx={s * 0.882} cy={s * 0.910} r={s * 0.042} fill="#f9c050" />
-
-        </G>{/* end topPad translate */}
-      </Svg>
+          {/* Upper teeth strip */}
+          <Ellipse
+            cx={mouthRX} cy={mouthRyMax - s * 0.008}
+            rx={mouthRX * 0.78} ry={s * 0.018}
+            fill="white"
+          />
+        </Svg>
+      </Animated.View>
     </Animated.View>
   );
 }

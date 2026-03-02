@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback, Component } from 'react';
 import {
   View,
   Text,
@@ -10,16 +10,32 @@ import {
   PanResponder,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
 import { useNarrator } from '../../../src/hooks/useNarrator';
-import NarratorAvatar from '../../../src/components/NarratorAvatar';
+import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
 import type { ContentBlock } from '../../../src/types/stories';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// ── Avatar error boundary (SVG crashes on some Android OEMs) ──────────────────
+class AvatarErrorBoundary extends Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { crashed: boolean }
+> {
+  state = { crashed: false };
+  static getDerivedStateFromError() { return { crashed: true }; }
+  componentDidCatch(e: Error) { console.error('[NarratorAvatar] SVG crash:', e.message); }
+  render() { return this.state.crashed ? this.props.fallback : this.props.children; }
+}
+
+// ── Safe haptics (devices without vibrator throw on impactAsync) ───────────────
+function triggerHaptic() {
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+}
 
 type Language = 'en' | 'hi';
 
@@ -189,7 +205,8 @@ function SpeechBubble({
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export default function NarratorScreen() {
-  const { contentId } = useLocalSearchParams<{ contentId?: string }>();
+  const { top: safeTop } = useSafeAreaInsets();
+  const { contentId, from } = useLocalSearchParams<{ contentId?: string; from?: string }>();
   const storyId = contentId || 'maha-001';
 
   const [language, setLanguage] = useState<Language>('en');
@@ -293,10 +310,10 @@ export default function NarratorScreen() {
         Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderRelease: (_, g) => {
         if (g.dx < -50) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          triggerHaptic();
           goNext();
         } else if (g.dx > 50) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          triggerHaptic();
           goPrev();
         }
       },
@@ -306,22 +323,25 @@ export default function NarratorScreen() {
   // Cleanup on unmount
   useEffect(() => () => clearTimers(), []);
 
+  const goBack = useCallback(() => {
+    clearTimers();
+    narrator.stop();
+    if (from === 'play') router.replace('/(app)/play');
+    else router.back();
+  }, [from, clearTimers, narrator.stop]);
+
   return (
     <LinearGradient colors={gradient as any} style={styles.root}>
-      <Stack.Screen
-        options={{
-          title: '',
-          headerTransparent: true,
-          headerTintColor: '#fff',
-          headerRight: () => (
-            <TouchableOpacity onPress={toggleLanguage} style={styles.langBtn}>
-              <Text style={styles.langBtnText}>
-                {language === 'en' ? '🌐 हिं' : '🌐 EN'}
-              </Text>
-            </TouchableOpacity>
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
+
+      {/* Always-visible back button overlay */}
+      <TouchableOpacity
+        onPress={goBack}
+        style={[styles.backBtn, { top: safeTop + 8 }]}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      >
+        <Ionicons name="chevron-back" size={26} color="#fff" />
+      </TouchableOpacity>
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {contentLoading ? (
           <View style={styles.centered}>
@@ -337,12 +357,16 @@ export default function NarratorScreen() {
 
             {/* Avatar */}
             <View style={styles.avatarArea}>
-              <NarratorAvatar
-                isSpeaking={narrator.isPlaying}
-                isLoading={narrator.isLoading}
-                blockType={currentBlock?.type}
-                size={SCREEN_WIDTH * 0.44}
-              />
+              <AvatarErrorBoundary
+                fallback={<Text style={styles.avatarFallback}>🦁</Text>}
+              >
+                <RiveNarratorAvatar
+                  isSpeaking={narrator.isPlaying}
+                  isLoading={narrator.isLoading}
+                  blockType={currentBlock?.type}
+                  size={SCREEN_WIDTH}
+                />
+              </AvatarErrorBoundary>
               {narrator.hasAudio && (
                 <TouchableOpacity
                   style={styles.playPauseBtn}
@@ -379,6 +403,13 @@ export default function NarratorScreen() {
                 <Text style={[styles.navText, isFirst && { opacity: 0.3 }]}>Prev</Text>
               </TouchableOpacity>
 
+              {/* Language toggle */}
+              <TouchableOpacity onPress={toggleLanguage} style={styles.langBtn}>
+                <Text style={styles.langBtnText}>
+                  {language === 'en' ? '🌐 हिं' : '🌐 EN'}
+                </Text>
+              </TouchableOpacity>
+
               {/* Auto-advance toggle */}
               <TouchableOpacity
                 style={styles.autoBtn}
@@ -397,7 +428,7 @@ export default function NarratorScreen() {
               {isLast ? (
                 <TouchableOpacity
                   style={styles.finishBtn}
-                  onPress={() => { clearTimers(); narrator.stop(); router.back(); }}
+                  onPress={goBack}
                 >
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
                   <Text style={styles.finishText}>Finish</Text>
@@ -425,8 +456,12 @@ export default function NarratorScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  safe: { flex: 1, paddingHorizontal: 20 },
-  content: { flex: 1 },
+  backBtn: {
+    position: 'absolute', left: 12, zIndex: 100,
+    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 20, padding: 6,
+  },
+  safe: { flex: 1 },
+  content: { flex: 1, paddingHorizontal: 20 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: {
     marginTop: 14, color: 'rgba(255,255,255,0.7)', fontSize: 15, fontWeight: '500',
@@ -443,14 +478,22 @@ const styles = StyleSheet.create({
   },
   dotActive: { backgroundColor: '#f97316' },
 
-  // Avatar area
+  // Avatar area — full width, fills remaining vertical space
   avatarArea: {
-    alignItems: 'center', justifyContent: 'center',
-    flex: 1, maxHeight: '42%',
+    flex: 1,
+    width: SCREEN_WIDTH,
+    marginHorizontal: -20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarFallback: {
+    fontSize: SCREEN_WIDTH * 0.35,
+    textAlign: 'center',
   },
   playPauseBtn: {
-    position: 'absolute', bottom: -4, right: SCREEN_WIDTH * 0.1,
-    backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 24, padding: 2,
+    position: 'absolute', bottom: 16,
+    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 28, padding: 4,
   },
 
   // Speech bubble
@@ -462,7 +505,7 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(255,255,255,0.12)',
   },
   bubble: {
-    width: SCREEN_WIDTH - 40,
+    width: '100%',
     backgroundColor: 'rgba(255,255,255,0.10)',
     borderRadius: 18,
     borderWidth: 1,

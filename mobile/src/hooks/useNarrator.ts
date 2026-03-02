@@ -78,6 +78,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
         soundRef.current = sound;
         setIsLoading(false);
       } catch (e) {
+        console.error('[useNarrator] Failed to load audio:', audioUrl, e);
         if (!cancelled) {
           setIsLoading(false);
           setIsPlaying(false);
