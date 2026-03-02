@@ -8,10 +8,11 @@ import {
   Dimensions,
   Animated,
   PanResponder,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, router, Stack } from 'expo-router';
+import { useLocalSearchParams, router, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useBlockContent } from '../../../src/hooks/useStaticStories';
@@ -174,6 +175,7 @@ function SpeechBubble({
   accentColor,
   fadeAnim,
   countdown,
+  scrollRef,
 }: {
   label: string;
   text: string;
@@ -181,6 +183,7 @@ function SpeechBubble({
   accentColor: string;
   fadeAnim: Animated.Value;
   countdown: number | null;
+  scrollRef: React.RefObject<ScrollView>;
 }) {
   return (
     <View style={styles.bubbleWrapper}>
@@ -190,7 +193,14 @@ function SpeechBubble({
         {isLoading ? (
           <ActivityIndicator size="small" color="#f97316" style={{ marginTop: 8 }} />
         ) : (
-          <Animated.Text style={[styles.bubbleText, { opacity: fadeAnim }]}>{text}</Animated.Text>
+          <ScrollView
+            ref={scrollRef}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            style={styles.bubbleScroll}
+          >
+            <Animated.Text style={[styles.bubbleText, { opacity: fadeAnim }]}>{text}</Animated.Text>
+          </ScrollView>
         )}
         {countdown !== null && (
           <View style={styles.countdownContainer}>
@@ -217,6 +227,7 @@ export default function NarratorScreen() {
   const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const textFadeAnim = useRef(new Animated.Value(1)).current;
+  const textScrollRef = useRef<ScrollView>(null);
 
   const { data: content, isLoading: contentLoading } = useBlockContent({ storyId });
 
@@ -236,6 +247,17 @@ export default function NarratorScreen() {
   const isFirst    = currentIndex === 0;
   const isLast     = currentIndex === blocks.length - 1;
 
+  // Stop audio and timers when navigating away (tab switch, back, etc.)
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        narrator.stop();
+        if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      };
+    }, [narrator.stop])
+  );
+
   // Clear any pending timers
   const clearTimers = useCallback(() => {
     if (autoAdvanceTimerRef.current) {
@@ -249,11 +271,12 @@ export default function NarratorScreen() {
     setCountdown(null);
   }, []);
 
-  // Text fade-in when block changes
+  // Text fade-in + scroll to top when block or language changes
   useEffect(() => {
     textFadeAnim.setValue(0);
+    textScrollRef.current?.scrollTo({ y: 0, animated: false });
     Animated.timing(textFadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-  }, [currentIndex]);
+  }, [currentIndex, language]);
 
   // Auto-advance logic
   useEffect(() => {
@@ -390,6 +413,7 @@ export default function NarratorScreen() {
               accentColor={accentColor}
               fadeAnim={textFadeAnim}
               countdown={countdown}
+              scrollRef={textScrollRef}
             />
 
             {/* Navigation */}
@@ -478,9 +502,9 @@ const styles = StyleSheet.create({
   },
   dotActive: { backgroundColor: '#f97316' },
 
-  // Avatar area — full width, fills remaining vertical space
+  // Avatar area — fixed height so it's always fully visible regardless of text length
   avatarArea: {
-    flex: 1,
+    height: SCREEN_HEIGHT * 0.48,
     width: SCREEN_WIDTH,
     marginHorizontal: -20,
     alignItems: 'center',
@@ -496,25 +520,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 28, padding: 4,
   },
 
-  // Speech bubble
-  bubbleWrapper: { alignItems: 'center', marginBottom: 8 },
+  // Speech bubble — flex: 1 so it fills remaining space; text scrolls inside
+  bubbleWrapper: { flex: 1, marginBottom: 8 },
   bubbleTail: {
+    alignSelf: 'center',
     width: 0, height: 0,
     borderLeftWidth: 10, borderRightWidth: 10, borderBottomWidth: 12,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
     borderBottomColor: 'rgba(255,255,255,0.12)',
   },
   bubble: {
-    width: '100%',
+    flex: 1,
     backgroundColor: 'rgba(255,255,255,0.10)',
     borderRadius: 18,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
     borderLeftWidth: 3,
     padding: 20,
-    minHeight: 100,
-    justifyContent: 'center',
   },
+  bubbleScroll: { flex: 1 },
   bubbleLabel: {
     fontSize: 10, fontWeight: '800', letterSpacing: 1.5, marginBottom: 8,
   },
