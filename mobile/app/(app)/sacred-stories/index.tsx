@@ -15,6 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import { useTheme } from '../../../src/contexts/ThemeContext';
+import { trackStoryTapped } from '../../../src/utils/analytics';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
 import type { SoundName } from '../../../src/hooks/useSoundEffects';
 import type { ThemeColors } from '../../../src/theme/colors';
@@ -67,8 +68,9 @@ function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => 
 
   const handlePress = useCallback(() => {
     play('startStory');
+    trackStoryTapped(story.story_id, story.category, 'list');
     onPress();
-  }, [play, onPress]);
+  }, [play, onPress, story.story_id, story.category]);
 
   return (
     <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={styles.card}>
@@ -161,8 +163,9 @@ function HeroBanner({ story, play }: { story: StoryItem; play: PlayFn }) {
 
   const handlePress = useCallback(() => {
     play('startStory');
+    trackStoryTapped(story.story_id, story.category, 'featured');
     router.push(dest);
-  }, [play, dest]);
+  }, [play, dest, story.story_id, story.category]);
 
   const heroContent = (
     <View style={styles.heroContent}>

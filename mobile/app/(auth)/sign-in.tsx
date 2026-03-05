@@ -13,6 +13,7 @@ import {
 import { Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/contexts/AuthContext';
+import { trackUserLogin } from '../../src/utils/analytics';
 
 export default function SignIn() {
   const [email, setEmail] = useState('');
@@ -33,6 +34,7 @@ export default function SignIn() {
 
     try {
       await signIn(email, password);
+      trackUserLogin();
       // Navigation handled automatically by root layout
     } catch (err: any) {
       console.error('Sign in error:', err);

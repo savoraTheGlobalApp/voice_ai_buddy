@@ -15,8 +15,15 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useLocalSearchParams, router, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useBlockContent } from '../../../src/hooks/useStaticStories';
+import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
+import { useAuth } from '../../../src/contexts/AuthContext';
 import { useNarrator } from '../../../src/hooks/useNarrator';
+import {
+  trackNarratorPause,
+  trackNarratorLanguageSwitched,
+  trackNarratorBlockNavigated,
+  trackNarratorCompleted,
+} from '../../../src/utils/analytics';
 import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
 import type { ContentBlock } from '../../../src/types/stories';
 
@@ -71,6 +78,16 @@ const BLOCK_ACCENT: Record<string, string> = {
 function getBlockAccent(type: string) {
   return BLOCK_ACCENT[type] ?? '#f97316';
 }
+
+const PAUSED_MESSAGES = [
+  'Tap me to continue! 👆',
+  "I'm waiting for you ✨",
+  "Take your time — I'll be right here 🌟",
+  'Want to hear what happens next? 👀',
+  'Shall we continue our adventure? 🚀',
+  'Ready when you are! 💫',
+  'The story is waiting for us! 📖',
+];
 
 function getBlockText(block: ContentBlock, language: Language): string {
   const b = block as any;
@@ -183,7 +200,7 @@ function SpeechBubble({
   accentColor: string;
   fadeAnim: Animated.Value;
   countdown: number | null;
-  scrollRef: React.RefObject<ScrollView>;
+  scrollRef: React.RefObject<ScrollView | null>;
 }) {
   return (
     <View style={styles.bubbleWrapper}>
@@ -223,13 +240,18 @@ export default function NarratorScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [autoAdvance, setAutoAdvance] = useState(true);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [pausedMsgIndex, setPausedMsgIndex] = useState(0);
 
   const autoAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pausedMsgRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentIndexRef = useRef(0);
   const textFadeAnim = useRef(new Animated.Value(1)).current;
   const textScrollRef = useRef<ScrollView>(null);
 
+  const { currentUser } = useAuth();
   const { data: content, isLoading: contentLoading } = useBlockContent({ storyId });
+  const updateProgress = useUpdateProgress();
 
   const blocks = useMemo(() => {
     if (!content?.blocks) return [];
@@ -243,6 +265,7 @@ export default function NarratorScreen() {
   const blockText  = currentBlock ? getBlockText(currentBlock, language) : '';
   const blockLabel = currentBlock ? (BLOCK_LABELS[currentBlock.type] ?? '') : '';
   const accentColor = currentBlock ? getBlockAccent(currentBlock.type) : '#f97316';
+  const isPaused = narrator.hasAudio && !narrator.isPlaying && !narrator.isLoading && !narrator.isFinished;
   const gradient   = getCategoryGradient(content?.category ?? '');
   const isFirst    = currentIndex === 0;
   const isLast     = currentIndex === blocks.length - 1;
@@ -254,9 +277,23 @@ export default function NarratorScreen() {
         narrator.stop();
         if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
         if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+        if (pausedMsgRef.current) { clearInterval(pausedMsgRef.current); pausedMsgRef.current = null; }
       };
     }, [narrator.stop])
   );
+
+  // Cycle paused encouragement messages while audio is paused
+  useEffect(() => {
+    if (isPaused) {
+      pausedMsgRef.current = setInterval(() => {
+        setPausedMsgIndex((i) => (i + 1) % PAUSED_MESSAGES.length);
+      }, 4000);
+    } else {
+      if (pausedMsgRef.current) { clearInterval(pausedMsgRef.current); pausedMsgRef.current = null; }
+      setPausedMsgIndex(0);
+    }
+    return () => { if (pausedMsgRef.current) { clearInterval(pausedMsgRef.current); pausedMsgRef.current = null; } };
+  }, [isPaused]);
 
   // Clear any pending timers
   const clearTimers = useCallback(() => {
@@ -270,6 +307,23 @@ export default function NarratorScreen() {
     }
     setCountdown(null);
   }, []);
+
+  // Keep ref in sync for use inside callbacks
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+
+  // Mark story as in_progress when content loads (covers the Play tab flow where block-viewer is skipped)
+  useEffect(() => {
+    if (currentUser?.uid && content?.category) {
+      updateProgress.mutate({ userId: currentUser.uid, storyId, currentSegment: 0, status: 'in_progress' });
+    }
+  }, [storyId, !!content, currentUser?.uid]);
+
+  // Track narrator_completed when last block finishes playing
+  useEffect(() => {
+    if (isLast && narrator.isFinished && blocks.length > 0) {
+      trackNarratorCompleted(storyId, content?.category ?? '', blocks.length, blocks.length);
+    }
+  }, [isLast, narrator.isFinished]);
 
   // Text fade-in + scroll to top when block or language changes
   useEffect(() => {
@@ -293,38 +347,46 @@ export default function NarratorScreen() {
         setCountdown(remaining);
         if (remaining <= 0) {
           clearTimers();
-          setCurrentIndex((i) => Math.min(i + 1, blocks.length - 1));
-          narrator.stop();
+          goNext('auto');
         }
       }, 1000);
     } else {
       // Short breath pause then advance
       autoAdvanceTimerRef.current = setTimeout(() => {
-        setCurrentIndex((i) => Math.min(i + 1, blocks.length - 1));
-        narrator.stop();
+        goNext('auto');
       }, 800);
     }
 
     return () => clearTimers();
   }, [narrator.isFinished]);
 
-  const goNext = useCallback(() => {
+  const goNext = useCallback((method: 'button' | 'swipe' | 'auto' = 'button') => {
+    const from = currentIndexRef.current;
+    const to = Math.min(from + 1, blocks.length - 1);
+    trackNarratorBlockNavigated(storyId, from, to, currentBlock?.type ?? '', method);
     clearTimers();
     narrator.stop();
-    setCurrentIndex((i) => Math.min(i + 1, blocks.length - 1));
-  }, [blocks.length, clearTimers]);
+    setCurrentIndex(to);
+  }, [blocks.length, clearTimers, storyId, currentBlock?.type]);
 
   const goPrev = useCallback(() => {
+    const from = currentIndexRef.current;
+    const to = Math.max(from - 1, 0);
+    trackNarratorBlockNavigated(storyId, from, to, currentBlock?.type ?? '', 'button');
     clearTimers();
     narrator.stop();
-    setCurrentIndex((i) => Math.max(i - 1, 0));
-  }, [clearTimers]);
+    setCurrentIndex(to);
+  }, [clearTimers, storyId, currentBlock?.type]);
 
   const toggleLanguage = useCallback(() => {
     clearTimers();
     narrator.stop();
-    setLanguage((l) => (l === 'en' ? 'hi' : 'en'));
-  }, [clearTimers]);
+    setLanguage((l) => {
+      const next = l === 'en' ? 'hi' : 'en';
+      trackNarratorLanguageSwitched(storyId, currentIndexRef.current, l, next);
+      return next;
+    });
+  }, [clearTimers, storyId]);
 
   // Swipe gesture
   const panResponder = useRef(
@@ -334,7 +396,7 @@ export default function NarratorScreen() {
       onPanResponderRelease: (_, g) => {
         if (g.dx < -50) {
           triggerHaptic();
-          goNext();
+          goNext('swipe');
         } else if (g.dx > 50) {
           triggerHaptic();
           goPrev();
@@ -344,7 +406,10 @@ export default function NarratorScreen() {
   ).current;
 
   // Cleanup on unmount
-  useEffect(() => () => clearTimers(), []);
+  useEffect(() => () => {
+    clearTimers();
+    if (pausedMsgRef.current) clearInterval(pausedMsgRef.current);
+  }, []);
 
   const goBack = useCallback(() => {
     clearTimers();
@@ -365,6 +430,17 @@ export default function NarratorScreen() {
       >
         <Ionicons name="chevron-back" size={26} color="#fff" />
       </TouchableOpacity>
+
+      {/* Language toggle — top right */}
+      <TouchableOpacity
+        onPress={toggleLanguage}
+        style={[styles.langBtnOverlay, { top: safeTop + 8 }]}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      >
+        <Text style={styles.langBtnOverlayText}>
+          {language === 'en' ? '🌐 हिं' : '🌐 EN'}
+        </Text>
+      </TouchableOpacity>
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {contentLoading ? (
           <View style={styles.centered}>
@@ -378,8 +454,20 @@ export default function NarratorScreen() {
               <ProgressDots total={blocks.length} current={currentIndex} />
             )}
 
-            {/* Avatar */}
-            <View style={styles.avatarArea}>
+            {/* Avatar — tap anywhere to pause/play */}
+            <TouchableOpacity
+              style={styles.avatarArea}
+              onPress={() => {
+                if (narrator.hasAudio) {
+                  triggerHaptic();
+                  if (narrator.isPlaying) {
+                    trackNarratorPause(storyId, currentIndexRef.current, currentBlock?.type ?? '');
+                  }
+                  narrator.toggle();
+                }
+              }}
+              activeOpacity={1}
+            >
               <AvatarErrorBoundary
                 fallback={<Text style={styles.avatarFallback}>🦁</Text>}
               >
@@ -390,27 +478,19 @@ export default function NarratorScreen() {
                   size={SCREEN_WIDTH}
                 />
               </AvatarErrorBoundary>
-              {narrator.hasAudio && (
-                <TouchableOpacity
-                  style={styles.playPauseBtn}
-                  onPress={narrator.toggle}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={narrator.isPlaying ? 'pause-circle' : 'play-circle'}
-                    size={36}
-                    color="rgba(255,255,255,0.85)"
-                  />
-                </TouchableOpacity>
+              {isPaused && (
+                <View style={styles.pausedOverlay}>
+                  <Ionicons name="play-circle" size={64} color="rgba(255,255,255,0.9)" />
+                </View>
               )}
-            </View>
+            </TouchableOpacity>
 
             {/* Speech bubble */}
             <SpeechBubble
-              label={blockLabel}
-              text={blockText}
+              label={isPaused ? 'Paused' : blockLabel}
+              text={isPaused ? PAUSED_MESSAGES[pausedMsgIndex] : blockText}
               isLoading={narrator.isLoading && !blockText}
-              accentColor={accentColor}
+              accentColor={isPaused ? 'rgba(255,255,255,0.45)' : accentColor}
               fadeAnim={textFadeAnim}
               countdown={countdown}
               scrollRef={textScrollRef}
@@ -427,17 +507,18 @@ export default function NarratorScreen() {
                 <Text style={[styles.navText, isFirst && { opacity: 0.3 }]}>Prev</Text>
               </TouchableOpacity>
 
-              {/* Language toggle */}
-              <TouchableOpacity onPress={toggleLanguage} style={styles.langBtn}>
-                <Text style={styles.langBtnText}>
-                  {language === 'en' ? '🌐 हिं' : '🌐 EN'}
-                </Text>
+              {/* Speed toggle */}
+              <TouchableOpacity onPress={() => narrator.cycleSpeed()} style={styles.speedBtn}>
+                <Text style={styles.speedBtnText}>{narrator.speed}x</Text>
               </TouchableOpacity>
 
               {/* Auto-advance toggle */}
               <TouchableOpacity
                 style={styles.autoBtn}
-                onPress={() => { setAutoAdvance((v) => !v); clearTimers(); }}
+                onPress={() => {
+                  setAutoAdvance((v) => !v);
+                  clearTimers();
+                }}
               >
                 <Ionicons
                   name={autoAdvance ? 'play-skip-forward' : 'play-skip-forward-outline'}
@@ -458,7 +539,7 @@ export default function NarratorScreen() {
                   <Text style={styles.finishText}>Finish</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={styles.navBtn} onPress={goNext}>
+                <TouchableOpacity style={styles.navBtn} onPress={() => goNext('button')}>
                   <Text style={styles.navText}>Next</Text>
                   <Ionicons name="chevron-forward" size={20} color="#fff" />
                 </TouchableOpacity>
@@ -515,9 +596,11 @@ const styles = StyleSheet.create({
     fontSize: SCREEN_WIDTH * 0.35,
     textAlign: 'center',
   },
-  playPauseBtn: {
-    position: 'absolute', bottom: 16,
-    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 28, padding: 4,
+  pausedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Speech bubble — flex: 1 so it fills remaining space; text scrolls inside
@@ -560,12 +643,19 @@ const styles = StyleSheet.create({
     fontSize: 14, fontWeight: '700',
   },
 
-  // Language toggle
-  langBtn: {
-    paddingHorizontal: 10, paddingVertical: 5,
-    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 14,
+  // Language toggle — top-right overlay
+  langBtnOverlay: {
+    position: 'absolute', right: 12, zIndex: 100,
+    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 6,
   },
-  langBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  langBtnOverlayText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  speedBtn: {
+    paddingHorizontal: 10, paddingVertical: 5,
+    backgroundColor: 'rgba(249,115,22,0.25)', borderRadius: 14,
+    borderWidth: 1, borderColor: 'rgba(249,115,22,0.5)',
+  },
+  speedBtnText: { color: '#f97316', fontSize: 13, fontWeight: '700' },
 
   // Navigation
   navRow: {

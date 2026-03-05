@@ -10,6 +10,7 @@ import { SubscriptionProvider } from '../src/contexts/SubscriptionContext';
 import { ThemeProvider } from '../src/contexts/ThemeContext';
 import { initializePushNotifications } from '../src/lib/notifications';
 import { apiClient } from '../src/api/client';
+import { initAnalytics, setUser, trackAppOpened } from '../src/utils/analytics';
 
 const queryClient = new QueryClient();
 
@@ -18,6 +19,13 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
   const notificationCleanupRef = useRef<(() => void) | null>(null);
+
+  // Identify user + track app open when auth is resolved
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    setUser(currentUser.uid);
+    trackAppOpened();
+  }, [currentUser?.uid]);
 
   // Handle auth-based routing
   useEffect(() => {
@@ -79,6 +87,10 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    initAnalytics();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>

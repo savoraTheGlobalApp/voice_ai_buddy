@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Audio } from 'expo-av';
 
+export const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25] as const;
+export type SpeedOption = typeof SPEED_OPTIONS[number];
+
 export interface NarratorState {
   isPlaying: boolean;
   isLoading: boolean;
   isFinished: boolean;
   hasAudio: boolean;
+  speed: SpeedOption;
   toggle: () => void;
   stop: () => void;
+  cycleSpeed: () => void;
 }
 
 export function useNarrator(audioUrl: string | undefined): NarratorState {
@@ -15,6 +20,7 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
+  const [speed, setSpeed] = useState<SpeedOption>(0.75);
 
   // Clean up the current sound object
   const unloadSound = useCallback(async () => {
@@ -76,6 +82,8 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
         }
 
         soundRef.current = sound;
+        // Apply current speed — shouldCorrectPitch=true keeps natural pitch
+        await sound.setRateAsync(speed, true).catch(() => {});
         setIsLoading(false);
       } catch (e) {
         console.error('[useNarrator] Failed to load audio:', audioUrl, e);
@@ -126,12 +134,23 @@ export function useNarrator(audioUrl: string | undefined): NarratorState {
     unloadSound();
   }, [unloadSound]);
 
+  const cycleSpeed = useCallback(async () => {
+    const currentIndex = SPEED_OPTIONS.indexOf(speed);
+    const nextSpeed = SPEED_OPTIONS[(currentIndex + 1) % SPEED_OPTIONS.length];
+    setSpeed(nextSpeed);
+    if (soundRef.current) {
+      await soundRef.current.setRateAsync(nextSpeed, true).catch(() => {});
+    }
+  }, [speed]);
+
   return {
     isPlaying,
     isLoading,
     isFinished,
     hasAudio: !!audioUrl,
+    speed,
     toggle,
     stop,
+    cycleSpeed,
   };
 }

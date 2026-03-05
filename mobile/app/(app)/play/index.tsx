@@ -22,6 +22,7 @@ import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
 import { useCompanion } from '../../../src/contexts/CompanionContext';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
+import { trackStoryTapped, trackStoryStarted } from '../../../src/utils/analytics';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const AVATAR_SIZE = SCREEN_WIDTH * 0.64;
@@ -178,6 +179,8 @@ export default function PlayScreen() {
     play('startStory');
     const pick = categoryStories[Math.floor(Math.random() * categoryStories.length)];
     companion.recordStorySeen(current.key);
+    trackStoryTapped(pick.story_id, current.key, 'list');
+    trackStoryStarted(pick.story_id, current.key, pick.segment_count, 'en');
     // Navigate within the Play tab's own stack so the story stays "owned" by Play.
     // Switching to Library pauses audio; coming back to Play resumes the narrator screen.
     router.push(`/(app)/play/narrator?contentId=${pick.story_id}`);

@@ -14,6 +14,7 @@ import {
 import { Link } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../src/contexts/AuthContext';
+import { trackUserSignedUp } from '../../src/utils/analytics';
 
 export default function SignUp() {
   const [name, setName] = useState('');
@@ -47,6 +48,7 @@ export default function SignUp() {
 
     try {
       await signUp(name, ageNum, email, password);
+      trackUserSignedUp(name, ageNum);
       // Navigation handled automatically by root layout
     } catch (err: any) {
       console.error('Sign up error:', err);

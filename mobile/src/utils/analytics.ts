@@ -42,7 +42,8 @@ export const updateUserProperties = (properties: Record<string, any>) => {
   identify(identifyObj);
 };
 
-// App lifecycle events
+// ── App lifecycle ──────────────────────────────────────────────────────────────
+
 export const trackAppOpened = () => {
   if (!isInitialized) return;
   track('app_opened');
@@ -53,135 +54,69 @@ export const trackUserLogin = (method: string = 'firebase') => {
   track('user_logged_in', { login_method: method });
 };
 
-// Story events
-export const trackStoryViewed = (storyId: string, storyTitle: string, category: string) => {
+export const trackUserSignedUp = (childName: string, childAge: number) => {
   if (!isInitialized) return;
-  track('story_viewed', {
-    story_id: storyId,
-    story_title: storyTitle,
-    category: category,
-  });
+  track('user_signed_up', { child_name: childName, child_age: childAge });
+  updateUserProperties({ child_name: childName, child_age: childAge });
 };
 
-export const trackStoryStarted = (storyId: string, category: string) => {
+// ── Story Library ─────────────────────────────────────────────────────────────
+
+export const trackStoryTapped = (storyId: string, category: string, position: 'featured' | 'list') => {
   if (!isInitialized) return;
-  track('story_started', {
-    story_id: storyId,
-    category: category,
-  });
+  track('story_tapped', { story_id: storyId, category, position });
 };
 
-export const trackSegmentCompleted = (storyId: string, segmentIndex: number) => {
+// ── Block Viewer ──────────────────────────────────────────────────────────────
+
+export const trackStoryStarted = (storyId: string, category: string, totalSlides: number, language: string) => {
   if (!isInitialized) return;
-  track('story_segment_completed', {
-    story_id: storyId,
-    segment_index: segmentIndex,
-  });
+  track('story_started', { story_id: storyId, category, total_slides: totalSlides, language });
 };
 
-export const trackStoryCompleted = (storyId: string, category: string, readingTimeSeconds: number) => {
+export const trackSlideViewed = (storyId: string, category: string, slideIndex: number, blockType: string, timeSpentMs: number) => {
   if (!isInitialized) return;
-  track('story_completed', {
-    story_id: storyId,
-    category: category,
-    reading_time_seconds: readingTimeSeconds,
-  });
+  track('slide_viewed', { story_id: storyId, category, slide_index: slideIndex, block_type: blockType, time_spent_ms: timeSpentMs });
 };
 
-export const trackDiscussionAnswered = (storyId: string, segmentIndex: number) => {
+export const trackStoryLanguageSwitched = (storyId: string, fromLang: string, toLang: string, slideIndex: number) => {
   if (!isInitialized) return;
-  track('discussion_answered', {
-    story_id: storyId,
-    segment_index: segmentIndex,
-  });
+  track('story_language_switched', { story_id: storyId, from_language: fromLang, to_language: toLang, slide_index: slideIndex });
 };
 
-// Character events
-export const trackCharacterUnlocked = (characterId: string, characterName: string) => {
+export const trackStoryCompleted = (storyId: string, category: string, totalTimeSec: number, slidesViewed: number) => {
   if (!isInitialized) return;
-  track('character_unlocked', {
-    character_id: characterId,
-    character_name: characterName,
-  });
+  track('story_completed', { story_id: storyId, category, total_time_seconds: totalTimeSec, slides_viewed: slidesViewed });
 };
 
-export const trackCharacterViewed = (characterId: string) => {
+export const trackStoryAbandoned = (storyId: string, category: string, lastSlideIndex: number, completionPct: number) => {
   if (!isInitialized) return;
-  track('character_viewed', {
-    character_id: characterId,
-  });
+  track('story_abandoned', { story_id: storyId, category, last_slide_index: lastSlideIndex, completion_pct: completionPct });
 };
 
-// Language events
-export const trackLanguageSwitched = (fromLang: string, toLang: string, screen: string) => {
+export const trackNarratorButtonTapped = (storyId: string, category: string) => {
   if (!isInitialized) return;
-  track('language_switched', {
-    from_language: fromLang,
-    to_language: toLang,
-    screen: screen,
-  });
-
-  // Also update user property
-  updateUserProperties({ preferred_language: toLang });
+  track('narrator_opened', { story_id: storyId, category });
 };
 
-// Monetization events
-export const trackPaywallSeen = (trigger: string) => {
+// ── Narrator ──────────────────────────────────────────────────────────────────
+
+export const trackNarratorPause = (storyId: string, blockIndex: number, blockType: string) => {
   if (!isInitialized) return;
-  track('paywall_seen', {
-    trigger: trigger,
-  });
+  track('narrator_pause', { story_id: storyId, block_index: blockIndex, block_type: blockType });
 };
 
-export const trackSubscriptionStarted = (plan: string, price: number) => {
+export const trackNarratorLanguageSwitched = (storyId: string, blockIndex: number, fromLang: string, toLang: string) => {
   if (!isInitialized) return;
-  track('subscription_started', {
-    plan: plan,
-    price: price,
-  });
-
-  // Update user property
-  updateUserProperties({
-    subscription_tier: 'paid',
-    plan: plan,
-  });
+  track('narrator_language_switched', { story_id: storyId, block_index: blockIndex, from_language: fromLang, to_language: toLang });
 };
 
-export const trackSubscriptionCancelled = (reason?: string) => {
+export const trackNarratorBlockNavigated = (storyId: string, fromIndex: number, toIndex: number, blockType: string, method: 'button' | 'swipe' | 'auto') => {
   if (!isInitialized) return;
-  track('subscription_cancelled', {
-    reason: reason,
-  });
-
-  updateUserProperties({
-    subscription_tier: 'free',
-  });
+  track('narrator_block_navigated', { story_id: storyId, from_index: fromIndex, to_index: toIndex, block_type: blockType, method });
 };
 
-// Navigation events
-export const trackScreenViewed = (screenName: string) => {
+export const trackNarratorCompleted = (storyId: string, category: string, blocksHeard: number, totalBlocks: number) => {
   if (!isInitialized) return;
-  track('screen_viewed', {
-    screen_name: screenName,
-  });
-};
-
-export default {
-  initAnalytics,
-  setUser,
-  updateUserProperties,
-  trackAppOpened,
-  trackUserLogin,
-  trackStoryViewed,
-  trackStoryStarted,
-  trackSegmentCompleted,
-  trackStoryCompleted,
-  trackDiscussionAnswered,
-  trackCharacterUnlocked,
-  trackCharacterViewed,
-  trackLanguageSwitched,
-  trackPaywallSeen,
-  trackSubscriptionStarted,
-  trackSubscriptionCancelled,
-  trackScreenViewed,
+  track('narrator_completed', { story_id: storyId, category, blocks_heard: blocksHeard, total_blocks: totalBlocks });
 };

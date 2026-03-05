@@ -14,7 +14,16 @@ import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
-import { useBlockContent } from '../../../src/hooks/useStaticStories';
+import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
+import {
+  trackStoryStarted,
+  trackSlideViewed,
+  trackStoryLanguageSwitched,
+  trackStoryCompleted,
+  trackStoryAbandoned,
+  trackNarratorButtonTapped,
+} from '../../../src/utils/analytics';
+import { useFocusEffect } from 'expo-router';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
 import { useTheme } from '../../../src/contexts/ThemeContext';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
@@ -275,17 +284,21 @@ const VisualSlide = memo(function VisualSlide({
 
 interface VisualStorySlidesProps {
   content: BlockBasedContent;
+  storyId: string;
   language: Language;
   onToggleLang: () => void;
   onComplete: () => void;
+  onSlideChange: (index: number) => void;
   play: PlayFn;
 }
 
 function VisualStorySlides({
   content,
+  storyId,
   language,
   onToggleLang,
   onComplete,
+  onSlideChange,
   play,
 }: VisualStorySlidesProps) {
   const slides = useMemo(
@@ -294,6 +307,7 @@ function VisualStorySlides({
   );
   const [currentSlide, setCurrentSlide] = useState(0);
   const [activeSlide, setActiveSlide] = useState(0);
+  const slideEnterTimeRef = useRef(Date.now());
 
   const viewabilityConfig = useRef({ viewAreaCoveragePercentThreshold: 50 }).current;
 
@@ -305,9 +319,16 @@ function VisualStorySlides({
 
   const onMomentumScrollEnd = useCallback((e: any) => {
     const index = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    const timeSpentMs = Date.now() - slideEnterTimeRef.current;
+    const prevSlide = slides[currentSlide];
+    if (prevSlide) {
+      trackSlideViewed(storyId, content.category, currentSlide, prevSlide.type, timeSpentMs);
+    }
+    slideEnterTimeRef.current = Date.now();
     setCurrentSlide(index);
+    onSlideChange(index);
     play('categorySwitch');
-  }, [play]);
+  }, [play, storyId, content.category, currentSlide, slides, onSlideChange]);
 
   const coverUrl = content.cover_image_url;
   const category = content.category;
@@ -369,6 +390,13 @@ export default function BlockViewerScreen() {
   const [language, setLanguage] = useState<Language>('en');
   const [useFallback, setUseFallback] = useState(false);
   const { play } = useSoundEffects();
+  const updateProgress = useUpdateProgress();
+
+  // Refs for abandoned/completion tracking
+  const completedRef = useRef(false);
+  const openingNarratorRef = useRef(false);
+  const currentSlideRef = useRef(0);
+  const storyStartTimeRef = useRef(Date.now());
 
   const { data: content, isLoading, error, refetch } = useBlockContent({
     storyId,
@@ -385,15 +413,59 @@ export default function BlockViewerScreen() {
     }
   }, [error, useFallback]);
 
+  // Track story_started — fires once when content loads
+  useEffect(() => {
+    if (currentUser?.uid && displayContent) {
+      updateProgress.mutate({
+        userId: currentUser.uid,
+        storyId,
+        currentSegment: 0,
+        status: 'in_progress',
+      });
+      const totalSlides = displayContent.blocks?.filter((b: any) => !SKIP_TYPES.has(b.type)).length ?? 0;
+      trackStoryStarted(storyId, displayContent.category, totalSlides, language);
+      completedRef.current = false;
+      storyStartTimeRef.current = Date.now();
+    }
+  }, [storyId, !!displayContent, currentUser?.uid]);
+
+  // Track story_abandoned when screen loses focus without completing
+  useFocusEffect(useCallback(() => {
+    openingNarratorRef.current = false; // reset on re-focus so a real abandon after returning fires
+    return () => {
+      if (!completedRef.current && !openingNarratorRef.current && displayContent && currentSlideRef.current > 0) {
+        const totalSlides = displayContent.blocks?.filter((b: any) => !SKIP_TYPES.has(b.type)).length ?? 1;
+        const completionPct = Math.round((currentSlideRef.current / (totalSlides - 1)) * 100);
+        trackStoryAbandoned(storyId, displayContent.category, currentSlideRef.current, completionPct);
+      }
+    };
+  }, [storyId, displayContent]));
+
   const toggleLanguage = useCallback(() => {
     play('nameSelect');
-    setLanguage((prev) => (prev === 'en' ? 'hi' : 'en'));
-  }, [play]);
+    setLanguage((prev) => {
+      const next = prev === 'en' ? 'hi' : 'en';
+      trackStoryLanguageSwitched(storyId, prev, next, currentSlideRef.current);
+      return next;
+    });
+  }, [play, storyId]);
 
   const handleComplete = useCallback(() => {
+    completedRef.current = true;
+    if (currentUser?.uid && displayContent) {
+      const blocks = displayContent.blocks?.filter((b: any) => !SKIP_TYPES.has(b.type)) ?? [];
+      updateProgress.mutate({
+        userId: currentUser.uid,
+        storyId,
+        currentSegment: Math.max(0, blocks.length - 1),
+        status: 'completed',
+      });
+      const totalTimeSec = Math.round((Date.now() - storyStartTimeRef.current) / 1000);
+      trackStoryCompleted(storyId, displayContent.category, totalTimeSec, currentSlideRef.current + 1);
+    }
     play('nameConfirmed');
     router.back();
-  }, [play]);
+  }, [play, currentUser?.uid, storyId, displayContent]);
 
 
 
@@ -443,15 +515,19 @@ export default function BlockViewerScreen() {
       <View style={styles.slidesRoot}>
         <VisualStorySlides
           content={displayContent}
+          storyId={storyId}
           language={language}
           onToggleLang={toggleLanguage}
           onComplete={handleComplete}
+          onSlideChange={(index) => { currentSlideRef.current = index; }}
           play={play}
         />
         {/* Narrator button — positioned above bottom actions, clear of header */}
         <TouchableOpacity
           onPress={() => {
             play('tabFocus');
+            openingNarratorRef.current = true;
+            trackNarratorButtonTapped(storyId, displayContent.category);
             router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`);
           }}
           style={[styles.narratorBtn, { top: safeTop + 60 }]}
