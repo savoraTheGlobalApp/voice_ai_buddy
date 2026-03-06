@@ -36,6 +36,7 @@ async def get_current_user(request: Request) -> dict:
     try:
         get_firebase_app()
         decoded_token = firebase_auth.verify_id_token(token)
+        request.state.uid = decoded_token.get("uid")
         return decoded_token
     except firebase_auth.ExpiredIdTokenError:
         raise HTTPException(status_code=401, detail="Token has expired")
