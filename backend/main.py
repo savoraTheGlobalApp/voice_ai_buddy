@@ -20,8 +20,8 @@ from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+from middleware.logging_config import configure_logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Import TTS libraries (lazy imports)
@@ -68,8 +68,12 @@ DEEPGRAM_STT_ENDPOINTING_MS = 100
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from middleware.rate_limit import limiter, track_usage, get_usage_summary, get_limit_for
+from middleware.request_logger import RequestLoggerMiddleware
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
+
+# Request logging (outermost — wraps everything)
+app.add_middleware(RequestLoggerMiddleware)
 
 # Rate limiting
 app.state.limiter = limiter
@@ -181,8 +185,43 @@ class StoryGenerateResponse(BaseModel):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "voice-ai-buddy-backend"}
+    """Health check with real dependency status. Returns 503 when Firestore is unreachable."""
+    from fastapi.responses import JSONResponse
+    checks: dict = {}
+
+    # Firestore connectivity check
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            checks["firestore"] = "unavailable"
+        else:
+            db = get_db()
+            await asyncio.wait_for(
+                asyncio.to_thread(lambda: list(db.collection("static_stories").limit(1).stream(timeout=2))),
+                timeout=3,
+            )
+            checks["firestore"] = "ok"
+    except asyncio.TimeoutError:
+        checks["firestore"] = "timeout"
+    except Exception as e:
+        checks["firestore"] = f"error:{type(e).__name__}"
+
+    # Story list cache status
+    try:
+        from services.static_story_service import _story_list_cache, _STORY_LIST_TTL
+        entry = _story_list_cache.get("__all__")
+        if entry and (time.time() - entry[1]) < _STORY_LIST_TTL:
+            checks["story_cache"] = "warm"
+        else:
+            checks["story_cache"] = "cold"
+    except Exception:
+        checks["story_cache"] = "unknown"
+
+    overall = "healthy" if checks.get("firestore") == "ok" else "degraded"
+    return JSONResponse(
+        status_code=200 if overall == "healthy" else 503,
+        content={"status": overall, "service": "voice-ai-buddy-backend", "checks": checks},
+    )
 
 
 def _get_stt_provider() -> str:
