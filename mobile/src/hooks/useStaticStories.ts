@@ -20,6 +20,8 @@ export function useStaticStories(category?: string, limit: number = 100, offset:
   return useQuery({
     queryKey: ['static-stories', category, limit, offset],
     queryFn: () => listStaticStories(category, limit, offset),
+    staleTime: 10 * 60 * 1000,  // 10 min — matches server-side cache TTL
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -31,6 +33,8 @@ export function useStaticStory(storyId: string) {
     queryKey: ['static-story', storyId],
     queryFn: () => getStaticStory(storyId),
     enabled: !!storyId,
+    staleTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -123,6 +127,8 @@ export function useBlockContent({
     queryKey: ['block-content', storyId, userId, experimentId, variantOverride],
     queryFn: () => getBlockContent(storyId, userId, experimentId, variantOverride),
     enabled: !!storyId,
+    staleTime: 30 * 60 * 1000,  // 30 min — story content never changes mid-session
+    refetchOnWindowFocus: false,
   });
 }
 

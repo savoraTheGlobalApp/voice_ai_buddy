@@ -3,10 +3,15 @@ Static Story Service
 Handles fetching and managing static mythological stories.
 """
 import logging
-from typing import Dict, List, Optional, Any
+import time
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# In-memory cache — 10 min TTL, drastically cuts Firestore reads
+_story_list_cache: dict = {}   # category_key → (stories, timestamp)
+_STORY_LIST_TTL = 600          # 10 minutes
 
 
 async def get_static_story(story_id: str) -> Optional[Dict[str, Any]]:
@@ -69,6 +74,15 @@ async def list_static_stories(
             logger.warning("Firebase not available")
             return []
 
+        # Return cached result if fresh
+        cache_key = category or "__all__"
+        cached = _story_list_cache.get(cache_key)
+        if cached and (time.time() - cached[1]) < _STORY_LIST_TTL:
+            stories = cached[0]
+            start_idx = offset
+            end_idx = offset + limit if limit > 0 else len(stories)
+            return stories[start_idx:end_idx]
+
         db = get_db()
 
         # Get all stories first (Firestore ordering with missing fields is tricky)
@@ -108,6 +122,10 @@ async def list_static_stories(
             key=lambda x: x.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True
         )
+
+        # Cache the full sorted list before pagination
+        _story_list_cache[cache_key] = (all_stories, time.time())
+        logger.info(f"Cached {len(all_stories)} stories (category: {category or 'all'})")
 
         # Apply pagination in Python
         start_idx = offset

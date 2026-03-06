@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 _tier_cache: dict[str, tuple[str, float]] = {}
 TIER_CACHE_TTL = 300  # 5 minutes
 
+# In-memory cache for usage summaries: {uid: (summary, timestamp)}
+_usage_cache: dict[str, tuple[dict, float]] = {}
+USAGE_CACHE_TTL = 120  # 2 minutes
+
 
 def _get_uid_from_request(request: Request) -> str:
     """
@@ -124,6 +128,11 @@ async def get_usage_summary(uid: str) -> dict:
         if not is_firebase_available():
             return {}
 
+        # Return cached result if fresh
+        cached = _usage_cache.get(uid)
+        if cached and (time.time() - cached[1]) < USAGE_CACHE_TTL:
+            return cached[0]
+
         db = get_db()
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         doc = db.collection("users").document(uid).collection("usage").document(today).get()
@@ -131,7 +140,7 @@ async def get_usage_summary(uid: str) -> dict:
         if doc.exists:
             data = doc.to_dict()
             tier = get_subscription_tier(uid)
-            return {
+            result = {
                 "date": today,
                 "tier": tier,
                 "stories_generated": data.get("stories_generated", 0),
@@ -139,7 +148,10 @@ async def get_usage_summary(uid: str) -> dict:
                 "chat_calls": data.get("chat_calls", 0),
                 "limits": {k: v[tier] for k, v in RATE_LIMITS.items()},
             }
-        return {"date": today, "tier": get_subscription_tier(uid)}
+        else:
+            result = {"date": today, "tier": get_subscription_tier(uid)}
+        _usage_cache[uid] = (result, time.time())
+        return result
     except Exception as e:
         logger.warning(f"Failed to get usage summary for {uid}: {e}")
         return {}
