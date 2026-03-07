@@ -15,6 +15,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import { useTheme } from '../../../src/contexts/ThemeContext';
+import { useCoachHighlight } from '../../../src/contexts/OnboardingContext';
+import { PulsingRing } from '../../../src/components/CoachHighlight';
 import { trackStoryTapped } from '../../../src/utils/analytics';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
 import type { SoundName } from '../../../src/hooks/useSoundEffects';
@@ -64,6 +66,7 @@ interface StoryItem {
 function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => void; play: PlayFn }) {
   const config = getCategoryConfig(story.category);
   const { colors } = useTheme();
+  const tapHighlight = useCoachHighlight('tap-story');
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const handlePress = useCallback(() => {
@@ -74,6 +77,7 @@ function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => 
 
   return (
     <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={styles.card}>
+      {tapHighlight && <PulsingRing borderRadius={10} />}
       {story.cover_image_url ? (
         <View style={styles.cardGradient}>
           <Image

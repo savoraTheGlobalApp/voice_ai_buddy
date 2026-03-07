@@ -21,6 +21,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
 import { useCompanion } from '../../../src/contexts/CompanionContext';
+import { useCoachHighlight } from '../../../src/contexts/OnboardingContext';
+import { PulsingRing } from '../../../src/components/CoachHighlight';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
 import { trackStoryTapped, trackStoryStarted } from '../../../src/utils/analytics';
 
@@ -71,6 +73,7 @@ function CompanionBubble({ text, visible }: { text: string; visible: boolean }) 
 export default function PlayScreen() {
   const companion = useCompanion();
   const { play } = useSoundEffects();
+  const startStoryHighlight = useCoachHighlight('start-story');
 
   const [categoryIdx, setCategoryIdx] = useState(0);
   const categoryIdxRef = useRef(0);
@@ -321,6 +324,7 @@ export default function PlayScreen() {
             >
               <Ionicons name="play" size={22} color="#fff" />
               <Text style={styles.startBtnText}>Start Story</Text>
+              {startStoryHighlight && <PulsingRing borderRadius={32} />}
             </TouchableOpacity>
           )}
           <TouchableOpacity onPress={() => router.push('/(app)/sacred-stories')} style={styles.browseLink}>

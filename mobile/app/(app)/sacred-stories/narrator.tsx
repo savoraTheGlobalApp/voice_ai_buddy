@@ -25,6 +25,7 @@ import {
   trackNarratorCompleted,
 } from '../../../src/utils/analytics';
 import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
+import { useOnboarding } from '../../../src/contexts/OnboardingContext';
 import type { ContentBlock } from '../../../src/types/stories';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -250,6 +251,7 @@ export default function NarratorScreen() {
   const textScrollRef = useRef<ScrollView>(null);
 
   const { currentUser } = useAuth();
+  const { triggerFeedback, onLanguageToggled } = useOnboarding();
   const { data: content, isLoading: contentLoading } = useBlockContent({ storyId });
   const updateProgress = useUpdateProgress();
 
@@ -322,6 +324,7 @@ export default function NarratorScreen() {
   useEffect(() => {
     if (isLast && narrator.isFinished && blocks.length > 0) {
       trackNarratorCompleted(storyId, content?.category ?? '', blocks.length, blocks.length);
+      triggerFeedback();
     }
   }, [isLast, narrator.isFinished]);
 
@@ -381,12 +384,13 @@ export default function NarratorScreen() {
   const toggleLanguage = useCallback(() => {
     clearTimers();
     narrator.stop();
+    onLanguageToggled();
     setLanguage((l) => {
       const next = l === 'en' ? 'hi' : 'en';
       trackNarratorLanguageSwitched(storyId, currentIndexRef.current, l, next);
       return next;
     });
-  }, [clearTimers, storyId]);
+  }, [clearTimers, storyId, onLanguageToggled]);
 
   // Swipe gesture
   const panResponder = useRef(

@@ -26,6 +26,8 @@ import {
 import { useFocusEffect } from 'expo-router';
 import { createSampleBlockContent } from '../../../src/utils/storyToBlocks';
 import { useTheme } from '../../../src/contexts/ThemeContext';
+import { useOnboarding, useCoachHighlight } from '../../../src/contexts/OnboardingContext';
+import { PulsingRing } from '../../../src/components/CoachHighlight';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
 import type { SoundName } from '../../../src/hooks/useSoundEffects';
 import type { BlockBasedContent, ContentBlock } from '../../../src/types/stories';
@@ -173,6 +175,7 @@ const VisualSlide = memo(function VisualSlide({
   onToggleLang,
   onFinish,
 }: VisualSlideProps) {
+  const langHighlight = useCoachHighlight('language-toggle');
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const panX = useRef(new Animated.Value(0)).current;
   const panY = useRef(new Animated.Value(0)).current;
@@ -265,6 +268,7 @@ const VisualSlide = memo(function VisualSlide({
             <Text style={slideStyles.langPillText}>
               {language === 'en' ? '🇮🇳 हिं' : '🇬🇧 EN'}
             </Text>
+            {langHighlight && <PulsingRing borderRadius={22} />}
           </TouchableOpacity>
 
           {isLast && (
@@ -289,6 +293,7 @@ interface VisualStorySlidesProps {
   onToggleLang: () => void;
   onComplete: () => void;
   onSlideChange: (index: number) => void;
+  onStorySwiped?: () => void;
   play: PlayFn;
 }
 
@@ -299,6 +304,7 @@ function VisualStorySlides({
   onToggleLang,
   onComplete,
   onSlideChange,
+  onStorySwiped,
   play,
 }: VisualStorySlidesProps) {
   const slides = useMemo(
@@ -328,7 +334,8 @@ function VisualStorySlides({
     setCurrentSlide(index);
     onSlideChange(index);
     play('categorySwitch');
-  }, [play, storyId, content.category, currentSlide, slides, onSlideChange]);
+    onStorySwiped?.();
+  }, [play, storyId, content.category, currentSlide, slides, onSlideChange, onStorySwiped]);
 
   const coverUrl = content.cover_image_url;
   const category = content.category;
@@ -384,6 +391,8 @@ export default function BlockViewerScreen() {
   }>();
   const { currentUser } = useAuth();
   const { colors } = useTheme();
+  const { triggerFeedback, feedbackGiven, onStorySwiped, onLanguageToggled } = useOnboarding();
+  const narratorHighlight = useCoachHighlight('narrator-button');
   const { top: safeTop } = useSafeAreaInsets();
 
   const storyId = contentId || 'maha-001';
@@ -443,12 +452,13 @@ export default function BlockViewerScreen() {
 
   const toggleLanguage = useCallback(() => {
     play('nameSelect');
+    onLanguageToggled();
     setLanguage((prev) => {
       const next = prev === 'en' ? 'hi' : 'en';
       trackStoryLanguageSwitched(storyId, prev, next, currentSlideRef.current);
       return next;
     });
-  }, [play, storyId]);
+  }, [play, storyId, onLanguageToggled]);
 
   const handleComplete = useCallback(() => {
     completedRef.current = true;
@@ -462,9 +472,15 @@ export default function BlockViewerScreen() {
       });
       const totalTimeSec = Math.round((Date.now() - storyStartTimeRef.current) / 1000);
       trackStoryCompleted(storyId, displayContent.category, totalTimeSec, currentSlideRef.current + 1);
+      triggerFeedback();
     }
     play('nameConfirmed');
-    router.back();
+    // Delay navigation if feedback sheet is about to show, so it can render first
+    if (!feedbackGiven) {
+      setTimeout(() => router.back(), 400);
+    } else {
+      router.back();
+    }
   }, [play, currentUser?.uid, storyId, displayContent]);
 
 
@@ -520,6 +536,7 @@ export default function BlockViewerScreen() {
           onToggleLang={toggleLanguage}
           onComplete={handleComplete}
           onSlideChange={(index) => { currentSlideRef.current = index; }}
+          onStorySwiped={onStorySwiped}
           play={play}
         />
         {/* Narrator button — positioned above bottom actions, clear of header */}
@@ -535,6 +552,7 @@ export default function BlockViewerScreen() {
         >
           <Ionicons name="headset-outline" size={20} color="#fff" />
           <Text style={styles.narratorBtnLabel}>Listen</Text>
+          {narratorHighlight && <PulsingRing borderRadius={20} />}
         </TouchableOpacity>
       </View>
     </>
@@ -595,7 +613,7 @@ const slideStyles = StyleSheet.create({
     left: 0,
     right: 0,
     paddingHorizontal: 24,
-    paddingBottom: 16,
+    paddingBottom: 80, // 16 padding + 60 tab bar height
     paddingTop: 60,
   },
   blockLabel: {

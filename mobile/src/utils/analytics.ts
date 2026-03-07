@@ -120,3 +120,24 @@ export const trackNarratorCompleted = (storyId: string, category: string, blocks
   if (!isInitialized) return;
   track('narrator_completed', { story_id: storyId, category, blocks_heard: blocksHeard, total_blocks: totalBlocks });
 };
+
+// ── Onboarding & Feedback ──────────────────────────────────────────────────────
+
+export const trackOnboardingCompleted = (language: 'en' | 'hi') => {
+  if (!isInitialized) return;
+  track('onboarding_completed', { preferred_language: language });
+  updateUserProperties({ preferred_language: language });
+};
+
+export interface FeedbackRatings {
+  overall: number;          // 1-5
+  engagement: number;       // 1-5
+  age_appropriateness: number; // 1-5
+  audio_quality: number;    // 1-5
+  comment?: string;
+}
+
+export const trackFeedbackSubmitted = (ratings: FeedbackRatings) => {
+  if (!isInitialized) return;
+  track('feedback_submitted', ratings);
+};

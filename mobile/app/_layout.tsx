@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator } from 'react-native';
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext';
 import { CompanionProvider } from '../src/contexts/CompanionContext';
+import { OnboardingProvider } from '../src/contexts/OnboardingContext';
 import { SubscriptionProvider } from '../src/contexts/SubscriptionContext';
 import { ThemeProvider } from '../src/contexts/ThemeContext';
 import { initializePushNotifications } from '../src/lib/notifications';
@@ -98,9 +99,11 @@ export default function RootLayout() {
           <StatusBar style="auto" />
           <AuthProvider>
             <SubscriptionProvider>
-              <CompanionProvider>
-                <RootLayoutNav />
-              </CompanionProvider>
+              <OnboardingProvider>
+                <CompanionProvider>
+                  <RootLayoutNav />
+                </CompanionProvider>
+              </OnboardingProvider>
             </SubscriptionProvider>
           </AuthProvider>
         </SafeAreaProvider>
