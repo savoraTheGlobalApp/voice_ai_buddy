@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
+import { useCustomStory } from '../../../src/hooks/useCustomStory';
 import {
   trackStoryStarted,
   trackSlideViewed,
@@ -384,10 +385,11 @@ function VisualStorySlides({
 // ── BlockViewerScreen ────────────────────────────────────────────────────────
 
 export default function BlockViewerScreen() {
-  const { contentId, experimentId, variantOverride } = useLocalSearchParams<{
+  const { contentId, experimentId, variantOverride, source } = useLocalSearchParams<{
     contentId?: string;
     experimentId?: string;
     variantOverride?: string;
+    source?: string;
   }>();
   const { currentUser } = useAuth();
   const { colors } = useTheme();
@@ -395,6 +397,7 @@ export default function BlockViewerScreen() {
   const narratorHighlight = useCoachHighlight('narrator-button');
   const { top: safeTop } = useSafeAreaInsets();
 
+  const isCustom = source === 'custom';
   const storyId = contentId || 'maha-001';
   const [language, setLanguage] = useState<Language>('en');
   const [useFallback, setUseFallback] = useState(false);
@@ -407,12 +410,24 @@ export default function BlockViewerScreen() {
   const currentSlideRef = useRef(0);
   const storyStartTimeRef = useRef(Date.now());
 
-  const { data: content, isLoading, error, refetch } = useBlockContent({
-    storyId,
+  // Static story hook (existing) — pass undefined when custom to fully disable
+  const staticQuery = useBlockContent({
+    storyId: isCustom ? undefined : storyId,
     userId: currentUser?.uid,
     experimentId,
     variantOverride,
   });
+
+  // Custom story hook — polls every 5s while audio_status is pending
+  const customQuery = useCustomStory(
+    isCustom ? currentUser?.uid : undefined,
+    isCustom ? storyId : undefined,
+  );
+
+  const activeQuery = isCustom ? customQuery : staticQuery;
+  const { data: content, isLoading, error, refetch } = activeQuery;
+
+  const audioStatus: string = isCustom ? ((content as any)?.audio_status ?? 'pending') : 'ready';
 
   const displayContent = useFallback ? createSampleBlockContent() : content;
 
@@ -425,12 +440,14 @@ export default function BlockViewerScreen() {
   // Track story_started — fires once when content loads
   useEffect(() => {
     if (currentUser?.uid && displayContent) {
-      updateProgress.mutate({
-        userId: currentUser.uid,
-        storyId,
-        currentSegment: 0,
-        status: 'in_progress',
-      });
+      if (!isCustom) {
+        updateProgress.mutate({
+          userId: currentUser.uid,
+          storyId,
+          currentSegment: 0,
+          status: 'in_progress',
+        });
+      }
       const totalSlides = displayContent.blocks?.filter((b: any) => !SKIP_TYPES.has(b.type)).length ?? 0;
       trackStoryStarted(storyId, displayContent.category, totalSlides, language);
       completedRef.current = false;
@@ -464,12 +481,14 @@ export default function BlockViewerScreen() {
     completedRef.current = true;
     if (currentUser?.uid && displayContent) {
       const blocks = displayContent.blocks?.filter((b: any) => !SKIP_TYPES.has(b.type)) ?? [];
-      updateProgress.mutate({
-        userId: currentUser.uid,
-        storyId,
-        currentSegment: Math.max(0, blocks.length - 1),
-        status: 'completed',
-      });
+      if (!isCustom) {
+        updateProgress.mutate({
+          userId: currentUser.uid,
+          storyId,
+          currentSegment: Math.max(0, blocks.length - 1),
+          status: 'completed',
+        });
+      }
       const totalTimeSec = Math.round((Date.now() - storyStartTimeRef.current) / 1000);
       trackStoryCompleted(storyId, displayContent.category, totalTimeSec, currentSlideRef.current + 1);
       triggerFeedback();
@@ -545,13 +564,15 @@ export default function BlockViewerScreen() {
             play('tabFocus');
             openingNarratorRef.current = true;
             trackNarratorButtonTapped(storyId, displayContent.category);
-            router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}`);
+            router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}${isCustom ? '&source=custom' : ''}`);
           }}
           style={[styles.narratorBtn, { top: safeTop + 60 }]}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Ionicons name="headset-outline" size={20} color="#fff" />
-          <Text style={styles.narratorBtnLabel}>Listen</Text>
+          <Text style={styles.narratorBtnLabel}>
+            {isCustom && audioStatus === 'pending' ? '🎧 Generating audio...' : 'Listen'}
+          </Text>
           {narratorHighlight && <PulsingRing borderRadius={20} />}
         </TouchableOpacity>
       </View>

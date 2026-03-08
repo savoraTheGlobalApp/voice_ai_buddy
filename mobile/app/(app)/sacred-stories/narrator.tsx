@@ -16,6 +16,7 @@ import { useLocalSearchParams, router, Stack, useFocusEffect } from 'expo-router
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
+import { useCustomStory } from '../../../src/hooks/useCustomStory';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useNarrator } from '../../../src/hooks/useNarrator';
 import {
@@ -234,8 +235,9 @@ function SpeechBubble({
 
 export default function NarratorScreen() {
   const { top: safeTop } = useSafeAreaInsets();
-  const { contentId, from } = useLocalSearchParams<{ contentId?: string; from?: string }>();
+  const { contentId, from, source } = useLocalSearchParams<{ contentId?: string; from?: string; source?: string }>();
   const storyId = contentId || 'maha-001';
+  const isCustom = source === 'custom';
 
   const [language, setLanguage] = useState<Language>('en');
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -252,7 +254,15 @@ export default function NarratorScreen() {
 
   const { currentUser } = useAuth();
   const { triggerFeedback, onLanguageToggled } = useOnboarding();
-  const { data: content, isLoading: contentLoading } = useBlockContent({ storyId });
+  const { data: staticContent, isLoading: staticLoading } = useBlockContent({
+    storyId: isCustom ? undefined : storyId,
+  });
+  const { data: customContent, isLoading: customLoading } = useCustomStory(
+    isCustom ? currentUser?.uid : undefined,
+    isCustom ? storyId : undefined,
+  );
+  const content = isCustom ? customContent : staticContent;
+  const contentLoading = isCustom ? customLoading : staticLoading;
   const updateProgress = useUpdateProgress();
 
   const blocks = useMemo(() => {
@@ -315,7 +325,7 @@ export default function NarratorScreen() {
 
   // Mark story as in_progress when content loads (covers the Play tab flow where block-viewer is skipped)
   useEffect(() => {
-    if (currentUser?.uid && content?.category) {
+    if (!isCustom && currentUser?.uid && content?.category) {
       updateProgress.mutate({ userId: currentUser.uid, storyId, currentSegment: 0, status: 'in_progress' });
     }
   }, [storyId, !!content, currentUser?.uid]);

@@ -10,10 +10,14 @@ import {
   Dimensions,
   StatusBar,
   Image,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
+import { useCustomStories, useDeleteCustomStory } from '../../../src/hooks/useCustomStory';
+import { useAuth } from '../../../src/contexts/AuthContext';
+import type { CustomStorySummary } from '../../../src/api/customStories';
 import { useTheme } from '../../../src/contexts/ThemeContext';
 import { useCoachHighlight } from '../../../src/contexts/OnboardingContext';
 import { PulsingRing } from '../../../src/components/CoachHighlight';
@@ -124,6 +128,104 @@ function AddCustomStoryCard({ category, play }: { category: string; play: PlayFn
       <Text style={styles.addCardPlus}>+</Text>
       <Text style={styles.addCardLabel}>Custom{'\n'}Story</Text>
     </TouchableOpacity>
+  );
+}
+
+function MyStoryCard({
+  story,
+  onPress,
+  onLongPress,
+}: {
+  story: CustomStorySummary;
+  onPress: () => void;
+  onLongPress: () => void;
+}) {
+  const config = getCategoryConfig(story.category);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const audioReady = story.audio_status === 'ready';
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      onLongPress={onLongPress}
+      activeOpacity={0.8}
+      style={styles.myStoryCard}
+    >
+      <LinearGradient colors={config.gradient} style={styles.myStoryGradient}>
+        <Text style={styles.myStoryEmoji}>{config.emoji}</Text>
+        <LinearGradient
+          colors={['transparent', 'rgba(0,0,0,0.85)']}
+          style={styles.myStoryOverlay}
+        >
+          <Text style={styles.myStoryTitle} numberOfLines={2}>{story.title.en}</Text>
+          <View style={styles.myStoryBadgeRow}>
+            <View style={[styles.myStoryBadge, styles.myStoryCatBadge]}>
+              <Text style={styles.myStoryBadgeText}>{config.label}</Text>
+            </View>
+            <View style={[styles.myStoryBadge, audioReady ? styles.myStoryReadyBadge : styles.myStorySoonBadge]}>
+              <Text style={styles.myStoryBadgeText}>{audioReady ? '🎧 Ready' : '⏳ Soon'}</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+}
+
+function MyStoriesRow({
+  uid,
+  play,
+}: {
+  uid: string;
+  play: PlayFn;
+}) {
+  const { data, isLoading } = useCustomStories(uid);
+  const deleteStory = useDeleteCustomStory();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  if (isLoading || !data || data.stories.length === 0) return null;
+
+  const handleLongPress = (story: CustomStorySummary) => {
+    Alert.alert(
+      'Delete Story',
+      `Delete "${story.title.en}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => deleteStory.mutate({ uid, storyId: story.story_id }),
+        },
+      ],
+    );
+  };
+
+  return (
+    <View style={styles.myStoriesSection}>
+      <View style={styles.categoryHeader}>
+        <Text style={styles.categoryLabel}>My Stories</Text>
+        <Text style={styles.categoryCount}>{data.stories.length} created</Text>
+      </View>
+      <FlatList
+        data={data.stories}
+        keyExtractor={(item) => item.story_id}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.rowContent}
+        renderItem={({ item }) => (
+          <MyStoryCard
+            story={item}
+            onPress={() => {
+              play('startStory');
+              router.push(`/(app)/sacred-stories/block-viewer?contentId=${item.story_id}&source=custom`);
+            }}
+            onLongPress={() => handleLongPress(item)}
+          />
+        )}
+      />
+    </View>
   );
 }
 
@@ -318,6 +420,7 @@ const dotsStyles = StyleSheet.create({
 
 export default function SacredStoriesLibrary() {
   const { data, isLoading, error } = useStaticStories();
+  const { currentUser } = useAuth();
   const { colors, theme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { play } = useSoundEffects();
@@ -366,6 +469,9 @@ export default function SacredStoriesLibrary() {
 
         {/* Category rows */}
         <View style={styles.rows}>
+          {/* My Stories — user-generated custom stories */}
+          {currentUser && <MyStoriesRow uid={currentUser.uid} play={play} />}
+
           {categoryOrder.map((category) => (
             <CategoryRow key={category} category={category} stories={grouped[category]} play={play} />
           ))}
@@ -567,6 +673,66 @@ function createStyles(c: ThemeColors) {
       color: 'rgba(255,255,255,0.6)',
       fontSize: 10,
       marginTop: 2,
+    },
+
+    // My Stories section
+    myStoriesSection: {
+      marginBottom: 28,
+    },
+    myStoryCard: {
+      width: CARD_WIDTH,
+      height: CARD_HEIGHT,
+      borderRadius: 10,
+      overflow: 'hidden',
+    },
+    myStoryGradient: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    myStoryEmoji: {
+      fontSize: 40,
+      opacity: 0.7,
+      marginBottom: 12,
+    },
+    myStoryOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      padding: 8,
+      paddingTop: 16,
+    },
+    myStoryTitle: {
+      color: '#fff',
+      fontSize: 11,
+      fontWeight: '700',
+      lineHeight: 14,
+      marginBottom: 5,
+    },
+    myStoryBadgeRow: {
+      flexDirection: 'row',
+      gap: 4,
+      flexWrap: 'wrap',
+    },
+    myStoryBadge: {
+      paddingHorizontal: 5,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    myStoryCatBadge: {
+      backgroundColor: 'rgba(249,115,22,0.85)',
+    },
+    myStoryReadyBadge: {
+      backgroundColor: 'rgba(16,185,129,0.85)',
+    },
+    myStorySoonBadge: {
+      backgroundColor: 'rgba(156,163,175,0.6)',
+    },
+    myStoryBadgeText: {
+      color: '#fff',
+      fontSize: 9,
+      fontWeight: '700',
     },
 
     // Add custom story card
