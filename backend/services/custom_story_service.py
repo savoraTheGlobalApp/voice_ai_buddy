@@ -1,0 +1,398 @@
+"""
+Custom Story Service
+
+Generates bilingual block-based stories on demand using GPT-4o-mini.
+TTS audio is generated asynchronously as a background task.
+
+Firestore path: users/{uid}/custom_stories/{story_id}
+Cloudinary path: custom-story-audio/{story_id}/{block_id}_{lang}.mp3
+"""
+import os
+import secrets
+import logging
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+BLOCKS_BY_LENGTH = {
+    "short":  10,
+    "medium": 16,
+    "long":   20,
+}
+
+SEQUENCE_BY_LENGTH = {
+    "short":  "hook → story_body×5 → character_intro → story_body×1 → value_highlight → reflection",
+    "medium": "hook → character_intro → story_body×7 → discussion → story_body×2 → value_highlight×2 → reflection → blessing",
+    "long":   "hook → character_intro×2 → story_body×9 → discussion×2 → story_body×1 → value_highlight×2 → reflection → blessing",
+}
+
+LLM_SYSTEM_PROMPT = """You generate children's stories (ages 5–10) as bilingual JSON blocks.
+
+Block types and required fields (JSON schema):
+  hook:             { "id": "block-N", "type": "hook",            "content": {"en": "...", "hi": "..."} }
+  story_body:       { "id": "block-N", "type": "story_body",      "content": {"en": "...", "hi": "..."} }
+  character_intro:  { "id": "block-N", "type": "character_intro", "characterId": "char-N", "name": {"en":"..","hi":".."}, "description": {"en":"..","hi":".."}, "avatar": "🦸", "trait": {"en":"..","hi":".."} }
+  value_highlight:  { "id": "block-N", "type": "value_highlight", "value": "courage", "explanation": {"en":"..","hi":".."} }
+  reflection:       { "id": "block-N", "type": "reflection",      "question": {"en": "...", "hi": "..."} }
+  discussion:       { "id": "block-N", "type": "discussion",      "question": {"en": "...", "hi": "..."} }
+  blessing:         { "id": "block-N", "type": "blessing",        "content": {"en": "...", "hi": "..."} }
+
+Rules:
+- Each block: 2–4 short sentences. Warm, imaginative, age-appropriate.
+- Hindi: simple conversational Devanagari (not overly formal).
+- IDs: sequential "block-0", "block-1", etc.
+- Output exactly {N} blocks. Rough sequence: {SEQUENCE}
+- For mythology categories: include 1–2 character_intro blocks.
+- value_highlight "value" field: single English word (e.g., "courage", "kindness").
+
+Return ONLY valid JSON (no markdown):
+{ "title": {"en":"...", "hi":"..."}, "values": ["value1", "value2"], "blocks": [...] }"""
+
+
+def _build_user_prompt(
+    category: str,
+    request: Dict[str, Any],
+    child_name: str,
+    child_age: int,
+    length: str,
+) -> str:
+    """Build category-specific user prompt for the LLM."""
+    n = BLOCKS_BY_LENGTH.get(length, 16)
+    base = f"Child's name: {child_name}. Age: {child_age}. Story length: {n} blocks.\n"
+
+    if category == "habits":
+        habit = request.get("habit", "healthy eating")
+        challenge = request.get("challenge", "gets distracted")
+        helper = request.get("helper", "magical creature")
+        return f"{base}Story about {child_name} learning to {habit}. Struggles because {challenge}. A {helper} appears to guide them."
+
+    elif category == "emotions":
+        emotions = ", ".join(request.get("emotions", ["worry"]))
+        trigger = request.get("trigger", "first time at something new")
+        resolution = request.get("resolution", "with parent's help")
+        return f"{base}Story where {child_name} experiences {emotions}. Feeling starts when {trigger}. Resolved by {resolution}. Show healthy emotional regulation."
+
+    elif category == "moral_values":
+        value = request.get("value", "kindness")
+        dilemma = request.get("dilemma", "found something not theirs")
+        setting = request.get("setting", "school")
+        return f"{base}Story where {child_name} faces a dilemma: {dilemma}. Set in: {setting}. Naturally show why {value} matters."
+
+    elif category == "mahabharata":
+        characters = ", ".join(request.get("characters", ["Arjuna"]))
+        theme = request.get("theme", "Bhagavad Gita teachings")
+        lang_style = (
+            "Simple language for young children"
+            if request.get("language_style") == "simple"
+            else "Classical language appropriate for older children"
+        )
+        return f"{base}Retell episode from Mahabharata: {theme}, featuring {characters}. {lang_style}. Weave in appropriate dharmic values."
+
+    elif category == "ramayana":
+        characters = ", ".join(request.get("characters", ["Rama"]))
+        theme = request.get("theme", "Hanuman's great leap")
+        lang_style = (
+            "Simple language for young children"
+            if request.get("language_style") == "simple"
+            else "Classical language appropriate for older children"
+        )
+        return f"{base}Retell episode from Ramayana: {theme}, featuring {characters}. {lang_style}. Weave in appropriate values of devotion and righteousness."
+
+    else:
+        topics = ", ".join(request.get("topics", ["adventure"]))
+        values = ", ".join(request.get("values", ["kindness"]))
+        return f"{base}Story about {topics}. Teach values: {values}."
+
+
+def _normalize_blocks(blocks: List[Dict]) -> List[Dict]:
+    """Add order field, ensure IDs and characterIds are present."""
+    result = []
+    for i, block in enumerate(blocks):
+        b = dict(block)
+        b["id"] = b.get("id", f"block-{i}")
+        b["order"] = i
+        if b.get("type") == "character_intro" and "characterId" not in b:
+            name = b.get("name", {})
+            en_name = name.get("en", f"char-{i}") if isinstance(name, dict) else f"char-{i}"
+            b["characterId"] = en_name.lower().replace(" ", "-")[:20]
+        result.append(b)
+    return result
+
+
+async def generate_custom_story(
+    uid: str,
+    request: Dict[str, Any],
+    child_name: str = "Little One",
+    child_age: int = 6,
+) -> Dict[str, Any]:
+    """
+    Generate a custom story using GPT-4o-mini.
+
+    Saves to Firestore with audio_status="pending".
+    Returns the story doc formatted as BlockBasedContent + audio_status.
+    """
+    import httpx
+    import json
+    from services.firebase_service import get_db, is_firebase_available
+
+    category = request.get("category", "habits")
+    length = request.get("length", "medium")
+    n_blocks = BLOCKS_BY_LENGTH.get(length, 16)
+    sequence = SEQUENCE_BY_LENGTH.get(length, SEQUENCE_BY_LENGTH["medium"])
+
+    system_prompt = LLM_SYSTEM_PROMPT.replace("{N}", str(n_blocks)).replace("{SEQUENCE}", sequence)
+    user_prompt = _build_user_prompt(category, request, child_name, child_age, length)
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.8,
+                "max_tokens": 4000,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=90.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+
+    story_data = json.loads(result["choices"][0]["message"]["content"])
+    blocks = _normalize_blocks(story_data.get("blocks", []))
+    title = story_data.get("title", {"en": "My Story", "hi": "मेरी कहानी"})
+    values = story_data.get("values", [])
+
+    story_id = f"cstory-{secrets.token_hex(6)}"
+    reading_time = max(1, round(n_blocks * 0.5))
+
+    story_doc = {
+        "story_id": story_id,
+        "title": title,
+        "category": category,
+        "audio_status": "pending",
+        "values": values,
+        "blocks": blocks,
+        "metadata": {
+            "blocks_count": len(blocks),
+            "length": length,
+            "reading_time_minutes": reading_time,
+        },
+        "request": request,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if is_firebase_available():
+        try:
+            db = get_db()
+            doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+            await asyncio.to_thread(lambda: doc_ref.set(story_doc))
+        except Exception as e:
+            logger.error(f"Failed to save custom story {story_id} to Firestore: {e}")
+
+    return _story_to_block_content(story_doc)
+
+
+async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict]) -> None:
+    """
+    Background task: generate TTS audio for all blocks, upload to Cloudinary,
+    update Firestore blocks with audio URLs, set audio_status="ready".
+    """
+    import cloudinary.uploader
+    from services.firebase_service import get_db, is_firebase_available
+    from services.tts_service import get_tts_provider, extract_block_text
+
+    logger.info(f"[audio-bg] Starting audio generation for {story_id}")
+
+    try:
+        provider = get_tts_provider()
+        updated_blocks = [dict(b) for b in blocks]
+
+        for i, block in enumerate(updated_blocks):
+            block_id = block.get("id", f"block-{i}")
+            for lang in ("en", "hi"):
+                text = extract_block_text(block, lang)
+                if not text:
+                    continue
+                try:
+                    audio_bytes = await provider.synthesize(text, lang)
+                    public_id = f"{story_id}/{block_id}_{lang}"
+
+                    def _upload(ab=audio_bytes, pid=public_id):
+                        return cloudinary.uploader.upload(
+                            ab,
+                            resource_type="raw",
+                            folder="custom-story-audio",
+                            public_id=pid,
+                            overwrite=True,
+                            format="mp3",
+                        )
+
+                    result = await asyncio.to_thread(_upload)
+                    block[f"audio_url_{lang}"] = result["secure_url"]
+                    logger.info(f"[audio-bg] {block_id} {lang.upper()}: uploaded")
+                except Exception as e:
+                    logger.error(f"[audio-bg] Failed TTS for {block_id} {lang}: {e}")
+
+        if is_firebase_available():
+            db = get_db()
+            doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+            await asyncio.to_thread(
+                lambda: doc_ref.update({"blocks": updated_blocks, "audio_status": "ready"})
+            )
+            logger.info(f"[audio-bg] Audio generation complete for {story_id}")
+        else:
+            logger.warning(f"[audio-bg] Firebase unavailable — cannot update audio_status for {story_id}")
+
+    except Exception as e:
+        logger.error(f"[audio-bg] Audio generation failed for {story_id}: {e}")
+        try:
+            if is_firebase_available():
+                db = get_db()
+                doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+                await asyncio.to_thread(lambda: doc_ref.update({"audio_status": "failed"}))
+        except Exception as update_err:
+            logger.error(f"[audio-bg] Failed to mark audio_status=failed for {story_id}: {update_err}")
+
+
+async def get_custom_story(uid: str, story_id: str) -> Optional[Dict[str, Any]]:
+    """Get a custom story by ID, formatted as BlockBasedContent + audio_status."""
+    from services.firebase_service import get_db, is_firebase_available
+
+    if not is_firebase_available():
+        return None
+
+    try:
+        db = get_db()
+        doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+        doc = await asyncio.to_thread(lambda: doc_ref.get())
+
+        if not doc.exists:
+            return None
+
+        return _story_to_block_content(doc.to_dict())
+    except Exception as e:
+        logger.error(f"Failed to get custom story {story_id} for uid={uid}: {e}")
+        return None
+
+
+async def list_custom_stories(uid: str) -> List[Dict[str, Any]]:
+    """List custom stories for a user (lightweight summary, newest first)."""
+    from services.firebase_service import get_db, is_firebase_available
+
+    if not is_firebase_available():
+        return []
+
+    try:
+        db = get_db()
+        docs = await asyncio.to_thread(
+            lambda: list(
+                db.collection("users").document(uid).collection("custom_stories").stream()
+            )
+        )
+
+        stories = []
+        for doc in docs:
+            data = doc.to_dict()
+            stories.append({
+                "story_id": data.get("story_id"),
+                "title": data.get("title", {"en": "Story", "hi": "कहानी"}),
+                "category": data.get("category", ""),
+                "audio_status": data.get("audio_status", "pending"),
+                "values": data.get("values", []),
+                "metadata": data.get("metadata", {}),
+                "created_at": data.get("created_at"),
+            })
+
+        stories.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        return stories
+    except Exception as e:
+        logger.error(f"Failed to list custom stories for uid={uid}: {e}")
+        return []
+
+
+async def count_custom_stories(uid: str) -> int:
+    """Count total custom stories for a user (for limit enforcement)."""
+    from services.firebase_service import get_db, is_firebase_available
+
+    if not is_firebase_available():
+        return 0
+
+    try:
+        db = get_db()
+        docs = await asyncio.to_thread(
+            lambda: list(
+                db.collection("users").document(uid).collection("custom_stories").stream()
+            )
+        )
+        return len(docs)
+    except Exception as e:
+        logger.error(f"Failed to count custom stories for uid={uid}: {e}")
+        return 0
+
+
+async def delete_custom_story(uid: str, story_id: str) -> bool:
+    """Delete a custom story from Firestore and clean up Cloudinary audio."""
+    import cloudinary.api
+    from services.firebase_service import get_db, is_firebase_available
+
+    success = True
+
+    if is_firebase_available():
+        try:
+            db = get_db()
+            doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+            await asyncio.to_thread(lambda: doc_ref.delete())
+        except Exception as e:
+            logger.error(f"Failed to delete Firestore doc for {story_id}: {e}")
+            success = False
+
+    # Best-effort Cloudinary cleanup
+    try:
+        await asyncio.to_thread(
+            lambda: cloudinary.api.delete_resources_by_prefix(
+                f"custom-story-audio/{story_id}/",
+                resource_type="raw",
+            )
+        )
+    except Exception as e:
+        logger.warning(f"Cloudinary cleanup failed for {story_id}: {e}")
+
+    return success
+
+
+def _story_to_block_content(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert custom story Firestore doc to BlockBasedContent + audio_status."""
+    metadata = data.get("metadata", {})
+    return {
+        "contentId": data.get("story_id", ""),
+        "title": data.get("title", {"en": "Story", "hi": "कहानी"}),
+        "category": data.get("category", ""),
+        "blocks": data.get("blocks", []),
+        "display": {
+            "navigation": "scroll",
+            "theme": "adventure",
+            "showProgress": True,
+        },
+        "metadata": {
+            "reading_time_minutes": metadata.get("reading_time_minutes", 5),
+            "values": data.get("values", []),
+            "characters": [],
+            "difficulty_level": "beginner",
+        },
+        "audio_status": data.get("audio_status", "pending"),
+        "created_at": data.get("created_at"),
+    }
