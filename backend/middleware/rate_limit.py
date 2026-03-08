@@ -86,10 +86,17 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 # --- Rate limit strings per tier ---
 
 RATE_LIMITS = {
-    "story_generate": {"free": "10/day", "premium": "50/day"},
-    "story_read":     {"free": "30/day", "premium": "200/day"},
-    "tts":            {"free": "20/day", "premium": "200/day"},
-    "chat":           {"free": "30/day", "premium": "200/day"},
+    "story_generate":        {"free": "10/day",  "premium": "50/day"},
+    "story_read":            {"free": "30/day",  "premium": "200/day"},
+    "tts":                   {"free": "20/day",  "premium": "200/day"},
+    "chat":                  {"free": "30/day",  "premium": "200/day"},
+    "custom_story_generate": {"free": "2/day",   "premium": "10/day"},
+}
+
+# Total story library limits (not daily — enforced by endpoint logic)
+STORY_LIBRARY_LIMITS = {
+    "free":    10,
+    "premium": 50,
 }
 
 
@@ -144,6 +151,7 @@ async def get_usage_summary(uid: str) -> dict:
                 "date": today,
                 "tier": tier,
                 "stories_generated": data.get("stories_generated", 0),
+                "custom_story_generate": data.get("custom_story_generate", 0),
                 "tts_calls": data.get("tts_calls", 0),
                 "chat_calls": data.get("chat_calls", 0),
                 "limits": {k: v[tier] for k, v in RATE_LIMITS.items()},

@@ -3,7 +3,7 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 import os
@@ -67,7 +67,7 @@ DEEPGRAM_STT_ENDPOINTING_MS = 100
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from middleware.rate_limit import limiter, track_usage, get_usage_summary, get_limit_for
+from middleware.rate_limit import limiter, track_usage, get_usage_summary, get_limit_for, get_subscription_tier
 from middleware.request_logger import RequestLoggerMiddleware
 
 app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
@@ -2601,11 +2601,11 @@ async def get_subscription_status(request: Request, uid: str, token: dict = Depe
     require_user_match(uid, token)
     usage = await get_usage_summary(uid)
     tier = usage.get("tier", "free")
-    stories_used = usage.get("stories_generated", 0)
+    stories_used = usage.get("custom_story_generate", 0)
     limits = usage.get("limits", {})
 
     # Parse limit string like "2/day" to extract the number
-    limit_str = limits.get("story_generate", "2/day")
+    limit_str = limits.get("custom_story_generate", "2/day")
     try:
         stories_limit = int(str(limit_str).split("/")[0])
     except (ValueError, AttributeError, IndexError):
@@ -3010,9 +3010,174 @@ async def send_test_notification_endpoint(
 
 
 
+# =============================================================================
+# Custom Story Generation Endpoints
+# =============================================================================
+
+class CustomStoryGenerateRequest(BaseModel):
+    category: str
+    length: str = "medium"  # short | medium | long
+    # habits
+    habit: Optional[str] = None
+    challenge: Optional[str] = None
+    helper: Optional[str] = None
+    # emotions
+    emotions: Optional[List[str]] = None
+    trigger: Optional[str] = None
+    resolution: Optional[str] = None
+    # moral_values
+    value: Optional[str] = None
+    dilemma: Optional[str] = None
+    setting: Optional[str] = None
+    # mahabharata / ramayana
+    characters: Optional[List[str]] = None
+    theme: Optional[str] = None
+    language_style: Optional[str] = None  # "simple" | "classical"
+
+
+@app.post("/api/users/{uid}/custom-stories/generate")
+@limiter.limit("50/day")
+async def generate_custom_story_endpoint(
+    request: Request,
+    uid: str,
+    story_request: CustomStoryGenerateRequest,
+    background_tasks: BackgroundTasks,
+    token: dict = Depends(get_current_user),
+):
+    """
+    Generate a custom bilingual block-based story for a child.
+
+    - Checks total story library limit (free=10, premium=50) → 429 "Story library full"
+    - Checks daily rate limit (free=2/day, premium=10/day) → 429
+    - Generates bilingual blocks via GPT-4o-mini (~4–6s)
+    - Saves to Firestore with audio_status="pending"
+    - Starts TTS audio generation as a background task
+    - Returns story blocks immediately so reader can start
+
+    Args:
+        uid: Firebase user ID
+        story_request: Category-specific story parameters
+    """
+    from services.custom_story_service import (
+        generate_custom_story,
+        generate_audio_background,
+        count_custom_stories,
+    )
+    from middleware.rate_limit import STORY_LIBRARY_LIMITS
+
+    require_user_match(uid, token)
+
+    # Check total library limit
+    tier = get_subscription_tier(uid)
+    library_limit = STORY_LIBRARY_LIMITS.get(tier, 10)
+    total = await count_custom_stories(uid)
+    if total >= library_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Story library full. You have reached your {library_limit} story limit.",
+        )
+
+    # Check daily rate limit
+    usage = await get_usage_summary(uid)
+    daily_limit_str = get_limit_for("custom_story_generate", uid)
+    daily_limit = int(daily_limit_str.split("/")[0])
+    daily_used = usage.get("custom_story_generate", 0)
+    if daily_used >= daily_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily custom story limit reached ({daily_limit}/day). Upgrade to premium for more.",
+        )
+
+    # Fetch child profile
+    child_name = "Little One"
+    child_age = 6
+    if FIREBASE_SERVICES_AVAILABLE and is_firebase_available():
+        try:
+            db = get_db()
+            user_doc = db.collection("users").document(uid).get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                child_name = user_data.get("name", child_name)
+                child_age = user_data.get("age", child_age)
+        except Exception as e:
+            logger.warning(f"Failed to fetch user profile for {uid}: {e}")
+
+    # Generate story (blocks saved to Firestore with audio_status="pending")
+    request_dict = story_request.model_dump(exclude_none=True)
+    content = await generate_custom_story(uid, request_dict, child_name, child_age)
+
+    # Track usage
+    await track_usage(uid, "custom_story_generate")
+
+    # Start TTS audio generation in background
+    background_tasks.add_task(
+        generate_audio_background,
+        uid,
+        content["contentId"],
+        content["blocks"],
+    )
+
+    return content
+
+
+@app.get("/api/users/{uid}/custom-stories")
+async def list_custom_stories_endpoint(
+    uid: str,
+    token: dict = Depends(get_current_user),
+):
+    """List user's custom stories (newest first, lightweight summary)."""
+    from services.custom_story_service import list_custom_stories
+
+    require_user_match(uid, token)
+
+    stories = await list_custom_stories(uid)
+    return {"stories": stories, "total": len(stories)}
+
+
+@app.get("/api/users/{uid}/custom-stories/{story_id}")
+async def get_custom_story_endpoint(
+    uid: str,
+    story_id: str,
+    token: dict = Depends(get_current_user),
+):
+    """
+    Get a custom story by ID.
+
+    Returns BlockBasedContent + audio_status.
+    Mobile polls this endpoint every 5s until audio_status="ready".
+    """
+    from services.custom_story_service import get_custom_story
+
+    require_user_match(uid, token)
+
+    story = await get_custom_story(uid, story_id)
+    if not story:
+        raise HTTPException(status_code=404, detail=f"Custom story {story_id} not found")
+
+    return story
+
+
+@app.delete("/api/users/{uid}/custom-stories/{story_id}")
+async def delete_custom_story_endpoint(
+    uid: str,
+    story_id: str,
+    token: dict = Depends(get_current_user),
+):
+    """Delete a custom story and its Cloudinary audio files."""
+    from services.custom_story_service import delete_custom_story
+
+    require_user_match(uid, token)
+
+    success = await delete_custom_story(uid, story_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete story")
+
+    return {"status": "deleted", "story_id": story_id}
+
+
 if __name__ == "__main__":
     import uvicorn
-    
+
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(
         "main:app",
