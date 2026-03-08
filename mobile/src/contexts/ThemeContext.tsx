@@ -11,15 +11,15 @@ type ThemeContextType = {
 };
 
 const ThemeContext = createContext<ThemeContextType>({
-  theme: 'dark',
-  colors: darkColors,
+  theme: 'light',
+  colors: lightColors,
   toggleTheme: () => {},
 });
 
 const STORAGE_KEY = '@theme_preference';
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('dark');
+  const [theme, setTheme] = useState<Theme>('light');
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((val) => {

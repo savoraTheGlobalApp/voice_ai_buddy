@@ -13,32 +13,34 @@ export type ThemeColors = {
   divider: string;
 };
 
-export const darkColors: ThemeColors = {
-  background:    '#0a0a0a',
-  surface:       '#1a1a1a',
-  surfaceBorder: '#2a2a2a',
-  text:          '#ffffff',
-  textSecondary: '#d1d5db',
-  textTertiary:  '#6b7280',
-  accent:        '#f97316',
+// Bright, warm, child-friendly — default theme
+export const lightColors: ThemeColors = {
+  background:    '#fff8f0',  // warm cream-white
+  surface:       '#ffffff',  // pure white cards
+  surfaceBorder: '#fde8cc',  // soft peach border
+  text:          '#1c0a00',  // near-black, warm
+  textSecondary: '#78350f',  // amber-brown
+  textTertiary:  '#b45309',  // muted amber
+  accent:        '#f97316',  // saffron orange (brand)
   accentText:    '#ffffff',
-  tabBar:        '#0a0a0a',
-  tabBarBorder:  '#1a1a1a',
-  headerBg:      '#0a0a0a',
-  divider:       '#2a2a2a',
+  tabBar:        '#ffffff',  // crisp white tab bar
+  tabBarBorder:  '#fde8cc',  // peach border
+  headerBg:      '#fff8f0',
+  divider:       '#fde8cc',
 };
 
-export const lightColors: ThemeColors = {
-  background:    '#faf8f5',
-  surface:       '#ffffff',
-  surfaceBorder: '#e8e0d5',
-  text:          '#2c1810',
-  textSecondary: '#5c4033',
-  textTertiary:  '#9e8272',
-  accent:        '#f97316',
+// Warm night-sky dark — for low-light reading
+export const darkColors: ThemeColors = {
+  background:    '#1a0e2e',  // deep indigo-purple
+  surface:       '#2d1f45',  // slightly lighter purple
+  surfaceBorder: '#3d2f5a',  // purple border
+  text:          '#fef9f0',  // warm white
+  textSecondary: '#e8d5b7',  // warm beige
+  textTertiary:  '#a08060',  // muted warm
+  accent:        '#f97316',  // saffron orange (brand)
   accentText:    '#ffffff',
-  tabBar:        '#faf8f5',
-  tabBarBorder:  '#e8e0d5',
-  headerBg:      '#faf8f5',
-  divider:       '#e8e0d5',
+  tabBar:        '#1a0e2e',
+  tabBarBorder:  '#3d2f5a',
+  headerBg:      '#1a0e2e',
+  divider:       '#3d2f5a',
 };
