@@ -8,6 +8,7 @@ import {
   Animated,
   Dimensions,
   FlatList,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
@@ -15,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
-import { useCustomStory, useRetryCustomStoryAudio } from '../../../src/hooks/useCustomStory';
+import { useCustomStory, useDeleteCustomStory, useRetryCustomStoryAudio } from '../../../src/hooks/useCustomStory';
 import {
   trackStoryStarted,
   trackSlideViewed,
@@ -404,6 +405,7 @@ export default function BlockViewerScreen() {
   const { play } = useSoundEffects();
   const updateProgress = useUpdateProgress();
   const retryAudio = useRetryCustomStoryAudio();
+  const deleteStory = useDeleteCustomStory();
 
   // Refs for abandoned/completion tracking
   const completedRef = useRef(false);
@@ -546,6 +548,37 @@ export default function BlockViewerScreen() {
           title: '',
           headerTransparent: true,
           headerBackTitle: '',
+          headerRight: isCustom
+            ? () => (
+                <TouchableOpacity
+                  onPress={() => {
+                    Alert.alert(
+                      'Delete Story',
+                      'Delete this story and its audio? This cannot be undone.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Delete',
+                          style: 'destructive',
+                          onPress: () => {
+                            if (currentUser?.uid) {
+                              deleteStory.mutate(
+                                { uid: currentUser.uid, storyId },
+                                { onSuccess: () => router.back() },
+                              );
+                            }
+                          },
+                        },
+                      ],
+                    );
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={{ marginRight: 4 }}
+                >
+                  <Ionicons name="trash-outline" size={22} color="#fff" />
+                </TouchableOpacity>
+              )
+            : undefined,
         }}
       />
       <View style={styles.slidesRoot}>

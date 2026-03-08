@@ -2589,6 +2589,8 @@ class SubscriptionStatus(BaseModel):
     tier: str
     stories_used_today: int
     stories_limit: int
+    library_used: int = 0
+    library_limit: int = 10
     expires_at: Optional[str] = None
 
 
@@ -2596,25 +2598,34 @@ class SubscriptionStatus(BaseModel):
 async def get_subscription_status(request: Request, uid: str, token: dict = Depends(get_current_user)):
     """
     Get subscription status for a user.
-    Returns tier, daily usage, and limits.
+    Returns tier, daily usage, limits, and library usage.
     """
     require_user_match(uid, token)
+    from services.custom_story_service import count_custom_stories
+    from middleware.rate_limit import STORY_LIBRARY_LIMITS
+
     usage = await get_usage_summary(uid)
     tier = usage.get("tier", "free")
     stories_used = usage.get("custom_story_generate", 0)
     limits = usage.get("limits", {})
 
-    # Parse limit string like "2/day" to extract the number
+    # Parse daily limit string like "2/day"
     limit_str = limits.get("custom_story_generate", "2/day")
     try:
         stories_limit = int(str(limit_str).split("/")[0])
     except (ValueError, AttributeError, IndexError):
         stories_limit = 2
 
+    # Library usage (total stories stored, not daily)
+    library_used = await count_custom_stories(uid)
+    library_limit = STORY_LIBRARY_LIMITS.get(tier, 10)
+
     return SubscriptionStatus(
         tier=tier,
         stories_used_today=stories_used,
         stories_limit=stories_limit,
+        library_used=library_used,
+        library_limit=library_limit,
         expires_at=None,
     )
 

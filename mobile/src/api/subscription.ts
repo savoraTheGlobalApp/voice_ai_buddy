@@ -4,6 +4,8 @@ export interface SubscriptionStatus {
   tier: 'free' | 'premium';
   stories_used_today: number;
   stories_limit: number;
+  library_used: number;
+  library_limit: number;
   expires_at: string | null;
 }
 

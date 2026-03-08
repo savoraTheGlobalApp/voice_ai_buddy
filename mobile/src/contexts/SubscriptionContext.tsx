@@ -17,6 +17,8 @@ interface SubscriptionContextType {
   subscriptionTier: 'free' | 'premium';
   dailyStoriesUsed: number;
   dailyStoriesLimit: number;
+  libraryUsed: number;
+  libraryLimit: number;
   products: IAPProduct[];
   loading: boolean;
   purchasing: boolean;
@@ -41,6 +43,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const [subscriptionTier, setSubscriptionTier] = useState<'free' | 'premium'>('free');
   const [dailyStoriesUsed, setDailyStoriesUsed] = useState(0);
   const [dailyStoriesLimit, setDailyStoriesLimit] = useState(2);
+  const [libraryUsed, setLibraryUsed] = useState(0);
+  const [libraryLimit, setLibraryLimit] = useState(10);
   const [products, setProducts] = useState<IAPProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(false);
@@ -50,6 +54,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     setIsPremium(status.tier === 'premium');
     setDailyStoriesUsed(status.stories_used_today);
     setDailyStoriesLimit(status.stories_limit);
+    setLibraryUsed(status.library_used ?? 0);
+    setLibraryLimit(status.library_limit ?? 10);
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -161,6 +167,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
         subscriptionTier,
         dailyStoriesUsed,
         dailyStoriesLimit,
+        libraryUsed,
+        libraryLimit,
         products,
         loading,
         purchasing,

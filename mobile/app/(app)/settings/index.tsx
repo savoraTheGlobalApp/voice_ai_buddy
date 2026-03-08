@@ -14,6 +14,8 @@ export default function SettingsScreen() {
     isPremium,
     dailyStoriesUsed,
     dailyStoriesLimit,
+    libraryUsed,
+    libraryLimit,
     restorePurchases,
   } = useSubscription();
   const { theme, colors, toggleTheme } = useTheme();
@@ -56,7 +58,7 @@ export default function SettingsScreen() {
               </View>
             </View>
 
-            {/* Usage */}
+            {/* Daily usage */}
             <View style={styles.usageContainer}>
               <Text style={styles.usageLabel}>Stories today</Text>
               <View style={styles.usageBarContainer}>
@@ -73,6 +75,26 @@ export default function SettingsScreen() {
               <Text style={styles.usageText}>
                 {dailyStoriesUsed} / {dailyStoriesLimit} used
                 {storiesRemaining > 0 && ` (${storiesRemaining} remaining)`}
+              </Text>
+            </View>
+
+            {/* Library usage */}
+            <View style={styles.usageContainer}>
+              <Text style={styles.usageLabel}>Story library</Text>
+              <View style={styles.usageBarContainer}>
+                <View
+                  style={[
+                    styles.usageBar,
+                    {
+                      width: `${Math.min(100, (libraryUsed / libraryLimit) * 100)}%`,
+                      backgroundColor: libraryUsed >= libraryLimit ? '#ef4444' : colors.accent,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.usageText}>
+                {libraryUsed} / {libraryLimit} stories saved
+                {libraryUsed >= libraryLimit && ' (full — delete a story to create more)'}
               </Text>
             </View>
 
