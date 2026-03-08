@@ -51,10 +51,6 @@ export default function AppLayout() {
         }}
       >
         <Tabs.Screen
-          name="stories"
-          options={{ href: null }}
-        />
-        <Tabs.Screen
           name="play"
           options={{
             title: 'Play',
