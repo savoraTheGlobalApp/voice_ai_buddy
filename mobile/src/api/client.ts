@@ -10,7 +10,7 @@ import { Platform } from 'react-native';
 const BACKEND_URL = __DEV__
   ? Platform.OS === 'ios'
     ? 'http://localhost:8000'
-    : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app'
+    : 'http://10.0.2.2:8000'
   : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app';
 
 export async function apiClient<T>(
@@ -36,7 +36,10 @@ export async function apiClient<T>(
   }
 
   if (response.status === 429) {
-    throw new Error('Rate limit reached. Please try again later.');
+    const errorText = await response.text();
+    let detail = 'Rate limit reached. Please try again later.';
+    try { const parsed = JSON.parse(errorText); if (parsed.detail) detail = parsed.detail; } catch {}
+    throw new Error(detail);
   }
 
   if (!response.ok) {
