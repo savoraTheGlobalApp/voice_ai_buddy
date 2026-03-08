@@ -64,3 +64,12 @@ export async function listCustomStories(uid: string): Promise<{ stories: CustomS
 export async function deleteCustomStory(uid: string, storyId: string): Promise<void> {
   await apiClient(`/api/users/${uid}/custom-stories/${storyId}`, { method: 'DELETE' });
 }
+
+export async function retryCustomStoryAudio(
+  uid: string,
+  storyId: string,
+): Promise<{ status: string; story_id: string; blocks: number }> {
+  return apiClient(`/api/users/${uid}/custom-stories/${storyId}/retry-audio`, {
+    method: 'POST',
+  });
+}

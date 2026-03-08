@@ -3014,6 +3014,64 @@ async def send_test_notification_endpoint(
 # Custom Story Generation Endpoints
 # =============================================================================
 
+
+@app.get("/api/debug/tts-test")
+async def debug_tts_test():
+    """
+    Diagnostic: test Google TTS credentials + Cloudinary connectivity.
+    Returns a summary of what works and what doesn't (for Railway debugging).
+    Only usable in non-production or by reading logs on Railway.
+    """
+    import os, asyncio, time
+    result: dict = {"tts": {}, "cloudinary": {}, "env": {}}
+
+    # Check env vars (presence only, not values)
+    result["env"] = {
+        "STORY_TTS_PROVIDER": os.environ.get("STORY_TTS_PROVIDER", "(not set → default google_neural2)"),
+        "GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY": "SET" if os.environ.get("GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY") else "MISSING",
+        "CLOUDINARY_URL": "SET" if os.environ.get("CLOUDINARY_URL") else "MISSING",
+    }
+
+    # Test Google credentials loading
+    try:
+        from services.tts_service import _get_google_credentials
+        creds = _get_google_credentials()
+        result["tts"]["credentials"] = "loaded" if creds else "not_found (falling back to ADC)"
+        result["tts"]["service_account"] = creds.service_account_email if creds else None
+    except Exception as e:
+        result["tts"]["credentials"] = f"error: {e}"
+
+    # Test TTS synthesis with a short text
+    try:
+        from services.tts_service import get_tts_provider
+        provider = get_tts_provider()
+        result["tts"]["provider"] = type(provider).__name__
+        t0 = time.time()
+        audio_bytes = await asyncio.wait_for(
+            provider.synthesize("Hello, this is a test.", "en"), timeout=30.0
+        )
+        elapsed = round(time.time() - t0, 2)
+        result["tts"]["status"] = "ok"
+        result["tts"]["bytes"] = len(audio_bytes)
+        result["tts"]["elapsed_s"] = elapsed
+    except Exception as e:
+        result["tts"]["status"] = f"error: {e}"
+
+    # Test Cloudinary config
+    try:
+        import cloudinary
+        cloudinary_url = os.environ.get("CLOUDINARY_URL")
+        if cloudinary_url:
+            cloudinary.config(cloudinary_url=cloudinary_url)
+        cfg = cloudinary.config()
+        result["cloudinary"]["cloud_name"] = cfg.cloud_name
+        result["cloudinary"]["configured"] = bool(cfg.api_key)
+    except Exception as e:
+        result["cloudinary"]["status"] = f"error: {e}"
+
+    return result
+
+
 class CustomStoryGenerateRequest(BaseModel):
     category: str
     length: str = "medium"  # short | medium | long
@@ -3155,6 +3213,44 @@ async def get_custom_story_endpoint(
         raise HTTPException(status_code=404, detail=f"Custom story {story_id} not found")
 
     return story
+
+
+@app.post("/api/users/{uid}/custom-stories/{story_id}/retry-audio")
+async def retry_audio_endpoint(
+    uid: str,
+    story_id: str,
+    background_tasks: BackgroundTasks,
+    token: dict = Depends(get_current_user),
+):
+    """
+    Retry audio generation for a stuck custom story (pending or failed).
+    Re-fetches blocks from Firestore and re-queues background TTS.
+    """
+    from services.custom_story_service import get_custom_story, generate_audio_background
+    from services.firebase_service import get_db, is_firebase_available
+    import asyncio
+
+    require_user_match(uid, token)
+
+    if not is_firebase_available():
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    db = get_db()
+    doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+    doc = await asyncio.to_thread(lambda: doc_ref.get())
+
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail=f"Custom story {story_id} not found")
+
+    data = doc.to_dict()
+    # Reset status to pending so the app shows "generating" again
+    await asyncio.to_thread(lambda: doc_ref.update({"audio_status": "pending"}))
+
+    blocks = data.get("blocks", [])
+    background_tasks.add_task(generate_audio_background, uid, story_id, blocks)
+    logger.info(f"[retry-audio] Queued retry for {story_id} ({len(blocks)} blocks)")
+
+    return {"status": "retrying", "story_id": story_id, "blocks": len(blocks)}
 
 
 @app.delete("/api/users/{uid}/custom-stories/{story_id}")

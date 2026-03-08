@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useBlockContent, useUpdateProgress } from '../../../src/hooks/useStaticStories';
-import { useCustomStory } from '../../../src/hooks/useCustomStory';
+import { useCustomStory, useRetryCustomStoryAudio } from '../../../src/hooks/useCustomStory';
 import {
   trackStoryStarted,
   trackSlideViewed,
@@ -403,6 +403,7 @@ export default function BlockViewerScreen() {
   const [useFallback, setUseFallback] = useState(false);
   const { play } = useSoundEffects();
   const updateProgress = useUpdateProgress();
+  const retryAudio = useRetryCustomStoryAudio();
 
   // Refs for abandoned/completion tracking
   const completedRef = useRef(false);
@@ -561,6 +562,14 @@ export default function BlockViewerScreen() {
         {/* Narrator button — positioned above bottom actions, clear of header */}
         <TouchableOpacity
           onPress={() => {
+            if (isCustom && audioStatus === 'pending') return; // still generating
+            if (isCustom && audioStatus === 'failed') {
+              // Retry audio generation
+              if (currentUser?.uid) {
+                retryAudio.mutate({ uid: currentUser.uid, storyId });
+              }
+              return;
+            }
             play('tabFocus');
             openingNarratorRef.current = true;
             trackNarratorButtonTapped(storyId, displayContent.category);
@@ -569,9 +578,17 @@ export default function BlockViewerScreen() {
           style={[styles.narratorBtn, { top: safeTop + 60 }]}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="headset-outline" size={20} color="#fff" />
+          <Ionicons
+            name={isCustom && audioStatus === 'failed' ? 'refresh-outline' : 'headset-outline'}
+            size={20}
+            color="#fff"
+          />
           <Text style={styles.narratorBtnLabel}>
-            {isCustom && audioStatus === 'pending' ? '🎧 Generating audio...' : 'Listen'}
+            {isCustom && audioStatus === 'pending'
+              ? '⏳ Generating...'
+              : isCustom && audioStatus === 'failed'
+              ? '↺ Retry audio'
+              : 'Listen'}
           </Text>
           {narratorHighlight && <PulsingRing borderRadius={20} />}
         </TouchableOpacity>

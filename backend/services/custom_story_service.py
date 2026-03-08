@@ -210,16 +210,24 @@ async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict])
     """
     Background task: generate TTS audio for all blocks, upload to Cloudinary,
     update Firestore blocks with audio URLs, set audio_status="ready".
+    Sets audio_status="failed" if no blocks succeed.
     """
+    import cloudinary
     import cloudinary.uploader
     from services.firebase_service import get_db, is_firebase_available
     from services.tts_service import get_tts_provider, extract_block_text
 
-    logger.info(f"[audio-bg] Starting audio generation for {story_id}")
+    # Ensure Cloudinary is configured (reads CLOUDINARY_URL env var)
+    cloudinary_url = os.environ.get("CLOUDINARY_URL")
+    if cloudinary_url:
+        cloudinary.config(cloudinary_url=cloudinary_url)
+
+    logger.info(f"[audio-bg] Starting audio generation for {story_id} ({len(blocks)} blocks)")
 
     try:
         provider = get_tts_provider()
         updated_blocks = [dict(b) for b in blocks]
+        audio_ok = 0
 
         for i, block in enumerate(updated_blocks):
             block_id = block.get("id", f"block-{i}")
@@ -228,7 +236,9 @@ async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict])
                 if not text:
                     continue
                 try:
-                    audio_bytes = await provider.synthesize(text, lang)
+                    audio_bytes = await asyncio.wait_for(
+                        provider.synthesize(text, lang), timeout=30.0
+                    )
                     public_id = f"{story_id}/{block_id}_{lang}"
 
                     def _upload(ab=audio_bytes, pid=public_id):
@@ -243,17 +253,19 @@ async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict])
 
                     result = await asyncio.to_thread(_upload)
                     block[f"audio_url_{lang}"] = result["secure_url"]
-                    logger.info(f"[audio-bg] {block_id} {lang.upper()}: uploaded")
+                    audio_ok += 1
+                    logger.info(f"[audio-bg] {block_id} {lang.upper()}: uploaded ({audio_ok} done)")
                 except Exception as e:
                     logger.error(f"[audio-bg] Failed TTS for {block_id} {lang}: {e}")
 
         if is_firebase_available():
             db = get_db()
             doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
+            final_status = "ready" if audio_ok > 0 else "failed"
             await asyncio.to_thread(
-                lambda: doc_ref.update({"blocks": updated_blocks, "audio_status": "ready"})
+                lambda: doc_ref.update({"blocks": updated_blocks, "audio_status": final_status})
             )
-            logger.info(f"[audio-bg] Audio generation complete for {story_id}")
+            logger.info(f"[audio-bg] Done for {story_id}: {audio_ok}/{len(updated_blocks)} blocks OK, status={final_status}")
         else:
             logger.warning(f"[audio-bg] Firebase unavailable — cannot update audio_status for {story_id}")
 

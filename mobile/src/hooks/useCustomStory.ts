@@ -4,6 +4,7 @@ import {
   getCustomStory,
   listCustomStories,
   deleteCustomStory,
+  retryCustomStoryAudio,
   CustomStoryRequest,
   CustomStoryContent,
 } from '../api/customStories';
@@ -76,6 +77,26 @@ export function useDeleteCustomStory() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['custom-stories', variables.uid] });
       queryClient.removeQueries({ queryKey: ['custom-story', variables.uid, variables.storyId] });
+    },
+  });
+}
+
+/**
+ * Mutation: retry audio generation for a stuck (pending/failed) custom story.
+ * Resets audio_status to pending and re-queues TTS background task.
+ */
+export function useRetryCustomStoryAudio() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ uid, storyId }: { uid: string; storyId: string }) =>
+      retryCustomStoryAudio(uid, storyId),
+    onSuccess: (_, variables) => {
+      // Invalidate the single story so polling resumes
+      queryClient.invalidateQueries({
+        queryKey: ['custom-story', variables.uid, variables.storyId],
+      });
+      queryClient.invalidateQueries({ queryKey: ['custom-stories', variables.uid] });
     },
   });
 }
