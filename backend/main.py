@@ -3309,7 +3309,7 @@ async def _get_vapi_usage(uid: str) -> int:
         return 0
 
 @app.get("/api/vapi/remaining")
-async def vapi_remaining(token: dict = Depends(verify_token)):
+async def vapi_remaining(token: dict = Depends(get_current_user)):
     """Returns remaining Vapi seconds for today."""
     uid = token.get("uid")
     used = await _get_vapi_usage(uid)
@@ -3321,7 +3321,7 @@ async def vapi_remaining(token: dict = Depends(verify_token)):
     }
 
 @app.post("/api/vapi/record")
-async def vapi_record(request: Request, token: dict = Depends(verify_token)):
+async def vapi_record(request: Request, token: dict = Depends(get_current_user)):
     """Records seconds used in a Vapi session."""
     uid = token.get("uid")
     body = await request.json()
