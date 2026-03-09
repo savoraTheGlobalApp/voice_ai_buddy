@@ -3282,6 +3282,72 @@ async def delete_custom_story_endpoint(
     return {"status": "deleted", "story_id": story_id}
 
 
+# ── Vapi companion usage tracking ────────────────────────────────────────────
+
+VAPI_DAILY_LIMIT_SECONDS = 600  # 10 min/day per user
+
+def _today_str() -> str:
+    from datetime import date
+    return date.today().isoformat()
+
+async def _get_vapi_usage(uid: str) -> int:
+    """Returns seconds used today for this user."""
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return 0
+        db = get_db()
+        doc = db.collection("vapi_usage").document(uid).get()
+        if not doc.exists:
+            return 0
+        data = doc.to_dict()
+        if data.get("date") != _today_str():
+            return 0  # new day, reset
+        return int(data.get("seconds_used", 0))
+    except Exception as e:
+        logger.error(f"[Vapi] get_usage error: {e}")
+        return 0
+
+@app.get("/api/vapi/remaining")
+async def vapi_remaining(token: dict = Depends(verify_token)):
+    """Returns remaining Vapi seconds for today."""
+    uid = token.get("uid")
+    used = await _get_vapi_usage(uid)
+    remaining = max(0, VAPI_DAILY_LIMIT_SECONDS - used)
+    return {
+        "seconds_remaining": remaining,
+        "seconds_used": used,
+        "daily_limit": VAPI_DAILY_LIMIT_SECONDS,
+    }
+
+@app.post("/api/vapi/record")
+async def vapi_record(request: Request, token: dict = Depends(verify_token)):
+    """Records seconds used in a Vapi session."""
+    uid = token.get("uid")
+    body = await request.json()
+    seconds = int(body.get("seconds_used", 0))
+    if seconds <= 0:
+        return {"ok": True}
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return {"ok": True}
+        db = get_db()
+        ref = db.collection("vapi_usage").document(uid)
+        doc = ref.get()
+        today = _today_str()
+        if doc.exists and doc.to_dict().get("date") == today:
+            current = int(doc.to_dict().get("seconds_used", 0))
+            ref.update({"seconds_used": current + seconds})
+        else:
+            ref.set({"date": today, "seconds_used": seconds})
+        logger.info(f"[Vapi] recorded {seconds}s for {uid}")
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"[Vapi] record error: {e}")
+        return {"ok": False}
+
+
 if __name__ == "__main__":
     import uvicorn
 
