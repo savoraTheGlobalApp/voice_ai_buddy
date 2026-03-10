@@ -110,40 +110,56 @@ def _build_user_prompt(
 
 
 def _build_image_prompt(title: Dict, category: str, values: List[str], request: Dict) -> str:
-    """Build a child-friendly Imagen prompt from story metadata."""
+    """Build a child-friendly Imagen prompt. Uses animals/nature/objects to avoid safety filters."""
     style = (
         "A beautiful children's book illustration in warm, vibrant watercolor style. "
-        "Colorful, magical, child-friendly. No text or letters in the image."
+        "Colorful, magical, whimsical. No text or letters in the image."
     )
-    title_en = title.get("en", "a story") if isinstance(title, dict) else str(title)
     values_str = " and ".join(values[:2]) if values else "kindness"
 
     if category == "habits":
-        habit = request.get("habit", "healthy habits")
+        habit = request.get("habit", "healthy eating")
         helper = request.get("helper", "a magical creature")
-        return f"{style} A joyful Indian child learning to {habit}, guided by {helper}. Theme: {values_str}. Warm sunrise colors."
+        return (
+            f"{style} A glowing {helper} surrounded by symbols of {habit} — "
+            f"fruits, sunlight, stars. Enchanted forest background. Theme: {values_str}. Warm sunrise colors."
+        )
 
     elif category == "emotions":
         emotions = ", ".join(request.get("emotions", ["happiness"])[:2])
-        return f"{style} An expressive Indian child feeling {emotions}. Soft pastel background with glowing light. Theme: {values_str}."
+        return (
+            f"{style} Magical creatures expressing {emotions} — glowing fireflies, "
+            f"soft clouds, rainbow colours. Dreamy soft pastel background. Theme: {values_str}."
+        )
 
     elif category == "moral_values":
         value = request.get("value", "kindness")
         setting = request.get("setting", "a village")
-        return f"{style} Indian children showing {value} in {setting}. Golden hour lighting. Theme: {values_str}."
+        return (
+            f"{style} Friendly woodland animals showing {value} in a magical {setting} — "
+            f"sharing food, helping each other. Golden hour lighting. Theme: {values_str}."
+        )
 
     elif category == "mahabharata":
-        characters = ", ".join(request.get("characters", ["Arjuna"])[:2])
         theme = request.get("theme", "the great battle")
-        return f"{style} Epic scene from the Mahabharata: {theme}, featuring {characters}. Rich jewel tones, ancient Indian setting."
+        return (
+            f"{style} Epic ancient Indian landscape depicting {theme} — divine lotus flowers, "
+            f"celestial chariots, peacocks, a glowing chakra in the sky. Rich jewel tones."
+        )
 
     elif category == "ramayana":
-        characters = ", ".join(request.get("characters", ["Rama"])[:2])
         theme = request.get("theme", "Hanuman's great leap")
-        return f"{style} Magical scene from the Ramayana: {theme}, featuring {characters}. Divine golden light, ancient Indian landscape."
+        return (
+            f"{style} Magical ancient Indian scene: {theme} — golden temples, flying monkeys, "
+            f"divine lotus flowers, glowing gems. Celestial golden light, lush jungle."
+        )
 
     else:
-        return f"{style} {title_en}. Featuring Indian characters. Theme of {values_str}. Warm, uplifting colors."
+        title_en = title.get("en", "a story") if isinstance(title, dict) else str(title)
+        return (
+            f"{style} Magical scene inspired by '{title_en}' — enchanted animals, glowing lanterns, "
+            f"ancient trees. Theme of {values_str}. Warm uplifting colours."
+        )
 
 
 async def generate_cover_image(story_id: str, title: Dict, category: str, values: List[str], request: Dict) -> Optional[str]:
