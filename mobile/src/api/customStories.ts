@@ -31,6 +31,8 @@ export interface CustomStorySummary {
   title: { en: string; hi: string };
   category: string;
   audio_status: 'pending' | 'ready' | 'failed';
+  image_status?: 'pending' | 'ready' | 'failed';
+  cover_image_url?: string;
   values: string[];
   metadata: {
     blocks_count?: number;

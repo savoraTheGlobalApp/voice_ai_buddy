@@ -145,6 +145,23 @@ function MyStoryCard({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const audioReady = story.audio_status === 'ready';
 
+  const overlay = (
+    <LinearGradient
+      colors={['transparent', 'rgba(0,0,0,0.85)']}
+      style={styles.myStoryOverlay}
+    >
+      <Text style={styles.myStoryTitle} numberOfLines={2}>{story.title.en}</Text>
+      <View style={styles.myStoryBadgeRow}>
+        <View style={[styles.myStoryBadge, styles.myStoryCatBadge]}>
+          <Text style={styles.myStoryBadgeText}>{config.label}</Text>
+        </View>
+        <View style={[styles.myStoryBadge, audioReady ? styles.myStoryReadyBadge : styles.myStorySoonBadge]}>
+          <Text style={styles.myStoryBadgeText}>{audioReady ? '🎧 Ready' : '⏳ Soon'}</Text>
+        </View>
+      </View>
+    </LinearGradient>
+  );
+
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -152,23 +169,21 @@ function MyStoryCard({
       activeOpacity={0.8}
       style={styles.myStoryCard}
     >
-      <LinearGradient colors={config.gradient} style={styles.myStoryGradient}>
-        <Text style={styles.myStoryEmoji}>{config.emoji}</Text>
-        <LinearGradient
-          colors={['transparent', 'rgba(0,0,0,0.85)']}
-          style={styles.myStoryOverlay}
-        >
-          <Text style={styles.myStoryTitle} numberOfLines={2}>{story.title.en}</Text>
-          <View style={styles.myStoryBadgeRow}>
-            <View style={[styles.myStoryBadge, styles.myStoryCatBadge]}>
-              <Text style={styles.myStoryBadgeText}>{config.label}</Text>
-            </View>
-            <View style={[styles.myStoryBadge, audioReady ? styles.myStoryReadyBadge : styles.myStorySoonBadge]}>
-              <Text style={styles.myStoryBadgeText}>{audioReady ? '🎧 Ready' : '⏳ Soon'}</Text>
-            </View>
-          </View>
+      {story.cover_image_url ? (
+        <View style={styles.myStoryGradient}>
+          <Image
+            source={{ uri: story.cover_image_url }}
+            style={StyleSheet.absoluteFill}
+            resizeMode="cover"
+          />
+          {overlay}
+        </View>
+      ) : (
+        <LinearGradient colors={config.gradient} style={styles.myStoryGradient}>
+          <Text style={styles.myStoryEmoji}>{config.emoji}</Text>
+          {overlay}
         </LinearGradient>
-      </LinearGradient>
+      )}
     </TouchableOpacity>
   );
 }

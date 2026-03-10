@@ -481,6 +481,8 @@ async def list_custom_stories(uid: str) -> List[Dict[str, Any]]:
                 "title": data.get("title", {"en": "Story", "hi": "कहानी"}),
                 "category": data.get("category", ""),
                 "audio_status": data.get("audio_status", "pending"),
+                "image_status": data.get("image_status", "pending"),
+                "cover_image_url": data.get("cover_image_url"),
                 "values": data.get("values", []),
                 "metadata": data.get("metadata", {}),
                 "created_at": data.get("created_at"),

@@ -34,11 +34,11 @@ const CATEGORIES: {
   tagline: string;
   gradient: [string, string, string];
 }[] = [
-  { key: 'ramayana',     label: 'Ramayana',      emoji: '🏹',  tagline: 'The journey of dharma & devotion',   gradient: ['#3d1a00', '#8b3a0a', '#0d0d0d'] },
-  { key: 'habits',       label: 'Daily Habits',  emoji: '🌱',  tagline: 'Build good habits, shape character', gradient: ['#002a3d', '#0a5070', '#0d0d0d'] },
-  { key: 'emotions',     label: 'Emotions',      emoji: '❤️',  tagline: 'Learn to understand your feelings',  gradient: ['#3d001a', '#8b1050', '#0d0d0d'] },
-  { key: 'moral_values', label: 'Moral Values',  emoji: '🌟',  tagline: 'Timeless wisdom for everyday life',  gradient: ['#003d1a', '#0a7040', '#0d0d0d'] },
-  { key: 'mahabharata',  label: 'Mahabharata',   emoji: '⚔️',  tagline: 'Epic tales of courage & duty',       gradient: ['#1a0a3d', '#4a1570', '#0d0d0d'] },
+  { key: 'ramayana',     label: 'Ramayana',      emoji: '🏹',  tagline: 'The journey of dharma & devotion',   gradient: ['#fff4e0', '#ffe0b2', '#ffcc80'] },
+  { key: 'habits',       label: 'Daily Habits',  emoji: '🌱',  tagline: 'Build good habits, shape character', gradient: ['#e8f8f0', '#c8f0d8', '#a8e6c0'] },
+  { key: 'emotions',     label: 'Emotions',      emoji: '❤️',  tagline: 'Learn to understand your feelings',  gradient: ['#fff0f6', '#ffd6e7', '#ffb3cc'] },
+  { key: 'moral_values', label: 'Moral Values',  emoji: '🌟',  tagline: 'Timeless wisdom for everyday life',  gradient: ['#e8f4ff', '#cce5ff', '#a8d4ff'] },
+  { key: 'mahabharata',  label: 'Mahabharata',   emoji: '⚔️',  tagline: 'Epic tales of courage & duty',       gradient: ['#f3f0ff', '#e5dbff', '#d0bfff'] },
 ];
 
 
@@ -202,7 +202,7 @@ export default function PlayScreen() {
             onPress={() => router.push('/(app)/settings')}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="settings-outline" size={20} color="rgba(255,255,255,0.45)" />
+            <Ionicons name="settings-outline" size={20} color="rgba(0,0,0,0.35)" />
           </TouchableOpacity>
         </View>
 
@@ -236,7 +236,7 @@ export default function PlayScreen() {
               style={[styles.arrowBtn, isFirst && styles.arrowBtnDisabled]}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="chevron-back" size={26} color="#fff" />
+              <Ionicons name="chevron-back" size={26} color="rgba(0,0,0,0.5)" />
             </TouchableOpacity>
 
             <Animated.View style={[styles.categoryCenter, { opacity: textFade }]}>
@@ -250,7 +250,7 @@ export default function PlayScreen() {
               style={[styles.arrowBtn, isLast && styles.arrowBtnDisabled]}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="chevron-forward" size={26} color="#fff" />
+              <Ionicons name="chevron-forward" size={26} color="rgba(0,0,0,0.5)" />
             </TouchableOpacity>
           </View>
 
@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   headerTitle: {
-    color: 'rgba(255,255,255,0.6)',
+    color: 'rgba(0,0,0,0.45)',
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 1.8,
@@ -335,17 +335,17 @@ const styles = StyleSheet.create({
 
   // Speech bubble
   bubble: {
-    backgroundColor: 'rgba(255,255,255,0.13)',
+    backgroundColor: 'rgba(255,255,255,0.65)',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    borderColor: 'rgba(0,0,0,0.08)',
     paddingHorizontal: 16,
     paddingVertical: 10,
     maxWidth: SCREEN_WIDTH - 64,
     alignSelf: 'center',
   },
   bubbleText: {
-    color: '#fff',
+    color: '#3d2c1e',
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
@@ -362,7 +362,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 7,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    borderTopColor: 'rgba(255,255,255,0.2)',
+    borderTopColor: 'rgba(255,255,255,0.65)',
   },
 
   glowRing: {
@@ -388,15 +388,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.6)',
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderColor: 'rgba(0,0,0,0.08)',
   },
   nameBadgeText: {
-    color: '#fff',
+    color: '#3d2c1e',
     fontSize: 13,
     fontWeight: '600',
   },
@@ -412,16 +412,16 @@ const styles = StyleSheet.create({
   },
   arrowBtn: {
     width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(255,255,255,0.6)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)',
   },
   arrowBtnDisabled: { opacity: 0.25 },
   categoryCenter: { alignItems: 'center', gap: 4 },
   categoryEmoji: { fontSize: 28 },
-  categoryLabel: { color: '#fff', fontSize: 17, fontWeight: '800', letterSpacing: 2 },
+  categoryLabel: { color: '#1a1a1a', fontSize: 17, fontWeight: '800', letterSpacing: 2 },
   tagline: {
-    color: 'rgba(255,255,255,0.55)', fontSize: 14,
+    color: 'rgba(0,0,0,0.5)', fontSize: 14,
     fontWeight: '400', textAlign: 'center', marginBottom: 14, fontStyle: 'italic',
   },
   dotsRow: {
@@ -429,14 +429,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', width: '100%',
   },
   dots: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.25)' },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.15)' },
   dotActive: { width: 18, backgroundColor: '#f97316' },
   countBadge: {
-    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.6)', borderRadius: 12,
     paddingHorizontal: 10, paddingVertical: 4,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.08)',
   },
-  countText: { color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: '600' },
+  countText: { color: 'rgba(0,0,0,0.5)', fontSize: 11, fontWeight: '600' },
 
   // Actions
   actions: { alignItems: 'center', marginBottom: 8, gap: 16 },
@@ -450,6 +450,6 @@ const styles = StyleSheet.create({
   startBtnDisabled: { backgroundColor: 'rgba(249,115,22,0.3)', shadowOpacity: 0, elevation: 0 },
   startBtnText: { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
   browseLink: { padding: 4 },
-  browseLinkText: { color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: '500' },
+  browseLinkText: { color: 'rgba(0,0,0,0.35)', fontSize: 13, fontWeight: '500' },
 
 });
