@@ -10,6 +10,7 @@ pydub==0.25.1
 websockets==13.1
 google-cloud-speech==2.21.0
 google-cloud-texttospeech>=2.14.0
+google-cloud-aiplatform>=1.140.0
 firebase-admin>=7.0.0,<8.0.0
 slowapi>=0.1.9
 cloudinary>=1.36.0

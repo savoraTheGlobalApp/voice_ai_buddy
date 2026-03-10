@@ -3178,12 +3178,18 @@ async def generate_custom_story_endpoint(
     # Track usage
     await track_usage(uid, "custom_story_generate")
 
-    # Start TTS audio generation in background
+    # Start audio + image generation in background
     background_tasks.add_task(
         generate_audio_background,
         uid,
         content["contentId"],
         content["blocks"],
+        {
+            "title": content["title"],
+            "category": content["category"],
+            "values": content["metadata"]["values"],
+            "request": story_request.model_dump(exclude_none=True),
+        },
     )
 
     return content

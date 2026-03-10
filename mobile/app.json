@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.shoryak.yourstory"
+      "bundleIdentifier": "com.shoryak.yourstory",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Balu needs your microphone so you can talk with him!"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -26,7 +29,8 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.shoryak.yourstory",
       "googleServicesFile": "./google-services.json",
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.MODIFY_AUDIO_SETTINGS"]
     },
     "web": {
       "favicon": "./assets/favicon.png"

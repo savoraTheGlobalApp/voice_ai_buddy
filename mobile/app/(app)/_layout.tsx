@@ -77,6 +77,15 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="balu"
+          options={{
+            title: 'Balu',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="mic-circle-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',

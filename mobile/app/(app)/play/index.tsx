@@ -9,10 +9,6 @@ import {
   Animated,
   PanResponder,
   BackHandler,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import RiveNarratorAvatar from '../../../src/components/RiveNarratorAvatar';
 import { useCompanion } from '../../../src/contexts/CompanionContext';
+import { COMPANION } from '../../../src/config/companion';
 import { useCoachHighlight } from '../../../src/contexts/OnboardingContext';
 import { PulsingRing } from '../../../src/components/CoachHighlight';
 import { useSoundEffects } from '../../../src/hooks/useSoundEffects';
@@ -44,7 +41,6 @@ const CATEGORIES: {
   { key: 'mahabharata',  label: 'Mahabharata',   emoji: '⚔️',  tagline: 'Epic tales of courage & duty',       gradient: ['#1a0a3d', '#4a1570', '#0d0d0d'] },
 ];
 
-const SUGGESTED_NAMES = ['Leo', 'Golu', 'Moti'];
 
 // ── Speech bubble ─────────────────────────────────────────────────────────────
 function CompanionBubble({ text, visible }: { text: string; visible: boolean }) {
@@ -82,10 +78,6 @@ export default function PlayScreen() {
   // Bubble visibility — shown when tab is focused
   const [bubbleVisible, setBubbleVisible] = useState(false);
 
-  // Name modal
-  const [nameModalVisible, setNameModalVisible] = useState(false);
-  const [draftName, setDraftName] = useState('');
-  const [draftChildName, setDraftChildName] = useState('');
 
   // ── Animated gradient cross-fade ──────────────────────────────────────────
   const gradientFade = useRef(new Animated.Value(0)).current;
@@ -189,23 +181,6 @@ export default function PlayScreen() {
     router.push(`/(app)/play/narrator?contentId=${pick.story_id}`);
   };
 
-  const confirmName = () => {
-    const trimmed = draftName.trim();
-    if (!trimmed) return;
-    play('nameConfirmed');
-    companion.setName(trimmed);
-    const childTrimmed = draftChildName.trim();
-    if (childTrimmed) companion.setChildName(childTrimmed);
-    setNameModalVisible(false);
-    setDraftName('');
-    setDraftChildName('');
-  };
-
-  const openNameModal = () => {
-    setDraftName(companion.name ?? '');
-    setDraftChildName(companion.childName ?? '');
-    setNameModalVisible(true);
-  };
 
   const isFirst = categoryIdx === 0;
   const isLast  = categoryIdx === CATEGORIES.length - 1;
@@ -247,19 +222,9 @@ export default function PlayScreen() {
           </View>
 
           {/* Name badge below avatar */}
-          <TouchableOpacity onPress={openNameModal} style={styles.nameBadge} activeOpacity={0.75}>
-            {companion.isNamed ? (
-              <>
-                <Text style={styles.nameBadgeText}>{companion.name}</Text>
-                <Ionicons name="pencil" size={11} color="rgba(255,255,255,0.6)" />
-              </>
-            ) : (
-              <>
-                <Ionicons name="help-circle-outline" size={14} color="rgba(255,255,255,0.7)" />
-                <Text style={styles.nameBadgeText}>Tap to name me</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <View style={styles.nameBadge}>
+            <Text style={styles.nameBadgeText}>{COMPANION.name} {COMPANION.emoji}</Text>
+          </View>
         </View>
 
         {/* Category navigation */}
@@ -334,68 +299,6 @@ export default function PlayScreen() {
 
       </SafeAreaView>
 
-      {/* Name modal */}
-      <Modal visible={nameModalVisible} transparent animationType="slide" onRequestClose={() => setNameModalVisible(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalBackdrop}>
-          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setNameModalVisible(false)} />
-          <View style={styles.sheet}>
-            {/* Small avatar */}
-            <View style={styles.sheetAvatar}>
-              <RiveNarratorAvatar isSpeaking={false} isLoading={false} size={80} />
-            </View>
-
-            <Text style={styles.sheetTitle}>What should you call me?</Text>
-
-            {/* Suggested names */}
-            <View style={styles.suggestionsRow}>
-              {SUGGESTED_NAMES.map((n) => (
-                <TouchableOpacity
-                  key={n}
-                  onPress={() => { play('nameSelect'); setDraftName(n); }}
-                  style={[styles.suggestion, draftName === n && styles.suggestionActive]}
-                >
-                  <Text style={[styles.suggestionText, draftName === n && styles.suggestionTextActive]}>{n}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Text input for companion name */}
-            <TextInput
-              value={draftName}
-              onChangeText={setDraftName}
-              placeholder="Type your own name..."
-              placeholderTextColor="rgba(255,255,255,0.35)"
-              maxLength={12}
-              style={styles.nameInput}
-              autoCorrect={false}
-            />
-
-            {/* Divider */}
-            <View style={styles.sheetDivider} />
-            <Text style={styles.sheetSubtitle}>And what's your name?</Text>
-
-            {/* Text input for child name */}
-            <TextInput
-              value={draftChildName}
-              onChangeText={setDraftChildName}
-              placeholder="e.g. Arjun, Priya..."
-              placeholderTextColor="rgba(255,255,255,0.35)"
-              maxLength={16}
-              style={styles.nameInput}
-              autoCorrect={false}
-            />
-
-            {/* Confirm */}
-            <TouchableOpacity
-              onPress={confirmName}
-              disabled={!draftName.trim()}
-              style={[styles.confirmBtn, !draftName.trim() && styles.confirmBtnDisabled]}
-            >
-              <Text style={styles.confirmText}>Let's go! ▶</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
     </View>
   );
 }
@@ -549,54 +452,4 @@ const styles = StyleSheet.create({
   browseLink: { padding: 4 },
   browseLinkText: { color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: '500' },
 
-  // Name modal
-  modalBackdrop: {
-    flex: 1, justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  sheet: {
-    backgroundColor: '#1a1a2e',
-    borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    padding: 28, alignItems: 'center', gap: 16,
-    borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
-  },
-  sheetAvatar: {
-    width: 90, height: 90, borderRadius: 45,
-    overflow: 'hidden', borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  sheetTitle: {
-    color: '#fff', fontSize: 18, fontWeight: '700', textAlign: 'center',
-  },
-  sheetDivider: {
-    width: '100%', height: 1, backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  sheetSubtitle: {
-    color: 'rgba(255,255,255,0.6)', fontSize: 14, fontWeight: '600', textAlign: 'center',
-  },
-  suggestionsRow: { flexDirection: 'row', gap: 12 },
-  suggestion: {
-    paddingHorizontal: 20, paddingVertical: 10,
-    borderRadius: 24, borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.2)',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-  },
-  suggestionActive: { backgroundColor: '#f97316', borderColor: '#f97316' },
-  suggestionText: { color: 'rgba(255,255,255,0.7)', fontSize: 15, fontWeight: '600' },
-  suggestionTextActive: { color: '#fff' },
-  nameInput: {
-    width: '100%',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14, borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 16, paddingVertical: 12,
-    color: '#fff', fontSize: 15, textAlign: 'center',
-  },
-  confirmBtn: {
-    width: '100%', backgroundColor: '#f97316',
-    paddingVertical: 14, borderRadius: 28,
-    alignItems: 'center',
-  },
-  confirmBtnDisabled: { backgroundColor: 'rgba(249,115,22,0.3)' },
-  confirmText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 });

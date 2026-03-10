@@ -2,15 +2,18 @@
 Custom Story Service
 
 Generates bilingual block-based stories on demand using GPT-4o-mini.
-TTS audio is generated asynchronously as a background task.
+TTS audio + cover image are generated asynchronously as background tasks.
 
 Firestore path: users/{uid}/custom_stories/{story_id}
 Cloudinary path: custom-story-audio/{story_id}/{block_id}_{lang}.mp3
+Cloudinary path: custom-story-covers/{story_id}.png
 """
 import os
+import json
 import secrets
 import logging
 import asyncio
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -106,6 +109,121 @@ def _build_user_prompt(
         return f"{base}Story about {topics}. Teach values: {values}."
 
 
+def _build_image_prompt(title: Dict, category: str, values: List[str], request: Dict) -> str:
+    """Build a child-friendly Imagen prompt from story metadata."""
+    style = (
+        "A beautiful children's book illustration in warm, vibrant watercolor style. "
+        "Colorful, magical, child-friendly. No text or letters in the image."
+    )
+    title_en = title.get("en", "a story") if isinstance(title, dict) else str(title)
+    values_str = " and ".join(values[:2]) if values else "kindness"
+
+    if category == "habits":
+        habit = request.get("habit", "healthy habits")
+        helper = request.get("helper", "a magical creature")
+        return f"{style} A joyful Indian child learning to {habit}, guided by {helper}. Theme: {values_str}. Warm sunrise colors."
+
+    elif category == "emotions":
+        emotions = ", ".join(request.get("emotions", ["happiness"])[:2])
+        return f"{style} An expressive Indian child feeling {emotions}. Soft pastel background with glowing light. Theme: {values_str}."
+
+    elif category == "moral_values":
+        value = request.get("value", "kindness")
+        setting = request.get("setting", "a village")
+        return f"{style} Indian children showing {value} in {setting}. Golden hour lighting. Theme: {values_str}."
+
+    elif category == "mahabharata":
+        characters = ", ".join(request.get("characters", ["Arjuna"])[:2])
+        theme = request.get("theme", "the great battle")
+        return f"{style} Epic scene from the Mahabharata: {theme}, featuring {characters}. Rich jewel tones, ancient Indian setting."
+
+    elif category == "ramayana":
+        characters = ", ".join(request.get("characters", ["Rama"])[:2])
+        theme = request.get("theme", "Hanuman's great leap")
+        return f"{style} Magical scene from the Ramayana: {theme}, featuring {characters}. Divine golden light, ancient Indian landscape."
+
+    else:
+        return f"{style} {title_en}. Featuring Indian characters. Theme of {values_str}. Warm, uplifting colors."
+
+
+async def generate_cover_image(story_id: str, title: Dict, category: str, values: List[str], request: Dict) -> Optional[str]:
+    """
+    Generate a cover image using Vertex AI Imagen 3, upload to Cloudinary.
+    Returns the Cloudinary URL or None on failure.
+    Cost: ~$0.03 per image (Imagen 3 standard).
+    """
+    import cloudinary
+    import cloudinary.uploader
+
+    try:
+        creds_json = os.environ.get("GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY")
+        if not creds_json:
+            logger.warning("[image-bg] GOOGLE_CLOUD_SERVICE_ACCOUNT_KEY not set, skipping image generation")
+            return None
+
+        creds_dict = json.loads(creds_json)
+        project_id = creds_dict["project_id"]
+
+        # Write creds to temp file for Vertex AI auth
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(creds_dict, f)
+            creds_file = f.name
+
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_file
+
+        from google import genai
+        from google.genai import types as genai_types
+
+        client = genai.Client(vertexai=True, project=project_id, location="us-central1")
+        prompt = _build_image_prompt(title, category, values, request)
+
+        logger.info(f"[image-bg] Generating cover image for {story_id}...")
+
+        def _generate():
+            return client.models.generate_images(
+                model="imagen-3.0-generate-002",
+                prompt=prompt,
+                config=genai_types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio="4:3",
+                ),
+            )
+
+        response = await asyncio.to_thread(_generate)
+
+        os.unlink(creds_file)
+
+        if not response.generated_images:
+            logger.warning(f"[image-bg] Imagen returned no images for {story_id}")
+            return None
+
+        image_bytes = response.generated_images[0].image.image_bytes
+
+        # Upload to Cloudinary
+        cloudinary_url = os.environ.get("CLOUDINARY_URL")
+        if cloudinary_url:
+            cloudinary.config(cloudinary_url=cloudinary_url)
+
+        def _upload(img_bytes=image_bytes):
+            return cloudinary.uploader.upload(
+                img_bytes,
+                resource_type="image",
+                folder="custom-story-covers",
+                public_id=story_id,
+                overwrite=True,
+                format="png",
+            )
+
+        result = await asyncio.to_thread(_upload)
+        url = result["secure_url"]
+        logger.info(f"[image-bg] Cover image uploaded for {story_id}: {url}")
+        return url
+
+    except Exception as e:
+        logger.error(f"[image-bg] Cover image generation failed for {story_id}: {e}")
+        return None
+
+
 def _normalize_blocks(blocks: List[Dict]) -> List[Dict]:
     """Add order field, ensure IDs and characterIds are present."""
     result = []
@@ -184,6 +302,8 @@ async def generate_custom_story(
         "title": title,
         "category": category,
         "audio_status": "pending",
+        "image_status": "pending",
+        "cover_image_url": None,
         "values": values,
         "blocks": blocks,
         "metadata": {
@@ -206,24 +326,35 @@ async def generate_custom_story(
     return _story_to_block_content(story_doc)
 
 
-async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict]) -> None:
+async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict], story_meta: Optional[Dict] = None) -> None:
     """
-    Background task: generate TTS audio for all blocks, upload to Cloudinary,
-    update Firestore blocks with audio URLs, set audio_status="ready".
-    Sets audio_status="failed" if no blocks succeed.
+    Background task: generate TTS audio for all blocks + cover image in parallel.
+    Uploads to Cloudinary, updates Firestore blocks with audio URLs and cover_image_url.
     """
     import cloudinary
     import cloudinary.uploader
     from services.firebase_service import get_db, is_firebase_available
     from services.tts_service import get_tts_provider, extract_block_text
 
-    # Ensure Cloudinary is configured (reads CLOUDINARY_URL env var)
     cloudinary_url = os.environ.get("CLOUDINARY_URL")
     if cloudinary_url:
         cloudinary.config(cloudinary_url=cloudinary_url)
 
-    logger.info(f"[audio-bg] Starting audio generation for {story_id} ({len(blocks)} blocks)")
+    logger.info(f"[assets-bg] Starting asset generation for {story_id} ({len(blocks)} blocks)")
 
+    # Kick off image generation in parallel with audio
+    meta = story_meta or {}
+    image_task = asyncio.create_task(
+        generate_cover_image(
+            story_id=story_id,
+            title=meta.get("title", {}),
+            category=meta.get("category", ""),
+            values=meta.get("values", []),
+            request=meta.get("request", {}),
+        )
+    )
+
+    # Audio generation
     try:
         provider = get_tts_provider()
         updated_blocks = [dict(b) for b in blocks]
@@ -258,26 +389,36 @@ async def generate_audio_background(uid: str, story_id: str, blocks: List[Dict])
                 except Exception as e:
                     logger.error(f"[audio-bg] Failed TTS for {block_id} {lang}: {e}")
 
+        # Wait for image to finish
+        cover_image_url = await image_task
+
         if is_firebase_available():
             db = get_db()
             doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
             final_status = "ready" if audio_ok > 0 else "failed"
-            await asyncio.to_thread(
-                lambda: doc_ref.update({"blocks": updated_blocks, "audio_status": final_status})
-            )
-            logger.info(f"[audio-bg] Done for {story_id}: {audio_ok}/{len(updated_blocks)} blocks OK, status={final_status}")
+            update_data = {
+                "blocks": updated_blocks,
+                "audio_status": final_status,
+                "image_status": "ready" if cover_image_url else "failed",
+                "cover_image_url": cover_image_url,
+            }
+            await asyncio.to_thread(lambda: doc_ref.update(update_data))
+            logger.info(f"[assets-bg] Done for {story_id}: audio={final_status}, image={'ready' if cover_image_url else 'failed'}")
         else:
-            logger.warning(f"[audio-bg] Firebase unavailable — cannot update audio_status for {story_id}")
+            logger.warning(f"[assets-bg] Firebase unavailable — cannot update statuses for {story_id}")
 
     except Exception as e:
-        logger.error(f"[audio-bg] Audio generation failed for {story_id}: {e}")
+        logger.error(f"[assets-bg] Asset generation failed for {story_id}: {e}")
+        # Cancel image task if still running
+        if not image_task.done():
+            image_task.cancel()
         try:
             if is_firebase_available():
                 db = get_db()
                 doc_ref = db.collection("users").document(uid).collection("custom_stories").document(story_id)
-                await asyncio.to_thread(lambda: doc_ref.update({"audio_status": "failed"}))
+                await asyncio.to_thread(lambda: doc_ref.update({"audio_status": "failed", "image_status": "failed"}))
         except Exception as update_err:
-            logger.error(f"[audio-bg] Failed to mark audio_status=failed for {story_id}: {update_err}")
+            logger.error(f"[assets-bg] Failed to mark statuses=failed for {story_id}: {update_err}")
 
 
 async def get_custom_story(uid: str, story_id: str) -> Optional[Dict[str, Any]]:
@@ -405,6 +546,8 @@ def _story_to_block_content(data: Dict[str, Any]) -> Dict[str, Any]:
             "characters": [],
             "difficulty_level": "beginner",
         },
+        "cover_image_url": data.get("cover_image_url"),
         "audio_status": data.get("audio_status", "pending"),
+        "image_status": data.get("image_status", "pending"),
         "created_at": data.get("created_at"),
     }
