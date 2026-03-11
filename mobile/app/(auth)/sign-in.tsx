@@ -47,7 +47,11 @@ export default function SignIn() {
 
   return (
     <View style={styles.root}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
+      <KeyboardAvoidingView
+        behavior="padding"
+        keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0}
+        style={styles.flex}
+      >
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -65,7 +69,7 @@ export default function SignIn() {
                 style={styles.heroBubble}
               >
                 <SafeAreaView edges={['top']} style={styles.heroInner}>
-                  <RiveNarratorAvatar isSpeaking={false} isLoading={false} size={SCREEN_W * 0.78} />
+                  <RiveNarratorAvatar isSpeaking={false} isListening={false} size={SCREEN_W * 0.78} />
                   <Text style={styles.title}>YourStory</Text>
                   <Text style={styles.tagline}>Magical stories for little minds ✨</Text>
                 </SafeAreaView>
@@ -123,7 +127,7 @@ export default function SignIn() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#fff8f0' },
   flex: { flex: 1 },
-  scrollContent: { flexGrow: 1 },
+  scrollContent: { flexGrow: 1, paddingBottom: 40 },
 
   // Large oval dome — wider than screen so sides curve, big bottom radius = circular bottom edge
   heroBubble: {

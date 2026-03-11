@@ -53,7 +53,7 @@ export default function SignUp() {
 
   return (
     <View style={styles.root}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.flex}>
+      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0} style={styles.flex}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
@@ -71,7 +71,7 @@ export default function SignUp() {
                 style={styles.heroBubble}
               >
                 <SafeAreaView edges={['top']} style={styles.heroInner}>
-                  <RiveNarratorAvatar isSpeaking={false} isLoading={false} size={SCREEN_W * 0.62} />
+                  <RiveNarratorAvatar isSpeaking={false} isListening={false} size={SCREEN_W * 0.62} />
                   <Text style={styles.title}>YourStory</Text>
                   <Text style={styles.tagline}>Begin your child's story journey 📖</Text>
                 </SafeAreaView>
@@ -144,7 +144,7 @@ export default function SignUp() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#fff8f0' },
   flex: { flex: 1 },
-  scrollContent: { flexGrow: 1 },
+  scrollContent: { flexGrow: 1, paddingBottom: 40 },
 
   heroBubble: {
     width: SCREEN_W * 1.15,
