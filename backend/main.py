@@ -3486,7 +3486,7 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         # ── Balu sessions this week ──────────────────────────────────────────
         sessions_ref = (
             db.collection("balu_sessions").document(uid).collection("sessions")
-            .where("week", "==", week_str)
+            .where(filter=("week", "==", week_str))
             .stream()
         )
         sessions = [s.to_dict() for s in sessions_ref]
@@ -3515,7 +3515,7 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         # ── Stories completed this week ──────────────────────────────────────
         progress_ref = (
             db.collection("users").document(uid).collection("story_progress")
-            .where("status", "==", "completed")
+            .where(filter=("status", "==", "completed"))
             .stream()
         )
         completed_stories = []

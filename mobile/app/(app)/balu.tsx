@@ -93,12 +93,20 @@ function buildBaluHtml(assistantId: string) { return `<!DOCTYPE html>
   function initVapi() {
     try {
       var vapi = new window.Vapi(window.__VAPI_KEY__);
-      vapi.on('call-start',   function() {
-        // vapi.call is populated by the time call-start fires
-        var cid = (vapi.call && vapi.call.id) ? vapi.call.id : '';
-        post('call-start', { call_id: cid });
+      var _callId = '';
+      vapi.on('call-start', function() {
+        // Try to grab call ID immediately; also poll briefly in case it populates async
+        _callId = (vapi.call && vapi.call.id) ? vapi.call.id : '';
+        setTimeout(function() {
+          if (!_callId) _callId = (vapi.call && vapi.call.id) ? vapi.call.id : '';
+        }, 2000);
+        post('call-start', {});
       });
-      vapi.on('call-end',     function() { post('call-end'); });
+      vapi.on('call-end', function() {
+        // By call-end the call object is always populated
+        if (!_callId) _callId = (vapi.call && vapi.call.id) ? vapi.call.id : '';
+        post('call-end', { call_id: _callId });
+      });
       vapi.on('speech-start', function() { post('speech-start'); });
       vapi.on('speech-end',   function() { post('speech-end'); });
       vapi.on('error', function(e) { post('error', { message: e ? (e.message || e.errorMsg || JSON.stringify(e)) : 'unknown' }); });
@@ -295,10 +303,12 @@ export default function BaluScreen() {
       const msg = JSON.parse(event.nativeEvent.data);
       switch (msg.type) {
         case 'call-start':
-          callIdRef.current = msg.payload?.call_id ?? '';
           setStatus('active');
           break;
-        case 'call-end':          endCall(); break;
+        case 'call-end':
+          if (msg.payload?.call_id) callIdRef.current = msg.payload.call_id;
+          endCall();
+          break;
         case 'speech-start':      setStatus('balu-speaking'); break;
         case 'speech-end':        setStatus('thinking'); break;
         case 'user-speech-start': setStatus('user-speaking'); break;
