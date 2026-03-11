@@ -3291,6 +3291,7 @@ async def delete_custom_story_endpoint(
 # ── Vapi companion usage tracking ────────────────────────────────────────────
 
 VAPI_DAILY_LIMIT_SECONDS = 600  # 10 min/day per user
+VAPI_API_KEY = os.getenv("VAPI_API_KEY", "")
 
 def _today_str() -> str:
     from datetime import date
@@ -3327,11 +3328,13 @@ async def vapi_remaining(token: dict = Depends(get_current_user)):
     }
 
 @app.post("/api/vapi/record")
-async def vapi_record(request: Request, token: dict = Depends(get_current_user)):
-    """Records seconds used in a Vapi session."""
+async def vapi_record(request: Request, background_tasks: BackgroundTasks, token: dict = Depends(get_current_user)):
+    """Records seconds used in a Vapi session and triggers background analysis."""
     uid = token.get("uid")
     body = await request.json()
     seconds = int(body.get("seconds_used", 0))
+    call_id: str = body.get("call_id", "")
+    assistant_mode: str = body.get("assistant_mode", "classic")
     if seconds <= 0:
         return {"ok": True}
     try:
@@ -3348,10 +3351,220 @@ async def vapi_record(request: Request, token: dict = Depends(get_current_user))
         else:
             ref.set({"date": today, "seconds_used": seconds})
         logger.info(f"[Vapi] recorded {seconds}s for {uid}")
+
+        # Trigger background transcript analysis if we have a call_id
+        if call_id and seconds >= 30:  # Only analyse sessions >= 30s
+            background_tasks.add_task(_analyze_balu_session, uid, call_id, assistant_mode, seconds)
+
         return {"ok": True}
     except Exception as e:
         logger.error(f"[Vapi] record error: {e}")
         return {"ok": False}
+
+
+# ── Balu session analysis ─────────────────────────────────────────────────────
+
+async def _analyze_balu_session(uid: str, call_id: str, assistant_mode: str, duration_seconds: int):
+    """Background task: fetch Vapi transcript → GPT-4o-mini analysis → store in Firestore."""
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return
+        if not VAPI_API_KEY:
+            logger.warning("[Balu] VAPI_API_KEY not set, skipping transcript analysis")
+            return
+
+        # Wait for Vapi to finish processing the transcript (typically 1-2 min)
+        await asyncio.sleep(90)
+
+        # 1. Fetch Vapi call transcript (retry once after 60s if still empty)
+        transcript_text = ""
+        child_messages = []
+        for attempt in range(2):
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(
+                    f"https://api.vapi.ai/call/{call_id}",
+                    headers={"Authorization": f"Bearer {VAPI_API_KEY}"},
+                )
+            if r.status_code != 200:
+                logger.warning(f"[Balu] Vapi fetch failed: {r.status_code} for call {call_id}")
+                return
+            call_data = r.json()
+            transcript_text = call_data.get("transcript", "")
+            messages = call_data.get("messages", [])
+            child_messages = [
+                m.get("message", "") or m.get("content", "")
+                for m in messages
+                if m.get("role") == "user"
+            ]
+            if transcript_text or child_messages:
+                break
+            # Transcript not ready yet — wait 60s and retry
+            if attempt == 0:
+                logger.info(f"[Balu] Transcript empty on first attempt, retrying in 60s for call {call_id}")
+                await asyncio.sleep(60)
+
+        if not transcript_text and not child_messages:
+            logger.info(f"[Balu] Empty transcript for call {call_id}, skipping analysis")
+            return
+
+        # 2. Analyse with GPT-4o-mini
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key:
+            return
+
+        analysis_prompt = f"""You are analysing a conversation between a 3-7 year old child and an AI storytelling companion called Balu.
+
+Transcript:
+{transcript_text or chr(10).join(child_messages)}
+
+Extract the following as JSON (keep each list concise, max 8 items each):
+{{
+  "words_learned": ["list of interesting or new words the child used or responded positively to"],
+  "concepts_asked": ["questions or concepts the child was curious about, phrased simply e.g. 'Why does Hanuman fly?'"],
+  "interests_shown": ["topics or themes the child showed enthusiasm or curiosity about"],
+  "session_highlight": "One warm, parent-friendly sentence summarising the most memorable moment."
+}}
+
+Return valid JSON only. No explanation."""
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": analysis_prompt}],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.3,
+                },
+            )
+            result = r.json()
+            raw = result["choices"][0]["message"]["content"]
+            analysis = json.loads(raw)
+
+        # 3. Store in Firestore
+        db = get_db()
+        now = datetime.now(timezone.utc)
+        week_str = now.strftime("%Y-W%W")
+        session_doc = {
+            "call_id": call_id,
+            "assistant_mode": assistant_mode,
+            "duration_seconds": duration_seconds,
+            "started_at": now.isoformat(),
+            "week": week_str,
+            "words_learned": analysis.get("words_learned", []),
+            "concepts_asked": analysis.get("concepts_asked", []),
+            "interests_shown": analysis.get("interests_shown", []),
+            "session_highlight": analysis.get("session_highlight", ""),
+        }
+        db.collection("balu_sessions").document(uid).collection("sessions").add(session_doc)
+        logger.info(f"[Balu] Stored session analysis for {uid}, call {call_id}")
+
+    except Exception as e:
+        logger.error(f"[Balu] analyze_session error: {e}")
+
+
+@app.get("/api/parent/weekly-summary")
+async def parent_weekly_summary(token: dict = Depends(get_current_user)):
+    """Returns this week's parental insights: language, stories, and knowledge metrics."""
+    uid = token.get("uid")
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return {"error": "unavailable"}
+        db = get_db()
+
+        now = datetime.now(timezone.utc)
+        week_str = now.strftime("%Y-W%W")
+        week_start = now - __import__("datetime").timedelta(days=now.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # ── Balu sessions this week ──────────────────────────────────────────
+        sessions_ref = (
+            db.collection("balu_sessions").document(uid).collection("sessions")
+            .where("week", "==", week_str)
+            .stream()
+        )
+        sessions = [s.to_dict() for s in sessions_ref]
+
+        total_balu_seconds = sum(s.get("duration_seconds", 0) for s in sessions)
+        classic_seconds = sum(s.get("duration_seconds", 0) for s in sessions if s.get("assistant_mode") == "classic")
+        fun_seconds = sum(s.get("duration_seconds", 0) for s in sessions if s.get("assistant_mode") == "learning")
+
+        # Aggregate knowledge from all sessions
+        all_words: list = []
+        all_concepts: list = []
+        all_interests: list = []
+        highlights: list = []
+        for s in sessions:
+            all_words.extend(s.get("words_learned", []))
+            all_concepts.extend(s.get("concepts_asked", []))
+            all_interests.extend(s.get("interests_shown", []))
+            if s.get("session_highlight"):
+                highlights.append(s["session_highlight"])
+
+        # Deduplicate preserving order
+        def dedup(lst):
+            seen = set()
+            return [x for x in lst if not (x.lower() in seen or seen.add(x.lower()))]
+
+        # ── Stories completed this week ──────────────────────────────────────
+        progress_ref = (
+            db.collection("users").document(uid).collection("story_progress")
+            .where("status", "==", "completed")
+            .stream()
+        )
+        completed_stories = []
+        for doc in progress_ref:
+            data = doc.to_dict()
+            completed_at = data.get("completed_at")
+            # Filter to this week
+            if completed_at:
+                if isinstance(completed_at, str):
+                    try:
+                        completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+                    except Exception:
+                        completed_at = None
+                if completed_at and hasattr(completed_at, "tzinfo"):
+                    if completed_at.tzinfo is None:
+                        completed_at = completed_at.replace(tzinfo=timezone.utc)
+                    if completed_at >= week_start:
+                        completed_stories.append({
+                            "story_id": doc.id,
+                            "completed_at": completed_at.isoformat(),
+                            "language": data.get("language", "en"),
+                        })
+
+        # ── Language breakdown ───────────────────────────────────────────────
+        # Stories: count by language field (en vs hi)
+        hi_stories = sum(1 for s in completed_stories if s.get("language") == "hi")
+        en_stories = len(completed_stories) - hi_stories
+
+        return {
+            "week": week_str,
+            "balu": {
+                "total_minutes": round(total_balu_seconds / 60, 1),
+                "sessions_count": len(sessions),
+                "stories_mode_minutes": round(classic_seconds / 60, 1),
+                "fun_mode_minutes": round(fun_seconds / 60, 1),
+            },
+            "knowledge": {
+                "words_learned": dedup(all_words)[:10],
+                "concepts_asked": dedup(all_concepts)[:8],
+                "interests_shown": dedup(all_interests)[:6],
+                "session_highlights": highlights[-3:],   # last 3
+            },
+            "stories": {
+                "completed_this_week": completed_stories,
+                "total_completed": len(completed_stories),
+                "hindi_count": hi_stories,
+                "english_count": en_stories,
+            },
+        }
+    except Exception as e:
+        logger.error(f"[Parent] weekly_summary error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load summary")
 
 
 if __name__ == "__main__":
