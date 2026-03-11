@@ -14,7 +14,7 @@ import asyncio
 import time
 import uuid
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -3350,14 +3350,11 @@ async def vapi_record(request: Request, background_tasks: BackgroundTasks, token
             ref.update({"seconds_used": current + seconds})
         else:
             ref.set({"date": today, "seconds_used": seconds})
-        logger.info(f"[Vapi] recorded {seconds}s for {uid}, call_id={call_id!r}, mode={assistant_mode}")
+        logger.info(f"[Vapi] recorded {seconds}s for {uid}, mode={assistant_mode}")
 
-        # Trigger background transcript analysis if we have a call_id
-        if call_id and seconds >= 30:  # Only analyse sessions >= 30s
-            logger.info(f"[Balu] queuing transcript analysis for call {call_id}")
-            background_tasks.add_task(_analyze_balu_session, uid, call_id, assistant_mode, seconds)
-        elif not call_id:
-            logger.warning(f"[Balu] call_id missing — skipping analysis for {uid}")
+        # Trigger background analysis — look up call_id server-side via Vapi API
+        if seconds >= 30:
+            background_tasks.add_task(_analyze_balu_session, uid, assistant_mode, seconds)
 
         return {"ok": True}
     except Exception as e:
@@ -3367,8 +3364,13 @@ async def vapi_record(request: Request, background_tasks: BackgroundTasks, token
 
 # ── Balu session analysis ─────────────────────────────────────────────────────
 
-async def _analyze_balu_session(uid: str, call_id: str, assistant_mode: str, duration_seconds: int):
-    """Background task: fetch Vapi transcript → GPT-4o-mini analysis → store in Firestore."""
+VAPI_ASSISTANT_IDS = {
+    "classic":  os.getenv("VAPI_ASSISTANT_ID",    ""),
+    "learning": os.getenv("VAPI_ASSISTANT_ID_V2", ""),
+}
+
+async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds: int):
+    """Background task: find recent Vapi call → GPT-4o-mini analysis → store in Firestore."""
     try:
         from services.firebase_service import is_firebase_available, get_db
         if not is_firebase_available():
@@ -3380,31 +3382,58 @@ async def _analyze_balu_session(uid: str, call_id: str, assistant_mode: str, dur
         # Wait for Vapi to finish processing the transcript (typically 1-2 min)
         await asyncio.sleep(90)
 
-        # 1. Fetch Vapi call transcript (retry once after 60s if still empty)
+        # 1. Find the call server-side — query Vapi call list for recent calls on this assistant
+        assistant_id = VAPI_ASSISTANT_IDS.get(assistant_mode, "")
+        call_id = ""
         transcript_text = ""
         child_messages = []
+
         for attempt in range(2):
             async with httpx.AsyncClient(timeout=20) as client:
+                params = {"limit": "5"}
+                if assistant_id:
+                    params["assistantId"] = assistant_id
                 r = await client.get(
-                    f"https://api.vapi.ai/call/{call_id}",
+                    "https://api.vapi.ai/call",
                     headers={"Authorization": f"Bearer {VAPI_API_KEY}"},
+                    params=params,
                 )
             if r.status_code != 200:
-                logger.warning(f"[Balu] Vapi fetch failed: {r.status_code} for call {call_id}")
+                logger.warning(f"[Balu] Vapi call list failed: {r.status_code}")
                 return
-            call_data = r.json()
-            transcript_text = call_data.get("transcript", "")
-            messages = call_data.get("messages", [])
-            child_messages = [
-                m.get("message", "") or m.get("content", "")
-                for m in messages
-                if m.get("role") == "user"
-            ]
+
+            calls = r.json()
+            if not isinstance(calls, list):
+                calls = calls.get("results", [])
+
+            # Find the most recent call that ended within the last 15 minutes
+            # and whose duration roughly matches what we recorded
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+            for call in calls:
+                ended_at_str = call.get("endedAt") or call.get("ended_at", "")
+                if not ended_at_str:
+                    continue
+                try:
+                    ended_at = datetime.fromisoformat(ended_at_str.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if ended_at < cutoff:
+                    continue
+                call_id = call.get("id", "")
+                transcript_text = call.get("transcript", "")
+                messages = call.get("messages", [])
+                child_messages = [
+                    m.get("message", "") or m.get("content", "")
+                    for m in messages
+                    if m.get("role") == "user"
+                ]
+                logger.info(f"[Balu] Found call {call_id} for mode={assistant_mode}")
+                break
+
             if transcript_text or child_messages:
                 break
-            # Transcript not ready yet — wait 60s and retry
             if attempt == 0:
-                logger.info(f"[Balu] Transcript empty on first attempt, retrying in 60s for call {call_id}")
+                logger.info("[Balu] No transcript yet, retrying in 60s")
                 await asyncio.sleep(60)
 
         if not transcript_text and not child_messages:
@@ -3480,13 +3509,12 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
 
         now = datetime.now(timezone.utc)
         week_str = now.strftime("%Y-W%W")
-        week_start = now - __import__("datetime").timedelta(days=now.weekday())
-        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
         # ── Balu sessions this week ──────────────────────────────────────────
         sessions_ref = (
             db.collection("balu_sessions").document(uid).collection("sessions")
-            .where(filter=("week", "==", week_str))
+            .where("week", "==", week_str)
             .stream()
         )
         sessions = [s.to_dict() for s in sessions_ref]
@@ -3515,7 +3543,7 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         # ── Stories completed this week ──────────────────────────────────────
         progress_ref = (
             db.collection("users").document(uid).collection("story_progress")
-            .where(filter=("status", "==", "completed"))
+            .where("status", "==", "completed")
             .stream()
         )
         completed_stories = []
