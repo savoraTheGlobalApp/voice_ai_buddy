@@ -93,7 +93,11 @@ function buildBaluHtml(assistantId: string) { return `<!DOCTYPE html>
   function initVapi() {
     try {
       var vapi = new window.Vapi(window.__VAPI_KEY__);
-      vapi.on('call-start',   function(call) { post('call-start', { call_id: call && call.id ? call.id : '' }); });
+      vapi.on('call-start',   function() {
+        // vapi.call is populated by the time call-start fires
+        var cid = (vapi.call && vapi.call.id) ? vapi.call.id : '';
+        post('call-start', { call_id: cid });
+      });
       vapi.on('call-end',     function() { post('call-end'); });
       vapi.on('speech-start', function() { post('speech-start'); });
       vapi.on('speech-end',   function() { post('speech-end'); });

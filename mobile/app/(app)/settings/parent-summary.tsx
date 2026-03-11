@@ -5,6 +5,7 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
@@ -42,7 +43,7 @@ export default function ParentSummaryScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { currentUser } = useAuth();
 
-  const { data, isLoading, isError } = useQuery<WeeklySummary>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<WeeklySummary>({
     queryKey: ['parent-weekly-summary', currentUser?.uid],
     queryFn: () => apiClient<WeeklySummary>('/api/parent/weekly-summary'),
     enabled: !!currentUser,
@@ -64,7 +65,10 @@ export default function ParentSummaryScreen() {
           <Text style={styles.emptyText}>Could not load summary. Try again later.</Text>
         </View>
       ) : !data ? null : (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} tintColor={colors.accent} />}
+        >
 
           {/* ── Balu Time ─────────────────────────────────────────── */}
           <SectionHeader icon="mic" label="Balu Conversations" colors={colors} />

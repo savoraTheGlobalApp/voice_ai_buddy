@@ -3350,11 +3350,14 @@ async def vapi_record(request: Request, background_tasks: BackgroundTasks, token
             ref.update({"seconds_used": current + seconds})
         else:
             ref.set({"date": today, "seconds_used": seconds})
-        logger.info(f"[Vapi] recorded {seconds}s for {uid}")
+        logger.info(f"[Vapi] recorded {seconds}s for {uid}, call_id={call_id!r}, mode={assistant_mode}")
 
         # Trigger background transcript analysis if we have a call_id
         if call_id and seconds >= 30:  # Only analyse sessions >= 30s
+            logger.info(f"[Balu] queuing transcript analysis for call {call_id}")
             background_tasks.add_task(_analyze_balu_session, uid, call_id, assistant_mode, seconds)
+        elif not call_id:
+            logger.warning(f"[Balu] call_id missing — skipping analysis for {uid}")
 
         return {"ok": True}
     except Exception as e:
