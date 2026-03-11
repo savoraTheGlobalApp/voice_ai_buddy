@@ -9,7 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
@@ -20,12 +20,25 @@ import { apiClient } from '../../src/api/client';
 import RiveNarratorAvatar from '../../src/components/RiveNarratorAvatar';
 import { COMPANION } from '../../src/config/companion';
 import type { ThemeColors } from '../../src/theme/colors';
+import {
+  trackBaluScreenOpened,
+  trackBaluSessionStarted,
+  trackBaluSessionEnded,
+  trackBaluModeSwitched,
+} from '../../src/utils/analytics';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const VAPI_PUBLIC_KEY   = process.env.EXPO_PUBLIC_VAPI_KEY ?? '';
-const VAPI_ASSISTANT_ID = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID ?? '';
-const SESSION_SECONDS   = 3 * 60;
+const VAPI_PUBLIC_KEY        = process.env.EXPO_PUBLIC_VAPI_KEY ?? '';
+const VAPI_ASSISTANT_ID      = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID ?? '';
+const VAPI_ASSISTANT_ID_V2   = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID_V2 ?? '';
+const SESSION_SECONDS        = 3 * 60;
+
+type AssistantMode = 'classic' | 'learning';
+const ASSISTANT_MODES: { key: AssistantMode; label: string; desc: string }[] = [
+  { key: 'classic',  label: '📖 Stories',  desc: 'English storytelling'   },
+  { key: 'learning', label: '🎉 Fun',      desc: 'Games & chat'           },
+];
 
 // ── Avatar error boundary ─────────────────────────────────────────────────────
 class AvatarErrorBoundary extends Component<
@@ -67,20 +80,20 @@ const STATUS_LABELS: Record<CallStatus, string> = {
 // ── Vapi WebView HTML ─────────────────────────────────────────────────────────
 const VAPI_SDK_URL = 'https://res.cloudinary.com/dsqytt7ty/raw/upload/v1773051338/vapi-sdk/vapi.browser.js';
 
-const BALU_HTML = `<!DOCTYPE html>
+function buildBaluHtml(assistantId: string) { return `<!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
 <body>
 <script>
   window.__VAPI_KEY__ = ${JSON.stringify(VAPI_PUBLIC_KEY)};
-  window.__VAPI_ASSISTANT_ID__ = ${JSON.stringify(VAPI_ASSISTANT_ID)};
+  window.__VAPI_ASSISTANT_ID__ = ${JSON.stringify(assistantId)};
   function post(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
   }
   function initVapi() {
     try {
       var vapi = new window.Vapi(window.__VAPI_KEY__);
-      vapi.on('call-start',   function() { post('call-start'); });
+      vapi.on('call-start',   function(call) { post('call-start', { call_id: call && call.id ? call.id : '' }); });
       vapi.on('call-end',     function() { post('call-end'); });
       vapi.on('speech-start', function() { post('speech-start'); });
       vapi.on('speech-end',   function() { post('speech-end'); });
@@ -106,7 +119,7 @@ const BALU_HTML = `<!DOCTYPE html>
 <\/script>
 <script src="${VAPI_SDK_URL}" onload="initVapi()" onerror="post('error', { message: 'SDK load failed' })"></script>
 </body>
-</html>`;
+</html>`; }
 
 function formatTime(s: number) {
   const m = Math.floor(s / 60);
@@ -114,10 +127,24 @@ function formatTime(s: number) {
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+
 export default function BaluScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { currentUser } = useAuth();
+  const insets = useSafeAreaInsets();
+
+  // Calculate positions ONCE at mount — frozen forever, immune to layout shifts
+  const avatarSize = SCREEN_WIDTH * 0.72;
+  const avatarPos = useMemo(() => {
+    const usable = SCREEN_HEIGHT - insets.top - insets.bottom - 72 - 190;
+    const top = insets.top + 72 + Math.max(0, (usable - avatarSize) / 2);
+    const left = (SCREEN_WIDTH - avatarSize) / 2;
+    return { top, left };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // empty deps = calculate once only
+
 
   const [status, setStatus]                   = useState<CallStatus>('idle');
   const [micGranted, setMicGranted]           = useState(false);
@@ -125,7 +152,9 @@ export default function BaluScreen() {
   const [secondsLeft, setSecondsLeft]         = useState(SESSION_SECONDS);
   const [errorMsg, setErrorMsg]               = useState('');
   const [dailyRemaining, setDailyRemaining]   = useState<number | null>(null);
+  const [assistantMode, setAssistantMode]     = useState<AssistantMode>('classic');
   const callStartTimeRef                       = useRef<number>(0);
+  const callIdRef                              = useRef<string>('');
   const webViewRef = useRef<WebView>(null);
   const pulseAnim  = useRef(new Animated.Value(1)).current;
   const pulseLoop  = useRef<Animated.CompositeAnimation | null>(null);
@@ -143,6 +172,12 @@ export default function BaluScreen() {
   const glowOpacity = idleGlow.interpolate({ inputRange: [0, 1], outputRange: [0.06, 0.22] });
   const glowScale   = idleGlow.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] });
 
+  // ── Track screen open ───────────────────────────────────────────────────────
+  useEffect(() => {
+    trackBaluScreenOpened(assistantMode);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Fetch daily remaining on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
@@ -157,7 +192,11 @@ export default function BaluScreen() {
     if (used <= 0 || !currentUser) return;
     apiClient('/api/vapi/record', {
       method: 'POST',
-      body: JSON.stringify({ seconds_used: used }),
+      body: JSON.stringify({
+        seconds_used: used,
+        call_id: callIdRef.current,
+        assistant_mode: assistantMode,
+      }),
     }).then(() => {
       setDailyRemaining(prev => prev !== null ? Math.max(0, prev - used) : null);
     }).catch(() => {});
@@ -178,6 +217,7 @@ export default function BaluScreen() {
       callStartTimeRef.current = Date.now();
       setCallActive(true);
       setStatus('connecting');
+      trackBaluSessionStarted(assistantMode);
       return;
     }
     setStatus('requesting-permission');
@@ -188,6 +228,7 @@ export default function BaluScreen() {
       callStartTimeRef.current = Date.now();
       setCallActive(true);
       setStatus('connecting');
+      trackBaluSessionStarted(assistantMode);
     } else {
       setStatus('permission-denied');
       Alert.alert(
@@ -199,10 +240,12 @@ export default function BaluScreen() {
   }, [micGranted, dailyRemaining]);
 
   // ── End conversation → return to idle ──────────────────────────────────────
-  const endCall = useCallback(() => {
+  const endCall = useCallback((reason: 'user' | 'timer' | 'error' = 'user') => {
     if (callStartTimeRef.current > 0) {
+      const durationSeconds = Math.round((Date.now() - callStartTimeRef.current) / 1000);
       recordUsage(callStartTimeRef.current);
       callStartTimeRef.current = 0;
+      trackBaluSessionEnded(assistantMode, durationSeconds, reason);
     }
     webViewRef.current?.injectJavaScript(
       `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'stop' }) })); true;`
@@ -211,7 +254,7 @@ export default function BaluScreen() {
     setSecondsLeft(SESSION_SECONDS);
     setStatus('idle');
     Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => {});
-  }, [recordUsage]);
+  }, [recordUsage, assistantMode]);
 
   // ── Session timer ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -219,7 +262,7 @@ export default function BaluScreen() {
     if (!active.includes(status)) return;
     const id = setInterval(() => {
       setSecondsLeft(prev => {
-        if (prev <= 1) { clearInterval(id); endCall(); return SESSION_SECONDS; }
+        if (prev <= 1) { clearInterval(id); endCall('timer'); return SESSION_SECONDS; }
         return prev - 1;
       });
     }, 1000);
@@ -247,7 +290,10 @@ export default function BaluScreen() {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
       switch (msg.type) {
-        case 'call-start':        setStatus('active'); break;
+        case 'call-start':
+          callIdRef.current = msg.payload?.call_id ?? '';
+          setStatus('active');
+          break;
         case 'call-end':          endCall(); break;
         case 'speech-start':      setStatus('balu-speaking'); break;
         case 'speech-end':        setStatus('thinking'); break;
@@ -255,6 +301,7 @@ export default function BaluScreen() {
         case 'user-speech-end':   setStatus('thinking'); break;
         case 'error':
           console.warn('[Balu] Vapi error:', msg.payload?.message);
+          endCall('error');
           setStatus('error');
           setErrorMsg(msg.payload?.message ?? 'Unknown error');
           break;
@@ -262,26 +309,41 @@ export default function BaluScreen() {
     } catch {}
   }, [endCall]);
 
-  const isIdle   = status === 'idle';
-  const isInCall = callActive;
-  const isSpeaking = status === 'balu-speaking';
-  const isLoading  = status === 'connecting' || status === 'thinking';
+  const isInCall    = callActive;
+  const isSpeaking  = status === 'balu-speaking';
+  const isListening = status === 'user-speaking' || status === 'active';
 
   return (
     <LinearGradient colors={['#fff8f0', '#ffd4a0']} style={styles.root}>
       <Stack.Screen options={{ headerShown: false }} />
+
+      {/* ── Avatar: frozen absolute position, completely immune to layout changes ── */}
+      <View
+        pointerEvents="none"
+        style={[styles.avatarArea, { top: avatarPos.top, left: avatarPos.left, width: avatarSize, height: avatarSize }]}
+      >
+        <Animated.View style={[styles.glowRing, { opacity: isInCall ? 0 : glowOpacity, transform: [{ scale: glowScale }] }]} />
+        <View style={styles.avatarCircle}>
+          <AvatarErrorBoundary fallback={<Text style={{ fontSize: 100 }}>{COMPANION.emoji}</Text>}>
+            <RiveNarratorAvatar
+              isSpeaking={isSpeaking}
+              isListening={isListening}
+              size={avatarSize}
+            />
+          </AvatarErrorBoundary>
+        </View>
+      </View>
+
       <SafeAreaView style={styles.safe}>
 
-        {/* ── Top bar: same structure always, opacity toggles content ── */}
+        {/* ── Top bar: BOTH children always absolute so container height never changes ── */}
         <View style={styles.topBar}>
-          {/* Idle: title + subtitle */}
-          <View style={{ opacity: isInCall ? 0 : 1, position: isInCall ? 'absolute' : 'relative' }}>
+          <View style={[styles.topIdle, { opacity: isInCall ? 0 : 1 }]} pointerEvents={isInCall ? 'none' : 'auto'}>
             <Text style={styles.title}>{COMPANION.name} {COMPANION.emoji}</Text>
             <Text style={styles.subtitle}>Your friendly story companion</Text>
           </View>
-          {/* In-call: close + title + timer */}
-          <View style={[styles.header, { opacity: isInCall ? 1 : 0, position: isInCall ? 'relative' : 'absolute', left: 0, right: 0 }]}>
-            <TouchableOpacity style={styles.closeBtn} onPress={endCall} activeOpacity={0.7}>
+          <View style={[styles.header, { opacity: isInCall ? 1 : 0 }]} pointerEvents={isInCall ? 'auto' : 'none'}>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => endCall('user')} activeOpacity={0.7}>
               <Ionicons name="close" size={22} color="#78350f" />
             </TouchableOpacity>
             <Text style={styles.titleSmall}>{COMPANION.name} {COMPANION.emoji}</Text>
@@ -292,56 +354,65 @@ export default function BaluScreen() {
           </View>
         </View>
 
-        {/* ── Avatar: flex:1 center, same in both states ── */}
-        <View style={styles.avatarArea}>
-          <Animated.View style={[styles.glowRing, { opacity: isInCall ? 0 : glowOpacity, transform: [{ scale: glowScale }] }]} />
-          <View style={styles.avatarCircle}>
-            <AvatarErrorBoundary fallback={<Text style={{ fontSize: 100 }}>{COMPANION.emoji}</Text>}>
-              <RiveNarratorAvatar
-                isSpeaking={isSpeaking}
-                isLoading={isLoading}
-                size={SCREEN_WIDTH * 0.72}
-              />
-            </AvatarErrorBoundary>
-          </View>
-        </View>
+        {/* spacer that takes up exactly where the avatar lives */}
+        <View style={{ flex: 1 }} />
 
-        {/* ── Bottom bar: same structure always, opacity toggles content ── */}
+        {/* ── Bottom bar: fixed height ── */}
+        {/* Idle content is conditionally rendered (not just opacity-hidden) so no ghost touches during calls */}
         <View style={styles.bottomBar}>
           <Text style={styles.statusText}>{STATUS_LABELS[status]}</Text>
           {status === 'error' && errorMsg
             ? <Text style={styles.errorDetail}>{errorMsg}</Text>
             : null}
-          {/* Daily remaining */}
-          {!isInCall && dailyRemaining !== null && (
-            <Text style={styles.remainingText}>
-              {dailyRemaining <= 0
-                ? 'Daily limit reached — come back tomorrow!'
-                : `${Math.floor(dailyRemaining / 60)}m ${dailyRemaining % 60}s left today`}
-            </Text>
+          {!isInCall && (
+            <>
+              <Text style={styles.remainingText}>
+                {dailyRemaining !== null
+                  ? (dailyRemaining <= 0
+                      ? 'Daily limit reached — come back tomorrow!'
+                      : `${Math.floor(dailyRemaining / 60)}m ${dailyRemaining % 60}s left today`)
+                  : ' '}
+              </Text>
+              {VAPI_ASSISTANT_ID_V2 ? (
+                <View style={styles.modeToggle}>
+                  {ASSISTANT_MODES.map((m) => (
+                    <TouchableOpacity
+                      key={m.key}
+                      style={[styles.modeBtn, assistantMode === m.key && styles.modeBtnActive]}
+                      onPress={() => { trackBaluModeSwitched(assistantMode, m.key); setAssistantMode(m.key); }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.modeBtnText, assistantMode === m.key && styles.modeBtnTextActive]}>{m.label}</Text>
+                      <Text style={[styles.modeBtnDesc, assistantMode === m.key && styles.modeBtnTextActive]}>{m.desc}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : null}
+              <TouchableOpacity
+                style={styles.startBtn}
+                onPress={startConversation}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="mic" size={22} color="#fff" />
+                <Text style={styles.startBtnText}>Start Talking</Text>
+              </TouchableOpacity>
+            </>
           )}
-          {/* Idle controls */}
-          <TouchableOpacity
-            style={[styles.startBtn, { opacity: isInCall ? 0 : 1 }]}
-            onPress={isInCall ? undefined : startConversation}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="mic" size={22} color="#fff" />
-            <Text style={styles.startBtnText}>Start Talking</Text>
-          </TouchableOpacity>
-          {/* Call controls — always rendered, invisible when idle */}
-          <View pointerEvents={isInCall ? 'auto' : 'none'} style={[styles.callControls, { opacity: isInCall ? 1 : 0, position: 'absolute', bottom: 0, left: 0, right: 0, justifyContent: 'center' }]}>
-            <Animated.View style={[styles.micRing, { transform: [{ scale: pulseAnim }] }]}>
-              <Ionicons
-                name={status === 'user-speaking' ? 'mic' : 'mic-outline'}
-                size={28}
-                color="#f97316"
-              />
-            </Animated.View>
-            <TouchableOpacity style={styles.endBtn} onPress={endCall} activeOpacity={0.8}>
-              <Ionicons name="call" size={26} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
-            </TouchableOpacity>
-          </View>
+          {/* Call controls: absolutely positioned within bottomBar so height stays fixed */}
+          {isInCall && (
+            <View style={styles.callControls}>
+              <Animated.View style={[styles.micRing, { transform: [{ scale: pulseAnim }] }]} pointerEvents="none">
+                <Ionicons
+                  name={status === 'user-speaking' ? 'mic' : 'mic-outline'}
+                  size={28}
+                  color="#f97316"
+                />
+              </Animated.View>
+              <TouchableOpacity style={styles.endBtn} onPress={() => endCall('user')} activeOpacity={0.8}>
+                <Ionicons name="call" size={26} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
       </SafeAreaView>
@@ -350,7 +421,7 @@ export default function BaluScreen() {
       {callActive && micGranted && (
         <WebView
           ref={webViewRef}
-          source={{ html: BALU_HTML, baseUrl: 'https://vapi.ai' }}
+          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
@@ -371,12 +442,20 @@ function createStyles(_c: ThemeColors) {
     root: { flex: 1 },
     safe: { flex: 1, paddingHorizontal: 20 },
 
-    // Fixed top section — title/header always same height
+    // Top bar — FIXED height, both children are absolute so height never shifts
     topBar: {
-      height: 80,
+      height: 72,
+      position: 'relative',
+    },
+    topIdle: {
+      position: 'absolute',
+      left: 0, right: 0, top: 0, bottom: 0,
       justifyContent: 'center',
+      alignItems: 'center',
     },
     header: {
+      position: 'absolute',
+      left: 0, right: 0, top: 0, bottom: 0,
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
@@ -395,30 +474,16 @@ function createStyles(_c: ThemeColors) {
       paddingVertical: 5,
       borderRadius: 20,
     },
-    timerText: { color: '#78350f', fontSize: 14, fontWeight: '700' },
-    title: {
-      textAlign: 'center',
-      fontSize: 28,
-      fontWeight: '800',
-      color: '#1c0a00',
-    },
-    titleSmall: {
-      fontSize: 20,
-      fontWeight: '800',
-      color: '#1c0a00',
-    },
-    subtitle: {
-      textAlign: 'center',
-      fontSize: 14,
-      color: '#a16207',
-      marginTop: 2,
-    },
+    timerText:  { color: '#78350f', fontSize: 14, fontWeight: '700' },
+    title:      { textAlign: 'center', fontSize: 28, fontWeight: '800', color: '#1c0a00' },
+    titleSmall: { fontSize: 20, fontWeight: '800', color: '#1c0a00' },
+    subtitle:   { textAlign: 'center', fontSize: 14, color: '#a16207', marginTop: 2 },
 
-    // Avatar always centered, takes remaining space
+    // Avatar — frozen absolute position (top/left/width/height set inline from avatarPos)
     avatarArea: {
+      position: 'absolute',
       alignItems: 'center',
       justifyContent: 'center',
-      flex: 1,
     },
     avatarCircle: {
       width: SCREEN_WIDTH * 0.72,
@@ -434,20 +499,53 @@ function createStyles(_c: ThemeColors) {
       backgroundColor: '#f97316',
     },
 
-    // Fixed bottom section — same height always
+    // Bottom bar — FIXED height, all idle content always in flow (opacity toggled)
+    // Call controls are absolute within bottomBar so they don't affect height
     bottomBar: {
-      height: 160,
+      height: 190,
       alignItems: 'center',
-      justifyContent: 'center',
+      justifyContent: 'flex-start',
+      paddingTop: 4,
     },
     statusText: {
       textAlign: 'center',
       color: '#78350f',
       fontSize: 16,
       fontWeight: '600',
-      marginBottom: 16,
-      minHeight: 24,
+      marginBottom: 6,
     },
+    errorDetail: {
+      textAlign: 'center',
+      color: '#ef4444',
+      fontSize: 12,
+      marginBottom: 4,
+    },
+    remainingText: {
+      textAlign: 'center',
+      color: '#a16207',
+      fontSize: 12,
+      marginBottom: 8,
+    },
+    modeToggle: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 10,
+      alignSelf: 'stretch',
+    },
+    modeBtn: {
+      flex: 1,
+      alignItems: 'center',
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: 16,
+      backgroundColor: 'rgba(249,115,22,0.1)',
+      borderWidth: 1,
+      borderColor: 'rgba(249,115,22,0.2)',
+    },
+    modeBtnActive:     { backgroundColor: '#f97316', borderColor: '#f97316' },
+    modeBtnText:       { color: '#c2410c', fontSize: 13, fontWeight: '700' },
+    modeBtnDesc:       { color: '#c2410c', fontSize: 10, marginTop: 1, opacity: 0.7 },
+    modeBtnTextActive: { color: '#fff', opacity: 1 },
     startBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -459,7 +557,13 @@ function createStyles(_c: ThemeColors) {
       paddingHorizontal: 40,
     },
     startBtnText: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
+    // Call controls — absolute within bottomBar, no ghost touches since idle content is unmounted
     callControls: {
+      position: 'absolute',
+      bottom: 12,
+      left: 0,
+      right: 0,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
@@ -483,25 +587,13 @@ function createStyles(_c: ThemeColors) {
       alignItems: 'center',
       justifyContent: 'center',
     },
+
     hiddenWebView: {
       height: 1,
       width: 1,
       opacity: 0,
       position: 'absolute',
       bottom: 0,
-    },
-    remainingText: {
-      textAlign: 'center',
-      color: '#a16207',
-      fontSize: 12,
-      marginBottom: 8,
-    },
-    errorDetail: {
-      textAlign: 'center',
-      color: '#ef4444',
-      fontSize: 12,
-      marginHorizontal: 20,
-      marginBottom: 8,
     },
   });
 }
