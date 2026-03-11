@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useSubscription } from '../../../src/contexts/SubscriptionContext';
 import { useTheme } from '../../../src/contexts/ThemeContext';
@@ -107,6 +108,22 @@ export default function SettingsScreen() {
                 <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
               </TouchableOpacity>
             )}
+          </View>
+        </View>
+
+        {/* Parent Corner */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Parent Corner</Text>
+          <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() => router.push('/(app)/settings/parent-summary')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="bar-chart-outline" size={20} color={colors.textTertiary} />
+              <Text style={styles.actionText}>Weekly Summary</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+            </TouchableOpacity>
           </View>
         </View>
 
