@@ -6,8 +6,8 @@
  *
  * Expected state machine name : "State Machine 1"   (update STATE_MACHINE if different)
  * Expected boolean inputs:
- *   "isTalking"  — true while audio is playing
- *   "isHearing"  — true while audio is loading
+ *   "Talk" — true while Balu/narrator is speaking
+ *   "Hear" — true while listening to the child (user-speaking)
  *   (idle is the default when both are false)
  *
  * Open the .riv in rive.app editor → State Machine tab to confirm exact names,
@@ -25,16 +25,16 @@ const INPUT_HEARING  = 'Hear';              // boolean
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface Props {
-  isSpeaking : boolean;
-  isLoading  : boolean;
-  size       : number;
-  blockType? : string;   // kept for API compatibility, not used by Rive directly
+  isSpeaking  : boolean;
+  isListening : boolean;   // true when child/user is speaking (drives Hear input)
+  size        : number;
+  blockType?  : string;    // kept for API compatibility, not used by Rive directly
 }
 
-export default function RiveNarratorAvatar({ isSpeaking, isLoading, size }: Props) {
+export default function RiveNarratorAvatar({ isSpeaking, isListening, size }: Props) {
   const riveRef = useRef<RiveRef>(null);
 
-  // Drive state machine inputs whenever speaking/loading state changes
+  // Drive state machine inputs whenever speaking/listening state changes
   useEffect(() => {
     try {
       riveRef.current?.setInputState(STATE_MACHINE, INPUT_TALKING, isSpeaking);
@@ -43,9 +43,9 @@ export default function RiveNarratorAvatar({ isSpeaking, isLoading, size }: Prop
 
   useEffect(() => {
     try {
-      riveRef.current?.setInputState(STATE_MACHINE, INPUT_HEARING, isLoading && !isSpeaking);
+      riveRef.current?.setInputState(STATE_MACHINE, INPUT_HEARING, isListening && !isSpeaking);
     } catch (_) {}
-  }, [isLoading, isSpeaking]);
+  }, [isListening, isSpeaking]);
 
   return (
     <View style={[styles.container, { width: size, height: size }]}>

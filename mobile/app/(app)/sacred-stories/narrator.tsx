@@ -487,7 +487,7 @@ export default function NarratorScreen() {
               >
                 <RiveNarratorAvatar
                   isSpeaking={narrator.isPlaying}
-                  isLoading={narrator.isLoading}
+                  isListening={false}
                   blockType={currentBlock?.type}
                   size={SCREEN_WIDTH}
                 />

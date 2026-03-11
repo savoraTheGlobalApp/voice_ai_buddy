@@ -218,7 +218,7 @@ export default function PlayScreen() {
 
           {/* Avatar frame */}
           <View style={styles.avatarFrame}>
-            <RiveNarratorAvatar isSpeaking={false} isLoading={false} size={AVATAR_SIZE} />
+            <RiveNarratorAvatar isSpeaking={false} isListening={false} size={AVATAR_SIZE} />
           </View>
 
           {/* Name badge below avatar */}
