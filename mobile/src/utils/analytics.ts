@@ -121,6 +121,38 @@ export const trackNarratorCompleted = (storyId: string, category: string, blocks
   track('narrator_completed', { story_id: storyId, category, blocks_heard: blocksHeard, total_blocks: totalBlocks });
 };
 
+// ── Balu Voice Companion ──────────────────────────────────────────────────────
+
+export type BaluAssistantMode = 'classic' | 'learning';
+
+export const trackBaluScreenOpened = (mode: BaluAssistantMode) => {
+  if (!isInitialized) return;
+  track('balu_screen_opened', { assistant_mode: mode });
+};
+
+export const trackBaluSessionStarted = (mode: BaluAssistantMode) => {
+  if (!isInitialized) return;
+  track('balu_session_started', { assistant_mode: mode });
+};
+
+export const trackBaluSessionEnded = (
+  mode: BaluAssistantMode,
+  durationSeconds: number,
+  endReason: 'user' | 'timer' | 'error',
+) => {
+  if (!isInitialized) return;
+  track('balu_session_ended', {
+    assistant_mode: mode,
+    duration_seconds: durationSeconds,
+    end_reason: endReason,
+  });
+};
+
+export const trackBaluModeSwitched = (fromMode: BaluAssistantMode, toMode: BaluAssistantMode) => {
+  if (!isInitialized) return;
+  track('balu_mode_switched', { from_mode: fromMode, to_mode: toMode });
+};
+
 // ── Onboarding & Feedback ──────────────────────────────────────────────────────
 
 export const trackOnboardingCompleted = (language: 'en' | 'hi') => {
