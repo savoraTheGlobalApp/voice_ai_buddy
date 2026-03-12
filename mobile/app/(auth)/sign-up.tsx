@@ -13,6 +13,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -26,6 +27,9 @@ export default function SignUp() {
   const [age, setAge] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -33,10 +37,11 @@ export default function SignUp() {
   const { signUp } = useAuth();
 
   const handleSignUp = async () => {
-    if (!name || !age || !email || !password) { setError('Please fill in all fields'); return; }
+    if (!name || !age || !email || !password || !confirmPassword) { setError('Please fill in all fields'); return; }
     const ageNum = parseInt(age, 10);
     if (isNaN(ageNum) || ageNum < 3 || ageNum > 10) { setError('Age must be between 3 and 10'); return; }
     if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    if (password !== confirmPassword) { setError('Passwords do not match'); return; }
     setLoading(true);
     setError('');
     try {
@@ -109,15 +114,34 @@ export default function SignUp() {
                     keyboardType="email-address"
                     onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
                   />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Password (min 6 characters)"
-                    placeholderTextColor="#c4956a"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry
-                    onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
-                  />
+                  <View style={styles.passwordRow}>
+                    <TextInput
+                      style={styles.passwordInput}
+                      placeholder="Password (min 6 characters)"
+                      placeholderTextColor="#c4956a"
+                      value={password}
+                      onChangeText={setPassword}
+                      secureTextEntry={!showPassword}
+                      onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
+                    />
+                    <TouchableOpacity onPress={() => setShowPassword(v => !v)} style={styles.eyeBtn}>
+                      <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color="#c4956a" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.passwordRow}>
+                    <TextInput
+                      style={styles.passwordInput}
+                      placeholder="Confirm Password"
+                      placeholderTextColor="#c4956a"
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      secureTextEntry={!showConfirmPassword}
+                      onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
+                    />
+                    <TouchableOpacity onPress={() => setShowConfirmPassword(v => !v)} style={styles.eyeBtn}>
+                      <Ionicons name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color="#c4956a" />
+                    </TouchableOpacity>
+                  </View>
 
                   <TouchableOpacity
                     style={[styles.button, loading && styles.buttonDisabled]}
@@ -204,6 +228,25 @@ const styles = StyleSheet.create({
     color: '#1c0a00',
     borderWidth: 1.5,
     borderColor: '#fde8cc',
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff8f0',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#fde8cc',
+    marginBottom: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: 15,
+    fontSize: 16,
+    color: '#1c0a00',
+  },
+  eyeBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 15,
   },
   button: {
     backgroundColor: '#f97316',
