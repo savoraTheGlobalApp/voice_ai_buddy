@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { useSubscription } from '../../../src/contexts/SubscriptionContext';
 import { useTheme } from '../../../src/contexts/ThemeContext';
