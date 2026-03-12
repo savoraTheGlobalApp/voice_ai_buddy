@@ -86,6 +86,15 @@ export default function AppLayout() {
           }}
         />
         <Tabs.Screen
+          name="parent"
+          options={{
+            title: 'Parent',
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="heart-outline" size={size} color={color} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',

@@ -111,22 +111,6 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Parent Corner */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Parent Corner</Text>
-          <View style={styles.card}>
-            <TouchableOpacity
-              style={styles.actionRow}
-              onPress={() => router.push('/(app)/settings/parent-summary')}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="bar-chart-outline" size={20} color={colors.textTertiary} />
-              <Text style={styles.actionText}>Weekly Summary</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
         {/* Appearance Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Appearance</Text>
