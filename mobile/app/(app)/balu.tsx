@@ -80,13 +80,14 @@ const STATUS_LABELS: Record<CallStatus, string> = {
 // ── Vapi WebView HTML ─────────────────────────────────────────────────────────
 const VAPI_SDK_URL = 'https://res.cloudinary.com/dsqytt7ty/raw/upload/v1773051338/vapi-sdk/vapi.browser.js';
 
-function buildBaluHtml(assistantId: string) { return `<!DOCTYPE html>
+function buildBaluHtml(assistantId: string, uid: string) { return `<!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
 <body>
 <script>
   window.__VAPI_KEY__ = ${JSON.stringify(VAPI_PUBLIC_KEY)};
   window.__VAPI_ASSISTANT_ID__ = ${JSON.stringify(assistantId)};
+  window.__USER_ID__ = ${JSON.stringify(uid)};
   function post(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
   }
@@ -115,7 +116,7 @@ function buildBaluHtml(assistantId: string) { return `<!DOCTYPE html>
         if (msg.type === 'transcript' && msg.transcriptType === 'partial') post('user-speech-start');
         if (msg.type === 'transcript' && msg.transcriptType === 'final')   post('user-speech-end', { transcript: msg.transcript });
       });
-      vapi.start(window.__VAPI_ASSISTANT_ID__);
+      vapi.start(window.__VAPI_ASSISTANT_ID__, { metadata: { uid: window.__USER_ID__ } });
       function handleMsg(e) {
         try {
           var m = JSON.parse(e.data);
@@ -435,7 +436,7 @@ export default function BaluScreen() {
       {callActive && micGranted && (
         <WebView
           ref={webViewRef}
-          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID), baseUrl: 'https://vapi.ai' }}
+          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? ''), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}

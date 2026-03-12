@@ -3406,18 +3406,9 @@ async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds:
             if not isinstance(calls, list):
                 calls = calls.get("results", [])
 
-            # Find the most recent call that ended within the last 15 minutes
-            # and whose duration roughly matches what we recorded
-            cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+            # Find the call whose metadata.uid matches this user
             for call in calls:
-                ended_at_str = call.get("endedAt") or call.get("ended_at", "")
-                if not ended_at_str:
-                    continue
-                try:
-                    ended_at = datetime.fromisoformat(ended_at_str.replace("Z", "+00:00"))
-                except Exception:
-                    continue
-                if ended_at < cutoff:
+                if call.get("metadata", {}).get("uid") != uid:
                     continue
                 call_id = call.get("id", "")
                 transcript_text = call.get("transcript", "")
@@ -3427,7 +3418,7 @@ async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds:
                     for m in messages
                     if m.get("role") == "user"
                 ]
-                logger.info(f"[Balu] Found call {call_id} for mode={assistant_mode}")
+                logger.info(f"[Balu] Found call {call_id} for uid={uid}, mode={assistant_mode}")
                 break
 
             if transcript_text or child_messages:
