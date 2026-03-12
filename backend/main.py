@@ -3388,9 +3388,12 @@ async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds:
         transcript_text = ""
         child_messages = []
 
+        # Only look at calls from the last 30 minutes (covers 90s sleep + call duration)
+        created_after = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         for attempt in range(2):
             async with httpx.AsyncClient(timeout=20) as client:
-                params = {"limit": "5"}
+                params = {"limit": "100", "createdAtGe": created_after}
                 if assistant_id:
                     params["assistantId"] = assistant_id
                 r = await client.get(
