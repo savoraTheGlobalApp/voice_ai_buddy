@@ -446,15 +446,20 @@ export default function NarratorScreen() {
       </TouchableOpacity>
 
       {/* Language toggle — top right */}
-      <TouchableOpacity
-        onPress={toggleLanguage}
-        style={[styles.langBtnOverlay, { top: safeTop + 8 }]}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-      >
-        <Text style={styles.langBtnOverlayText}>
-          {language === 'en' ? '🌐 हिं' : '🌐 EN'}
-        </Text>
-      </TouchableOpacity>
+      <View style={[styles.langToggleOverlay, { top: safeTop + 6 }]}>
+        <TouchableOpacity
+          onPress={language !== 'en' ? toggleLanguage : undefined}
+          style={[styles.langOption, language === 'en' && styles.langOptionActive]}
+        >
+          <Text style={[styles.langOptionText, language === 'en' && styles.langOptionTextActive]}>EN</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={language !== 'hi' ? toggleLanguage : undefined}
+          style={[styles.langOption, language === 'hi' && styles.langOptionActive]}
+        >
+          <Text style={[styles.langOptionText, styles.langOptionHindi, language === 'hi' && styles.langOptionTextActive]}>हिंदी</Text>
+        </TouchableOpacity>
+      </View>
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         {contentLoading ? (
           <View style={styles.centered}>
@@ -658,12 +663,29 @@ const styles = StyleSheet.create({
   },
 
   // Language toggle — top-right overlay
-  langBtnOverlay: {
+  langToggleOverlay: {
     position: 'absolute', right: 12, zIndex: 100,
-    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 20,
-    paddingHorizontal: 12, paddingVertical: 6,
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.40)',
+    borderRadius: 24,
+    padding: 3,
   },
-  langBtnOverlayText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  langOption: {
+    paddingHorizontal: 14, paddingVertical: 6,
+    borderRadius: 20,
+  },
+  langOptionActive: {
+    backgroundColor: '#f97316',
+  },
+  langOptionText: {
+    color: 'rgba(255,255,255,0.6)', fontSize: 14, fontWeight: '700',
+  },
+  langOptionHindi: {
+    fontSize: 16,
+  },
+  langOptionTextActive: {
+    color: '#fff',
+  },
   speedBtn: {
     paddingHorizontal: 10, paddingVertical: 5,
     backgroundColor: 'rgba(249,115,22,0.25)', borderRadius: 14,
