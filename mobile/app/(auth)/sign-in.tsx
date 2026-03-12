@@ -98,7 +98,7 @@ export default function SignIn() {
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
-                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                    onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
                   />
 
                   <TouchableOpacity

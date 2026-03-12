@@ -107,7 +107,7 @@ export default function SignUp() {
                     onChangeText={setEmail}
                     autoCapitalize="none"
                     keyboardType="email-address"
-                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                    onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
                   />
                   <TextInput
                     style={styles.input}
@@ -116,7 +116,7 @@ export default function SignUp() {
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
-                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                    onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300)}
                   />
 
                   <TouchableOpacity
