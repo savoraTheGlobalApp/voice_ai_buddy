@@ -3379,10 +3379,7 @@ async def vapi_record(request: Request, background_tasks: BackgroundTasks, token
             ref.set({"date": today, "seconds_used": seconds})
         logger.info(f"[Vapi] recorded {seconds}s for {uid}, mode={assistant_mode}")
 
-        # Trigger background analysis — look up call_id server-side via Vapi API
-        if seconds >= 30:
-            background_tasks.add_task(_analyze_balu_session, uid, assistant_mode, seconds)
-
+        # Analysis is handled by the Vapi webhook (end-of-call-report) — no polling needed
         return {"ok": True}
     except Exception as e:
         logger.error(f"[Vapi] record error: {e}")
@@ -3456,7 +3453,8 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
         created = datetime.fromisoformat(call.get("createdAt", "").replace("Z", "+00:00"))
         ended   = datetime.fromisoformat(call.get("endedAt",   "").replace("Z", "+00:00"))
         duration_seconds = max(0, int((ended - created).total_seconds()))
-    except Exception:
+    except Exception as dur_err:
+        logger.warning(f"[Vapi webhook] duration parse failed: {dur_err} | createdAt={call.get('createdAt')} endedAt={call.get('endedAt')}")
         duration_seconds = 0
 
     # Transcript from artifact (most complete) or call object
@@ -3468,9 +3466,12 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
         if m.get("role") == "user"
     ]
 
-    logger.info(f"[Vapi webhook] end-of-call for uid={uid}, call={call_id}, mode={assistant_mode}, duration={duration_seconds}s")
+    logger.info(f"[Vapi webhook] end-of-call for uid={uid}, call={call_id}, mode={assistant_mode}, duration={duration_seconds}s, transcript_len={len(transcript_text)}, child_msgs={len(child_messages)}")
 
-    if duration_seconds >= 30 and (transcript_text or child_messages):
+    # Run analysis if we have a transcript (duration check is a safety net but not blocking)
+    if transcript_text or child_messages:
+        if duration_seconds < 10:
+            logger.info(f"[Vapi webhook] Short call ({duration_seconds}s), still analysing if transcript present")
         background_tasks.add_task(
             _store_balu_analysis, uid, call_id, assistant_mode, duration_seconds,
             transcript_text, child_messages
