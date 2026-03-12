@@ -3445,17 +3445,6 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
     if not uid:
         logger.warning(f"[Vapi webhook] Could not resolve uid for call {call_id}, skipping")
         return {"ok": True}
-    duration_seconds = int(call.get("endedAt") and 0 or 0)  # duration computed below
-
-    # Duration: endedAt - createdAt
-    try:
-        from datetime import datetime, timezone
-        created = datetime.fromisoformat(call.get("createdAt", "").replace("Z", "+00:00"))
-        ended   = datetime.fromisoformat(call.get("endedAt",   "").replace("Z", "+00:00"))
-        duration_seconds = max(0, int((ended - created).total_seconds()))
-    except Exception as dur_err:
-        logger.warning(f"[Vapi webhook] duration parse failed: {dur_err} | createdAt={call.get('createdAt')} endedAt={call.get('endedAt')}")
-        duration_seconds = 0
 
     # Transcript from artifact (most complete) or call object
     transcript_text = artifact.get("transcript", "") or call.get("transcript", "")
@@ -3466,14 +3455,11 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
         if m.get("role") == "user"
     ]
 
-    logger.info(f"[Vapi webhook] end-of-call for uid={uid}, call={call_id}, mode={assistant_mode}, duration={duration_seconds}s, transcript_len={len(transcript_text)}, child_msgs={len(child_messages)}")
+    logger.info(f"[Vapi webhook] end-of-call uid={uid}, call={call_id}, mode={assistant_mode}, transcript_len={len(transcript_text)}, child_msgs={len(child_messages)}")
 
-    # Run analysis if we have a transcript (duration check is a safety net but not blocking)
     if transcript_text or child_messages:
-        if duration_seconds < 10:
-            logger.info(f"[Vapi webhook] Short call ({duration_seconds}s), still analysing if transcript present")
         background_tasks.add_task(
-            _store_balu_analysis, uid, call_id, assistant_mode, duration_seconds,
+            _store_balu_analysis, uid, call_id, assistant_mode,
             transcript_text, child_messages
         )
 
@@ -3544,14 +3530,14 @@ async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds:
             logger.info(f"[Balu] Empty transcript for call {call_id}, skipping analysis")
             return
 
-        await _store_balu_analysis(uid, call_id, assistant_mode, duration_seconds, transcript_text, child_messages)
+        await _store_balu_analysis(uid, call_id, assistant_mode, transcript_text, child_messages)
 
     except Exception as e:
         logger.error(f"[Balu] analyze_session error: {e}")
 
 
 async def _store_balu_analysis(
-    uid: str, call_id: str, assistant_mode: str, duration_seconds: int,
+    uid: str, call_id: str, assistant_mode: str,
     transcript_text: str, child_messages: list
 ):
     """Run GPT-4o-mini analysis on transcript and store result in Firestore."""
@@ -3597,7 +3583,6 @@ Return valid JSON only. No explanation."""
         session_doc = {
             "call_id": call_id,
             "assistant_mode": assistant_mode,
-            "duration_seconds": duration_seconds,
             "started_at": now.isoformat(),
             "week": week_str,
             "words_learned": analysis.get("words_learned", []),
