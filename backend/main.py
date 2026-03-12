@@ -3417,6 +3417,7 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
 
     call = msg.get("call", {})
     artifact = msg.get("artifact", {})
+    logger.info(f"[Vapi webhook] RAW call keys={list(call.keys())} | assistantOverrides={call.get('assistantOverrides')} | artifact keys={list(artifact.keys())} | transcript_len={len(artifact.get('transcript','') or '')}")
 
     call_id      = call.get("id", "")
     assistant_id = call.get("assistantId", "")
