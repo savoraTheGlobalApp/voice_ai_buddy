@@ -116,7 +116,7 @@ function buildBaluHtml(assistantId: string, uid: string) { return `<!DOCTYPE htm
         if (msg.type === 'transcript' && msg.transcriptType === 'partial') post('user-speech-start');
         if (msg.type === 'transcript' && msg.transcriptType === 'final')   post('user-speech-end', { transcript: msg.transcript });
       });
-      vapi.start(window.__VAPI_ASSISTANT_ID__, { metadata: { uid: window.__USER_ID__ } });
+      vapi.start(window.__VAPI_ASSISTANT_ID__, { variableValues: { uid: window.__USER_ID__ } });
       function handleMsg(e) {
         try {
           var m = JSON.parse(e.data);

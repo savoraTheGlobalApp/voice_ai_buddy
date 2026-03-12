@@ -3425,8 +3425,12 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
     assistant_id = call.get("assistantId", "")
     assistant_mode = VAPI_ID_TO_MODE.get(assistant_id, "classic")
 
-    # Look up uid from the pre-registered mapping
-    uid = (call.get("metadata") or {}).get("uid", "")
+    # Primary: read uid from variableValues (set via vapi.start second arg)
+    uid = (call.get("assistantOverrides") or {}).get("variableValues", {}).get("uid", "")
+    # Fallback 1: metadata (legacy)
+    if not uid:
+        uid = (call.get("metadata") or {}).get("uid", "")
+    # Fallback 2: pre-registered mapping in Firestore
     if not uid and assistant_id:
         try:
             from services.firebase_service import get_db
