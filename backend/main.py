@@ -3417,7 +3417,6 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
 
     call = msg.get("call", {})
     artifact = msg.get("artifact", {})
-    logger.info(f"[Vapi webhook] RAW call keys={list(call.keys())} | assistantOverrides={call.get('assistantOverrides')} | artifact keys={list(artifact.keys())} | transcript_len={len(artifact.get('transcript','') or '')}")
 
     call_id      = call.get("id", "")
     assistant_id = call.get("assistantId", "")
@@ -3613,16 +3612,13 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
         # ── Balu sessions this week ──────────────────────────────────────────
+        from google.cloud.firestore_v1.base_query import FieldFilter
         sessions_ref = (
             db.collection("balu_sessions").document(uid).collection("sessions")
-            .where("week", "==", week_str)
+            .where(filter=FieldFilter("week", "==", week_str))
             .stream()
         )
         sessions = [s.to_dict() for s in sessions_ref]
-
-        total_balu_seconds = sum(s.get("duration_seconds", 0) for s in sessions)
-        classic_seconds = sum(s.get("duration_seconds", 0) for s in sessions if s.get("assistant_mode") == "classic")
-        fun_seconds = sum(s.get("duration_seconds", 0) for s in sessions if s.get("assistant_mode") == "learning")
 
         # Aggregate knowledge from all sessions
         all_words: list = []
@@ -3644,7 +3640,7 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         # ── Stories completed this week ──────────────────────────────────────
         progress_ref = (
             db.collection("users").document(uid).collection("story_progress")
-            .where("status", "==", "completed")
+            .where(filter=FieldFilter("status", "==", "completed"))
             .stream()
         )
         completed_stories = []
@@ -3676,10 +3672,9 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         return {
             "week": week_str,
             "balu": {
-                "total_minutes": round(total_balu_seconds / 60, 1),
                 "sessions_count": len(sessions),
-                "stories_mode_minutes": round(classic_seconds / 60, 1),
-                "fun_mode_minutes": round(fun_seconds / 60, 1),
+                "classic_sessions": sum(1 for s in sessions if s.get("assistant_mode") == "classic"),
+                "fun_sessions": sum(1 for s in sessions if s.get("assistant_mode") == "learning"),
             },
             "knowledge": {
                 "words_learned": dedup(all_words)[:10],

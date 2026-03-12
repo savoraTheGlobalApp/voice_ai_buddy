@@ -19,10 +19,9 @@ import type { ThemeColors } from '../../../src/theme/colors';
 interface WeeklySummary {
   week: string;
   balu: {
-    total_minutes: number;
     sessions_count: number;
-    stories_mode_minutes: number;
-    fun_mode_minutes: number;
+    classic_sessions: number;
+    fun_sessions: number;
   };
   knowledge: {
     words_learned: string[];
@@ -70,13 +69,12 @@ export default function ParentSummaryScreen() {
           refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} tintColor={colors.accent} />}
         >
 
-          {/* ── Balu Time ─────────────────────────────────────────── */}
+          {/* ── Balu Conversations ────────────────────────────────── */}
           <SectionHeader icon="mic" label="Balu Conversations" colors={colors} />
           <View style={styles.card}>
-            <StatRow label="Total time this week" value={`${data.balu.total_minutes} min`} colors={colors} />
-            <StatRow label="Sessions" value={`${data.balu.sessions_count}`} colors={colors} />
-            <StatRow label="📖 Stories mode" value={`${data.balu.stories_mode_minutes} min`} colors={colors} />
-            <StatRow label="🎉 Fun mode" value={`${data.balu.fun_mode_minutes} min`} colors={colors} />
+            <StatRow label="Sessions this week" value={`${data.balu.sessions_count}`} colors={colors} />
+            <StatRow label="📖 Stories mode" value={`${data.balu.classic_sessions}`} colors={colors} />
+            <StatRow label="🎉 Fun mode" value={`${data.balu.fun_sessions}`} colors={colors} />
           </View>
 
           {/* ── Language ──────────────────────────────────────────── */}
