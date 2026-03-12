@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -27,6 +27,7 @@ export default function SignIn() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const scrollRef = useRef<ScrollView>(null);
   const { signIn } = useAuth();
 
   const handleSignIn = async () => {
@@ -53,6 +54,7 @@ export default function SignIn() {
         style={styles.flex}
       >
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -96,6 +98,7 @@ export default function SignIn() {
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
+                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                   />
 
                   <TouchableOpacity

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -29,6 +29,7 @@ export default function SignUp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const scrollRef = useRef<ScrollView>(null);
   const { signUp } = useAuth();
 
   const handleSignUp = async () => {
@@ -55,6 +56,7 @@ export default function SignUp() {
     <View style={styles.root}>
       <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0} style={styles.flex}>
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -105,6 +107,7 @@ export default function SignUp() {
                     onChangeText={setEmail}
                     autoCapitalize="none"
                     keyboardType="email-address"
+                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                   />
                   <TextInput
                     style={styles.input}
@@ -113,6 +116,7 @@ export default function SignUp() {
                     value={password}
                     onChangeText={setPassword}
                     secureTextEntry
+                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                   />
 
                   <TouchableOpacity
