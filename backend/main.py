@@ -3368,6 +3368,69 @@ VAPI_ASSISTANT_IDS = {
     "classic":  os.getenv("VAPI_ASSISTANT_ID",    ""),
     "learning": os.getenv("VAPI_ASSISTANT_ID_V2", ""),
 }
+# Map assistant_id → mode name for webhook lookups
+VAPI_ID_TO_MODE = {v: k for k, v in VAPI_ASSISTANT_IDS.items() if v}
+
+VAPI_WEBHOOK_SECRET = os.getenv("VAPI_WEBHOOK_SECRET", "")
+
+
+@app.post("/api/vapi/webhook")
+async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Receives Vapi end-of-call-report push events. No auth token required (Vapi calls this)."""
+    # Optional: verify secret header if configured in Vapi dashboard
+    if VAPI_WEBHOOK_SECRET:
+        secret = request.headers.get("x-vapi-secret", "")
+        if secret != VAPI_WEBHOOK_SECRET:
+            logger.warning("[Vapi webhook] Invalid secret")
+            raise HTTPException(status_code=401, detail="Invalid secret")
+
+    body = await request.json()
+    msg = body.get("message", {})
+    msg_type = msg.get("type", "")
+
+    if msg_type != "end-of-call-report":
+        return {"ok": True}  # ignore other event types
+
+    call = msg.get("call", {})
+    artifact = msg.get("artifact", {})
+
+    uid = (call.get("metadata") or {}).get("uid", "")
+    if not uid:
+        logger.info("[Vapi webhook] No uid in metadata, skipping")
+        return {"ok": True}
+
+    call_id       = call.get("id", "")
+    assistant_id  = call.get("assistantId", "")
+    assistant_mode = VAPI_ID_TO_MODE.get(assistant_id, "classic")
+    duration_seconds = int(call.get("endedAt") and 0 or 0)  # duration computed below
+
+    # Duration: endedAt - createdAt
+    try:
+        from datetime import datetime, timezone
+        created = datetime.fromisoformat(call.get("createdAt", "").replace("Z", "+00:00"))
+        ended   = datetime.fromisoformat(call.get("endedAt",   "").replace("Z", "+00:00"))
+        duration_seconds = max(0, int((ended - created).total_seconds()))
+    except Exception:
+        duration_seconds = 0
+
+    # Transcript from artifact (most complete) or call object
+    transcript_text = artifact.get("transcript", "") or call.get("transcript", "")
+    messages = artifact.get("messages", []) or call.get("messages", [])
+    child_messages = [
+        m.get("message", "") or m.get("content", "")
+        for m in messages
+        if m.get("role") == "user"
+    ]
+
+    logger.info(f"[Vapi webhook] end-of-call for uid={uid}, call={call_id}, mode={assistant_mode}, duration={duration_seconds}s")
+
+    if duration_seconds >= 30 and (transcript_text or child_messages):
+        background_tasks.add_task(
+            _store_balu_analysis, uid, call_id, assistant_mode, duration_seconds,
+            transcript_text, child_messages
+        )
+
+    return {"ok": True}
 
 async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds: int):
     """Background task: find recent Vapi call → GPT-4o-mini analysis → store in Firestore."""
@@ -3434,7 +3497,19 @@ async def _analyze_balu_session(uid: str, assistant_mode: str, duration_seconds:
             logger.info(f"[Balu] Empty transcript for call {call_id}, skipping analysis")
             return
 
-        # 2. Analyse with GPT-4o-mini
+        await _store_balu_analysis(uid, call_id, assistant_mode, duration_seconds, transcript_text, child_messages)
+
+    except Exception as e:
+        logger.error(f"[Balu] analyze_session error: {e}")
+
+
+async def _store_balu_analysis(
+    uid: str, call_id: str, assistant_mode: str, duration_seconds: int,
+    transcript_text: str, child_messages: list
+):
+    """Run GPT-4o-mini analysis on transcript and store result in Firestore."""
+    try:
+        from services.firebase_service import get_db
         openai_key = os.getenv("OPENAI_API_KEY")
         if not openai_key:
             return
@@ -3469,7 +3544,6 @@ Return valid JSON only. No explanation."""
             raw = result["choices"][0]["message"]["content"]
             analysis = json.loads(raw)
 
-        # 3. Store in Firestore
         db = get_db()
         now = datetime.now(timezone.utc)
         week_str = now.strftime("%Y-W%W")
@@ -3488,7 +3562,7 @@ Return valid JSON only. No explanation."""
         logger.info(f"[Balu] Stored session analysis for {uid}, call {call_id}")
 
     except Exception as e:
-        logger.error(f"[Balu] analyze_session error: {e}")
+        logger.error(f"[Balu] store_analysis error: {e}")
 
 
 @app.get("/api/parent/weekly-summary")
