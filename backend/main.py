@@ -3327,6 +3327,33 @@ async def vapi_remaining(token: dict = Depends(get_current_user)):
         "daily_limit": VAPI_DAILY_LIMIT_SECONDS,
     }
 
+@app.post("/api/vapi/register-call")
+async def vapi_register_call(request: Request, token: dict = Depends(get_current_user)):
+    """Called by mobile just before starting a Balu call. Stores uid→assistant_id mapping
+    so the webhook can identify which user a call belongs to."""
+    uid = token.get("uid")
+    body = await request.json()
+    assistant_mode: str = body.get("assistant_mode", "classic")
+    assistant_id = VAPI_ASSISTANT_IDS.get(assistant_mode, "")
+    if not assistant_id:
+        return {"ok": True}
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return {"ok": True}
+        db = get_db()
+        db.collection("active_balu_calls").document(assistant_id).set({
+            "uid": uid,
+            "assistant_mode": assistant_mode,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(f"[Balu] Registered call for uid={uid}, assistant={assistant_id}")
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"[Balu] register_call error: {e}")
+        return {"ok": True}  # fail open — don't block the call
+
+
 @app.post("/api/vapi/record")
 async def vapi_record(request: Request, background_tasks: BackgroundTasks, token: dict = Depends(get_current_user)):
     """Records seconds used in a Vapi session and triggers background analysis."""
@@ -3394,14 +3421,29 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
     call = msg.get("call", {})
     artifact = msg.get("artifact", {})
 
-    uid = (call.get("metadata") or {}).get("uid", "")
-    if not uid:
-        logger.info("[Vapi webhook] No uid in metadata, skipping")
-        return {"ok": True}
-
-    call_id       = call.get("id", "")
-    assistant_id  = call.get("assistantId", "")
+    call_id      = call.get("id", "")
+    assistant_id = call.get("assistantId", "")
     assistant_mode = VAPI_ID_TO_MODE.get(assistant_id, "classic")
+
+    # Look up uid from the pre-registered mapping
+    uid = (call.get("metadata") or {}).get("uid", "")
+    if not uid and assistant_id:
+        try:
+            from services.firebase_service import get_db
+            db = get_db()
+            doc = db.collection("active_balu_calls").document(assistant_id).get()
+            if doc.exists:
+                uid = doc.to_dict().get("uid", "")
+                assistant_mode = doc.to_dict().get("assistant_mode", assistant_mode)
+                # Clean up the mapping now that the call has ended
+                db.collection("active_balu_calls").document(assistant_id).delete()
+                logger.info(f"[Vapi webhook] Resolved uid={uid} from active_balu_calls")
+        except Exception as e:
+            logger.error(f"[Vapi webhook] uid lookup error: {e}")
+
+    if not uid:
+        logger.warning(f"[Vapi webhook] Could not resolve uid for call {call_id}, skipping")
+        return {"ok": True}
     duration_seconds = int(call.get("endedAt") and 0 or 0)  # duration computed below
 
     # Duration: endedAt - createdAt

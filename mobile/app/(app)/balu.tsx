@@ -228,6 +228,11 @@ export default function BaluScreen() {
 
     if (micGranted) {
       callStartTimeRef.current = Date.now();
+      // Pre-register uid→assistant mapping so webhook can identify this user
+      apiClient('/api/vapi/register-call', {
+        method: 'POST',
+        body: JSON.stringify({ assistant_mode: assistantMode }),
+      }).catch(() => {});
       setCallActive(true);
       setStatus('connecting');
       trackBaluSessionStarted(assistantMode);
@@ -239,6 +244,10 @@ export default function BaluScreen() {
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       setMicGranted(true);
       callStartTimeRef.current = Date.now();
+      apiClient('/api/vapi/register-call', {
+        method: 'POST',
+        body: JSON.stringify({ assistant_mode: assistantMode }),
+      }).catch(() => {});
       setCallActive(true);
       setStatus('connecting');
       trackBaluSessionStarted(assistantMode);
