@@ -3540,7 +3540,7 @@ async def _store_balu_analysis(
     uid: str, call_id: str, assistant_mode: str,
     transcript_text: str, child_messages: list
 ):
-    """Run GPT-4o-mini analysis on transcript and store result in Firestore."""
+    """Run GPT-4o-mini analysis on transcript, store session, and upsert child profile."""
     try:
         from services.firebase_service import get_db
         openai_key = os.getenv("OPENAI_API_KEY")
@@ -3552,12 +3552,14 @@ async def _store_balu_analysis(
 Transcript:
 {transcript_text or chr(10).join(child_messages)}
 
-Extract the following as JSON (keep each list concise, max 8 items each):
+Extract the following as JSON (keep each list concise, max 5 items each):
 {{
-  "words_learned": ["list of interesting or new words the child used or responded positively to"],
+  "words_learned": ["interesting or new words the child used or responded positively to"],
   "concepts_asked": ["questions or concepts the child was curious about, phrased simply e.g. 'Why does Hanuman fly?'"],
   "interests_shown": ["topics or themes the child showed enthusiasm or curiosity about"],
-  "session_highlight": "One warm, parent-friendly sentence summarising the most memorable moment."
+  "session_highlight": "One warm, parent-friendly sentence summarising the most memorable moment.",
+  "story_arc": "If Balu started or continued a story, one sentence describing the title and where it left off (e.g. 'The Dragon Egg: hero just found a glowing cave'). null if no clear ongoing story.",
+  "personality_notes": ["1-2 short observations about how this child engages, e.g. 'loves silly voices', 'gets excited about big numbers'. Only if clearly evident from the conversation, else empty list."]
 }}
 
 Return valid JSON only. No explanation."""
@@ -3580,6 +3582,8 @@ Return valid JSON only. No explanation."""
         db = get_db()
         now = datetime.now(timezone.utc)
         week_str = now.strftime("%Y-W%W")
+
+        # ── Store session doc ────────────────────────────────────────────────
         session_doc = {
             "call_id": call_id,
             "assistant_mode": assistant_mode,
@@ -3589,9 +3593,43 @@ Return valid JSON only. No explanation."""
             "concepts_asked": analysis.get("concepts_asked", []),
             "interests_shown": analysis.get("interests_shown", []),
             "session_highlight": analysis.get("session_highlight", ""),
+            "story_arc": analysis.get("story_arc") or "",
+            "personality_notes": analysis.get("personality_notes", []),
         }
         db.collection("balu_sessions").document(uid).collection("sessions").add(session_doc)
         logger.info(f"[Balu] Stored session analysis for {uid}, call {call_id}")
+
+        # ── Upsert persistent child profile ─────────────────────────────────
+        profile_ref = db.collection("balu_profiles").document(uid)
+        profile_snap = profile_ref.get()
+        existing = profile_snap.to_dict() if profile_snap.exists else {}
+
+        def merge_unique(existing_list: list, new_items: list, cap: int) -> list:
+            """Prepend new items, deduplicate (case-insensitive), cap at limit."""
+            seen = set()
+            merged = []
+            for item in (new_items + existing_list):
+                key = item.lower().strip()
+                if key and key not in seen:
+                    seen.add(key)
+                    merged.append(item)
+                if len(merged) >= cap:
+                    break
+            return merged
+
+        profile_update = {
+            "top_interests":    merge_unique(existing.get("top_interests", []),    analysis.get("interests_shown", []),    10),
+            "open_curiosities": merge_unique(existing.get("open_curiosities", []), analysis.get("concepts_asked", []),     8),
+            "personality_notes":merge_unique(existing.get("personality_notes", []),analysis.get("personality_notes", []),  5),
+            "sessions_count":   (existing.get("sessions_count") or 0) + 1,
+            "last_seen":        now.isoformat(),
+        }
+        # Only overwrite story_arc if this session has one
+        if analysis.get("story_arc"):
+            profile_update["story_arc"] = analysis["story_arc"]
+
+        profile_ref.set(profile_update, merge=True)
+        logger.info(f"[Balu] Profile upserted for {uid}: interests={profile_update['top_interests'][:3]}")
 
     except Exception as e:
         logger.error(f"[Balu] store_analysis error: {e}")
@@ -3696,56 +3734,73 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
 
 @app.get("/api/balu/memory")
 async def get_balu_memory(token: dict = Depends(get_current_user)):
-    """Returns a condensed child memory profile built from past Balu sessions."""
+    """Returns a structured child memory string built from the persistent profile doc."""
     uid = token.get("uid")
     try:
         from services.firebase_service import is_firebase_available, get_db
-        from google.cloud.firestore_v1.base_query import FieldFilter
         if not is_firebase_available():
             return {"memory": "", "has_memory": False}
 
         db = get_db()
+        snap = db.collection("balu_profiles").document(uid).get()
 
-        # Fetch last 10 sessions across all time
-        sessions_ref = (
-            db.collection("balu_sessions").document(uid).collection("sessions")
-            .order_by("started_at", direction="DESCENDING")
-            .limit(10)
-            .stream()
-        )
-        sessions = [s.to_dict() for s in sessions_ref]
-
-        if not sessions:
+        if not snap.exists:
+            logger.info(f"[Balu memory] No profile yet for {uid}")
             return {"memory": "", "has_memory": False}
 
-        # Aggregate and deduplicate across sessions
-        def dedup(lst):
-            seen = set()
-            return [x for x in lst if x and not (x.lower() in seen or seen.add(x.lower()))]
-
-        all_interests = dedup([i for s in sessions for i in s.get("interests_shown", [])])[:6]
-        all_concepts  = dedup([c for s in sessions for c in s.get("concepts_asked", [])])[:5]
-        all_words     = dedup([w for s in sessions for w in s.get("words_learned", [])])[:8]
-        highlights    = [s["session_highlight"] for s in sessions if s.get("session_highlight")][:3]
-
-        # Build a natural language memory string for the assistant
+        p = snap.to_dict()
         parts = []
-        if all_interests:
-            parts.append(f"This child is interested in: {', '.join(all_interests)}.")
-        if all_words:
-            parts.append(f"They know words like: {', '.join(all_words)}.")
-        if all_concepts:
-            parts.append(f"They have asked about: {', '.join(all_concepts)}.")
-        if highlights:
-            parts.append(f"A recent highlight: {highlights[0]}")
+
+        if p.get("top_interests"):
+            parts.append(f"Interests (weave into stories): {', '.join(p['top_interests'][:5])}.")
+        if p.get("open_curiosities"):
+            parts.append(f"Unresolved curiosities (try to address): {', '.join(p['open_curiosities'][:3])}.")
+        if p.get("story_arc"):
+            parts.append(f"Ongoing story (continue if child wants): {p['story_arc']}.")
+        if p.get("personality_notes"):
+            parts.append(f"Personality: {', '.join(p['personality_notes'][:3])}.")
+        if p.get("parent_goal"):
+            parts.append(f"Parent's goal this week: {p['parent_goal']}.")
 
         memory = " ".join(parts)
-        logger.info(f"[Balu memory] Built memory for {uid}: {len(sessions)} sessions, {len(parts)} parts")
+        logger.info(f"[Balu memory] Profile for {uid}: {p.get('sessions_count', 0)} sessions, {len(parts)} parts, has_goal={bool(p.get('parent_goal'))}")
         return {"memory": memory, "has_memory": bool(memory)}
 
     except Exception as e:
         logger.error(f"[Balu memory] error: {e}")
         return {"memory": "", "has_memory": False}
+
+
+@app.put("/api/balu/parent-goal")
+async def set_parent_goal(body: dict, token: dict = Depends(get_current_user)):
+    """Parent sets a weekly learning/focus goal for Balu sessions."""
+    uid = token.get("uid")
+    goal = (body.get("goal") or "").strip()[:200]
+    try:
+        from services.firebase_service import get_db
+        db = get_db()
+        db.collection("balu_profiles").document(uid).set({"parent_goal": goal}, merge=True)
+        logger.info(f"[Balu] Parent goal set for {uid}: '{goal[:50]}'")
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"[Balu] set_parent_goal error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save goal")
+
+
+@app.get("/api/balu/profile")
+async def get_balu_profile(token: dict = Depends(get_current_user)):
+    """Returns the full child profile for display in Parent Corner."""
+    uid = token.get("uid")
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        if not is_firebase_available():
+            return {"profile": None}
+        db = get_db()
+        snap = db.collection("balu_profiles").document(uid).get()
+        return {"profile": snap.to_dict() if snap.exists else None}
+    except Exception as e:
+        logger.error(f"[Balu] get_profile error: {e}")
+        return {"profile": None}
 
 
 if __name__ == "__main__":

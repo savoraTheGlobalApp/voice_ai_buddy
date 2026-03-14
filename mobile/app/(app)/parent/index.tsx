@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,10 +6,13 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  TextInput,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../../../src/contexts/ThemeContext';
 import { useAuth } from '../../../src/contexts/AuthContext';
 import { apiClient } from '../../../src/api/client';
@@ -36,10 +39,23 @@ interface WeeklySummary {
   };
 }
 
+interface BaluProfile {
+  top_interests: string[];
+  open_curiosities: string[];
+  story_arc?: string;
+  personality_notes: string[];
+  parent_goal?: string;
+  sessions_count: number;
+  last_seen?: string;
+}
+
 export default function ParentCornerScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { currentUser } = useAuth();
+  const queryClient = useQueryClient();
+  const [goalInput, setGoalInput] = useState('');
+  const [goalEditing, setGoalEditing] = useState(false);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<WeeklySummary>({
     queryKey: ['parent-weekly-summary', currentUser?.uid],
@@ -47,6 +63,28 @@ export default function ParentCornerScreen() {
     enabled: !!currentUser,
     staleTime: 5 * 60 * 1000,
   });
+
+  const { data: profileData } = useQuery<{ profile: BaluProfile | null }>({
+    queryKey: ['balu-profile', currentUser?.uid],
+    queryFn: () => apiClient<{ profile: BaluProfile | null }>('/api/balu/profile'),
+    enabled: !!currentUser,
+    staleTime: 2 * 60 * 1000,
+    onSuccess: (d) => {
+      if (d.profile?.parent_goal && !goalEditing) setGoalInput(d.profile.parent_goal);
+    },
+  });
+
+  const goalMutation = useMutation({
+    mutationFn: (goal: string) => apiClient('/api/balu/parent-goal', { method: 'PUT', body: JSON.stringify({ goal }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['balu-profile'] });
+      setGoalEditing(false);
+      Alert.alert('Saved!', 'Balu will focus on your goal in the next session.');
+    },
+    onError: () => Alert.alert('Error', 'Could not save goal. Try again.'),
+  });
+
+  const profile = profileData?.profile;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -65,6 +103,66 @@ export default function ParentCornerScreen() {
           contentContainerStyle={styles.content}
           refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} tintColor={colors.accent} />}
         >
+
+          {/* ── Balu's Memory ──────────────────────────────────────── */}
+          {profile && (
+            <>
+              <SectionHeader icon="heart" label="What Balu Knows" colors={colors} />
+              {profile.top_interests.length > 0 && (
+                <View style={styles.card}>
+                  <Text style={styles.cardSubtitle}>Top interests</Text>
+                  <View style={styles.chips}>
+                    {profile.top_interests.slice(0, 6).map((i) => (
+                      <Chip key={i} label={i} colors={colors} accent />
+                    ))}
+                  </View>
+                </View>
+              )}
+              {profile.story_arc && (
+                <View style={[styles.card, styles.storyCard]}>
+                  <Text style={styles.cardSubtitle}>📖 Ongoing story</Text>
+                  <Text style={styles.storyText}>{profile.story_arc}</Text>
+                </View>
+              )}
+              {profile.open_curiosities.length > 0 && (
+                <View style={styles.card}>
+                  <Text style={styles.cardSubtitle}>Open curiosities</Text>
+                  {profile.open_curiosities.slice(0, 4).map((q) => (
+                    <View key={q} style={styles.questionRow}>
+                      <Text style={styles.questionBullet}>🤔</Text>
+                      <Text style={styles.questionText}>{q}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </>
+          )}
+
+          {/* ── Parent's Goal ──────────────────────────────────────── */}
+          <SectionHeader icon="flag" label="This Week's Goal" colors={colors} />
+          <View style={styles.card}>
+            <Text style={[styles.cardSubtitle, { marginBottom: 6 }]}>Tell Balu what to focus on</Text>
+            <TextInput
+              style={[styles.goalInput, { color: colors.text, borderColor: colors.surfaceBorder }]}
+              placeholder="e.g. Help learn about planets, practice counting to 20..."
+              placeholderTextColor={colors.textTertiary}
+              value={goalInput}
+              onChangeText={(t) => { setGoalInput(t); setGoalEditing(true); }}
+              multiline
+              maxLength={200}
+            />
+            {goalEditing && (
+              <TouchableOpacity
+                style={[styles.goalSaveBtn, { backgroundColor: colors.accent }]}
+                onPress={() => goalMutation.mutate(goalInput)}
+                disabled={goalMutation.isPending}
+              >
+                <Text style={styles.goalSaveBtnText}>
+                  {goalMutation.isPending ? 'Saving...' : 'Save Goal'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
 
           {/* ── Balu Conversations ────────────────────────────────── */}
           <SectionHeader icon="mic" label="Balu Conversations" colors={colors} />
@@ -215,6 +313,25 @@ function createStyles(c: ThemeColors) {
     questionText: { flex: 1, fontSize: 14, color: c.text, lineHeight: 20 },
     highlightsCard: { backgroundColor: c.accent + '0D' },
     highlightText: { fontSize: 14, color: c.text, lineHeight: 22, marginBottom: 6 },
+    storyCard: { backgroundColor: c.accent + '08' },
+    storyText: { fontSize: 14, color: c.text, lineHeight: 22, fontStyle: 'italic' },
+    goalInput: {
+      borderWidth: 1.5,
+      borderRadius: 12,
+      padding: 12,
+      fontSize: 14,
+      lineHeight: 20,
+      minHeight: 60,
+      textAlignVertical: 'top',
+      backgroundColor: c.surface,
+    },
+    goalSaveBtn: {
+      marginTop: 10,
+      borderRadius: 12,
+      paddingVertical: 10,
+      alignItems: 'center',
+    },
+    goalSaveBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
     emptyCard: {
       margin: 16,
       padding: 32,
