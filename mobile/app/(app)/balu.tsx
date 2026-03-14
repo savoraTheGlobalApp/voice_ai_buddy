@@ -80,7 +80,7 @@ const STATUS_LABELS: Record<CallStatus, string> = {
 // ── Vapi WebView HTML ─────────────────────────────────────────────────────────
 const VAPI_SDK_URL = 'https://res.cloudinary.com/dsqytt7ty/raw/upload/v1773051338/vapi-sdk/vapi.browser.js';
 
-function buildBaluHtml(assistantId: string, uid: string) { return `<!DOCTYPE html>
+function buildBaluHtml(assistantId: string, uid: string, memory: string) { return `<!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
 <body>
@@ -88,6 +88,7 @@ function buildBaluHtml(assistantId: string, uid: string) { return `<!DOCTYPE htm
   window.__VAPI_KEY__ = ${JSON.stringify(VAPI_PUBLIC_KEY)};
   window.__VAPI_ASSISTANT_ID__ = ${JSON.stringify(assistantId)};
   window.__USER_ID__ = ${JSON.stringify(uid)};
+  window.__MEMORY__ = ${JSON.stringify(memory)};
   function post(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
   }
@@ -116,7 +117,13 @@ function buildBaluHtml(assistantId: string, uid: string) { return `<!DOCTYPE htm
         if (msg.type === 'transcript' && msg.transcriptType === 'partial') post('user-speech-start');
         if (msg.type === 'transcript' && msg.transcriptType === 'final')   post('user-speech-end', { transcript: msg.transcript });
       });
-      vapi.start(window.__VAPI_ASSISTANT_ID__, { variableValues: { uid: window.__USER_ID__ } });
+      var overrides = { variableValues: { uid: window.__USER_ID__ } };
+      if (window.__MEMORY__) {
+        overrides.assistantOverrides = {
+          model: { messages: [{ role: 'system', content: window.__MEMORY__ }] }
+        };
+      }
+      vapi.start(window.__VAPI_ASSISTANT_ID__, overrides);
       function handleMsg(e) {
         try {
           var m = JSON.parse(e.data);
@@ -161,6 +168,7 @@ export default function BaluScreen() {
 
   const [status, setStatus]                   = useState<CallStatus>('idle');
   const [micGranted, setMicGranted]           = useState(false);
+  const [baluMemory, setBaluMemory]           = useState('');
   const [callActive, setCallActive]           = useState(false);
   const [secondsLeft, setSecondsLeft]         = useState(SESSION_SECONDS);
   const [errorMsg, setErrorMsg]               = useState('');
@@ -191,12 +199,15 @@ export default function BaluScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Fetch daily remaining on mount ──────────────────────────────────────────
+  // ── Fetch daily remaining + memory on mount ─────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
     apiClient<{ seconds_remaining: number }>('/api/vapi/remaining')
       .then(r => setDailyRemaining(r.seconds_remaining))
       .catch(() => setDailyRemaining(SESSION_SECONDS)); // fail open
+    apiClient<{ memory: string; has_memory: boolean }>('/api/balu/memory')
+      .then(r => { if (r.has_memory) setBaluMemory(r.memory); })
+      .catch(() => {}); // fail silently — memory is best-effort
   }, [currentUser]);
 
   // ── Record usage when call ends ─────────────────────────────────────────────
@@ -445,7 +456,7 @@ export default function BaluScreen() {
       {callActive && micGranted && (
         <WebView
           ref={webViewRef}
-          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? ''), baseUrl: 'https://vapi.ai' }}
+          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}

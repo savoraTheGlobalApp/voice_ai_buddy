@@ -3694,6 +3694,60 @@ async def parent_weekly_summary(token: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to load summary")
 
 
+@app.get("/api/balu/memory")
+async def get_balu_memory(token: dict = Depends(get_current_user)):
+    """Returns a condensed child memory profile built from past Balu sessions."""
+    uid = token.get("uid")
+    try:
+        from services.firebase_service import is_firebase_available, get_db
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        if not is_firebase_available():
+            return {"memory": "", "has_memory": False}
+
+        db = get_db()
+
+        # Fetch last 10 sessions across all time
+        sessions_ref = (
+            db.collection("balu_sessions").document(uid).collection("sessions")
+            .order_by("started_at", direction="DESCENDING")
+            .limit(10)
+            .stream()
+        )
+        sessions = [s.to_dict() for s in sessions_ref]
+
+        if not sessions:
+            return {"memory": "", "has_memory": False}
+
+        # Aggregate and deduplicate across sessions
+        def dedup(lst):
+            seen = set()
+            return [x for x in lst if x and not (x.lower() in seen or seen.add(x.lower()))]
+
+        all_interests = dedup([i for s in sessions for i in s.get("interests_shown", [])])[:6]
+        all_concepts  = dedup([c for s in sessions for c in s.get("concepts_asked", [])])[:5]
+        all_words     = dedup([w for s in sessions for w in s.get("words_learned", [])])[:8]
+        highlights    = [s["session_highlight"] for s in sessions if s.get("session_highlight")][:3]
+
+        # Build a natural language memory string for the assistant
+        parts = []
+        if all_interests:
+            parts.append(f"This child is interested in: {', '.join(all_interests)}.")
+        if all_words:
+            parts.append(f"They know words like: {', '.join(all_words)}.")
+        if all_concepts:
+            parts.append(f"They have asked about: {', '.join(all_concepts)}.")
+        if highlights:
+            parts.append(f"A recent highlight: {highlights[0]}")
+
+        memory = " ".join(parts)
+        logger.info(f"[Balu memory] Built memory for {uid}: {len(sessions)} sessions, {len(parts)} parts")
+        return {"memory": memory, "has_memory": bool(memory)}
+
+    except Exception as e:
+        logger.error(f"[Balu memory] error: {e}")
+        return {"memory": "", "has_memory": False}
+
+
 if __name__ == "__main__":
     import uvicorn
 
