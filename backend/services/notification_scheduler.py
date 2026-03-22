@@ -48,7 +48,7 @@ def should_trigger_now(trigger: Dict[str, Any]) -> bool:
         scheduled_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         time_diff = abs((now - scheduled_today).total_seconds() / 60)
 
-        return time_diff < 5
+        return time_diff < 8  # 8 min window covers any 15-min interval offset
 
     if trigger_type == "event":
         # Event-based triggers are handled separately
@@ -249,11 +249,10 @@ async def process_campaign(campaign) -> Dict[str, int]:
     for user_data in eligible_users:
         user_id = user_data["uid"]
 
-        # TODO: Re-enable spam check for production
-        # Check if user received this campaign recently (prevent spam)
-        # if await has_received_recently(user_id, campaign.campaign_id, hours=24):
-        #     stats["skipped"] += 1
-        #     continue
+        # Prevent duplicate sends within 12 hours
+        if await has_received_recently(user_id, campaign.campaign_id, hours=12):
+            stats["skipped"] += 1
+            continue
 
         # Select content variant (for A/B testing)
         content = select_variant(campaign, user_id)
@@ -264,7 +263,7 @@ async def process_campaign(campaign) -> Dict[str, int]:
         deep_link = content.get("deep_link", "")
 
         # Simple personalization (can be expanded)
-        child_name = user_data.get("child_name", "there")
+        child_name = user_data.get("name", "there")
         title = title.replace("{child_name}", child_name)
         body = body.replace("{child_name}", child_name)
 
