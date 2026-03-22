@@ -1,5 +1,16 @@
-import { Platform, Alert, PermissionsAndroid } from 'react-native';
+import { Platform, Alert, PermissionsAndroid, Linking } from 'react-native';
 import { router } from 'expo-router';
+
+function showSettingsAlert() {
+  Alert.alert(
+    'Enable Notifications',
+    'To get daily story reminders, please enable notifications for YourStory in your device Settings.',
+    [
+      { text: 'Not Now', style: 'cancel' },
+      { text: 'Open Settings', onPress: () => Linking.openSettings() },
+    ]
+  );
+}
 
 // Conditionally import Firebase messaging (only available in native builds)
 let messaging: any = null;
@@ -84,39 +95,42 @@ export async function registerForPushNotifications(): Promise<string | null> {
     let permissionGranted = false;
 
     if (Platform.OS === 'android') {
-      // Android 13+ requires explicit POST_NOTIFICATIONS permission
-      // First check if we already have permission
-      const hasPermission = await PermissionsAndroid.check(
-        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
-      );
-
-      if (hasPermission) {
-        console.log('Android notification permission already granted');
-        permissionGranted = true;
+      if (Platform.Version < 33) {
+        // Android < 13: no POST_NOTIFICATIONS permission — use Firebase to check actual state
+        const authStatus = await msg.hasPermission();
+        permissionGranted = authStatus === 1 || authStatus === 2; // AUTHORIZED or PROVISIONAL
+        console.log('Android < 13 Firebase auth status:', authStatus, 'granted:', permissionGranted);
+        if (!permissionGranted) {
+          showSettingsAlert();
+        }
       } else {
-        // Request permission - this will show the system dialog
-        console.log('Requesting Android POST_NOTIFICATIONS permission...');
-        const result = await PermissionsAndroid.request(
+        // Android 13+: must request POST_NOTIFICATIONS
+        const alreadyGranted = await PermissionsAndroid.check(
           PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
         );
-
-        permissionGranted = result === PermissionsAndroid.RESULTS.GRANTED;
-        console.log('Android permission request result:', result, 'granted:', permissionGranted);
-
-        if (!permissionGranted) {
-          // Check if user permanently denied (never ask again was selected)
-          const canAskAgain = result !== PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN;
-          if (!canAskAgain) {
-            console.log('User permanently denied notification permission');
-            // Could show a dialog explaining how to enable in settings
+        if (alreadyGranted) {
+          console.log('Android notification permission already granted');
+          permissionGranted = true;
+        } else {
+          console.log('Requesting Android POST_NOTIFICATIONS permission...');
+          const result = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+          );
+          permissionGranted = result === PermissionsAndroid.RESULTS.GRANTED;
+          console.log('Android permission request result:', result, 'granted:', permissionGranted);
+          if (!permissionGranted) {
+            showSettingsAlert();
           }
         }
       }
     } else {
-      // iOS uses Firebase messaging permission
+      // iOS: requestPermission() shows dialog first time, returns cached status after
       const authStatus = await msg.requestPermission();
       permissionGranted = authStatus === 1 || authStatus === 2;
       console.log('iOS permission status:', authStatus, 'granted:', permissionGranted);
+      if (!permissionGranted) {
+        showSettingsAlert();
+      }
     }
 
     if (!permissionGranted) {

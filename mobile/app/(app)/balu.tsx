@@ -80,7 +80,7 @@ const STATUS_LABELS: Record<CallStatus, string> = {
 // ── Vapi WebView HTML ─────────────────────────────────────────────────────────
 const VAPI_SDK_URL = 'https://res.cloudinary.com/dsqytt7ty/raw/upload/v1773051338/vapi-sdk/vapi.browser.js';
 
-function buildBaluHtml(assistantId: string, uid: string, memory: string) { return `<!DOCTYPE html>
+function buildBaluHtml(assistantId: string, uid: string, memory: string, childName: string, childAge: number) { return `<!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
 <body>
@@ -89,6 +89,8 @@ function buildBaluHtml(assistantId: string, uid: string, memory: string) { retur
   window.__VAPI_ASSISTANT_ID__ = ${JSON.stringify(assistantId)};
   window.__USER_ID__ = ${JSON.stringify(uid)};
   window.__MEMORY__ = ${JSON.stringify(memory)};
+  window.__CHILD_NAME__ = ${JSON.stringify(childName)};
+  window.__CHILD_AGE__ = ${childAge || 0};
   function post(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
   }
@@ -117,12 +119,14 @@ function buildBaluHtml(assistantId: string, uid: string, memory: string) { retur
         if (msg.type === 'transcript' && msg.transcriptType === 'partial') post('user-speech-start');
         if (msg.type === 'transcript' && msg.transcriptType === 'final')   post('user-speech-end', { transcript: msg.transcript });
       });
-      var overrides = { variableValues: { uid: window.__USER_ID__ } };
-      if (window.__MEMORY__) {
-        overrides.assistantOverrides = {
-          model: { messages: [{ role: 'system', content: window.__MEMORY__ }] }
-        };
-      }
+      var overrides = {
+        variableValues: {
+          uid: window.__USER_ID__,
+          child_memory: window.__MEMORY__ || '',
+          child_name: window.__CHILD_NAME__ || '',
+          child_age: String(window.__CHILD_AGE__ || '')
+        }
+      };
       vapi.start(window.__VAPI_ASSISTANT_ID__, overrides);
       function handleMsg(e) {
         try {
@@ -152,7 +156,7 @@ const SCREEN_HEIGHT = Dimensions.get('window').height;
 export default function BaluScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { currentUser } = useAuth();
+  const { currentUser, userData } = useAuth();
   const insets = useSafeAreaInsets();
 
   // Calculate positions ONCE at mount — frozen forever, immune to layout shifts
@@ -238,6 +242,7 @@ export default function BaluScreen() {
     setSecondsLeft(sessionCap);
 
     if (micGranted) {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
       callStartTimeRef.current = Date.now();
       // Pre-register uid→assistant mapping so webhook can identify this user
       apiClient('/api/vapi/register-call', {
@@ -252,7 +257,7 @@ export default function BaluScreen() {
     setStatus('requesting-permission');
     const { granted } = await Audio.requestPermissionsAsync();
     if (granted) {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
       setMicGranted(true);
       callStartTimeRef.current = Date.now();
       apiClient('/api/vapi/register-call', {
@@ -456,7 +461,7 @@ export default function BaluScreen() {
       {callActive && micGranted && (
         <WebView
           ref={webViewRef}
-          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory), baseUrl: 'https://vapi.ai' }}
+          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory, userData?.name ?? '', userData?.age ?? 0), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}

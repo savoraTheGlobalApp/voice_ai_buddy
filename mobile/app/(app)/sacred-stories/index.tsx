@@ -11,6 +11,7 @@ import {
   StatusBar,
   Image,
   Alert,
+  Pressable,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -434,6 +435,67 @@ const dotsStyles = StyleSheet.create({
   },
 });
 
+const CATEGORY_ORDER = ['ramayana', 'mahabharata', 'habits', 'emotions', 'moral_values'] as const;
+
+function CustomStoryFAB({ play }: { play: PlayFn }) {
+  const [open, setOpen] = useState(false);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const handleCategory = (category: string) => {
+    play('nameSelect');
+    setOpen(false);
+    router.push(`/(app)/sacred-stories/custom?category=${category}`);
+  };
+
+  return (
+    <>
+      {/* Dim overlay when open */}
+      {open && (
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
+      )}
+
+      <View style={styles.fabContainer} pointerEvents="box-none">
+        {/* Category options — shown above FAB when open */}
+        {open && (
+          <View style={styles.fabMenu}>
+            {CATEGORY_ORDER.map((cat) => {
+              const cfg = getCategoryConfig(cat);
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={styles.fabMenuItem}
+                  onPress={() => handleCategory(cat)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.fabMenuEmoji}>{cfg.emoji}</Text>
+                  <Text style={styles.fabMenuLabel}>{cfg.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {/* FAB button */}
+        <TouchableOpacity
+          style={[styles.fab, open && styles.fabActive]}
+          onPress={() => { play('nameSelect'); setOpen((v) => !v); }}
+          activeOpacity={0.85}
+        >
+          {open ? (
+            <Text style={styles.fabIcon}>✕</Text>
+          ) : (
+            <>
+              <Text style={styles.fabIcon}>✨</Text>
+              <Text style={styles.fabLabel}>Create</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    </>
+  );
+}
+
 export default function SacredStoriesLibrary() {
   const { data, isLoading, error } = useStaticStories();
   const { currentUser } = useAuth();
@@ -510,6 +572,9 @@ export default function SacredStoriesLibrary() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Floating custom story button */}
+      <CustomStoryFAB play={play} />
     </View>
   );
 }
@@ -775,6 +840,71 @@ function createStyles(c: ThemeColors) {
       fontWeight: '600',
       textAlign: 'center',
       opacity: 0.85,
+    },
+
+    // FAB
+    fabContainer: {
+      position: 'absolute',
+      bottom: 24,
+      right: 20,
+      alignItems: 'flex-end',
+      zIndex: 100,
+    },
+    fab: {
+      height: 48,
+      borderRadius: 24,
+      paddingHorizontal: 16,
+      backgroundColor: 'rgba(249,115,22,0.72)',
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 8,
+      elevation: 8,
+    },
+    fabActive: {
+      backgroundColor: c.surface,
+      paddingHorizontal: 20,
+    },
+    fabIcon: {
+      fontSize: 18,
+    },
+    fabLabel: {
+      color: '#fff',
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    fabMenu: {
+      marginBottom: 12,
+      gap: 8,
+      alignItems: 'flex-end',
+    },
+    fabMenuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: c.surface,
+      borderRadius: 24,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      gap: 8,
+      borderWidth: 1,
+      borderColor: c.surfaceBorder,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.12,
+      shadowRadius: 4,
+      elevation: 4,
+    },
+    fabMenuEmoji: {
+      fontSize: 18,
+    },
+    fabMenuLabel: {
+      color: c.text,
+      fontSize: 14,
+      fontWeight: '600',
     },
 
     // Characters row

@@ -35,16 +35,20 @@ def should_trigger_now(trigger: Dict[str, Any]) -> bool:
         return True
 
     if trigger_type == "scheduled":
-        # Check if current time matches schedule
         now = datetime.now(timezone.utc)
         hour = trigger.get("hour", 9)
         minute = trigger.get("minute", 0)
+        days_of_week = trigger.get("days_of_week")  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+
+        # Check day of week if specified
+        if days_of_week is not None and now.weekday() not in days_of_week:
+            return False
 
         # Trigger if within 5 minutes of scheduled time
         scheduled_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         time_diff = abs((now - scheduled_today).total_seconds() / 60)
 
-        return time_diff < 5  # Within 5 minutes of schedule
+        return time_diff < 5
 
     if trigger_type == "event":
         # Event-based triggers are handled separately

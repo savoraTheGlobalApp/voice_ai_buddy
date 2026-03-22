@@ -70,7 +70,28 @@ from slowapi.errors import RateLimitExceeded
 from middleware.rate_limit import limiter, track_usage, get_usage_summary, get_limit_for, get_subscription_tier
 from middleware.request_logger import RequestLoggerMiddleware
 
-app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0")
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+scheduler = AsyncIOScheduler()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start notification scheduler (runs process_all_campaigns every 15 minutes)
+    async def run_notifications():
+        try:
+            from services.notification_scheduler import process_all_campaigns
+            await process_all_campaigns()
+        except Exception as e:
+            logger.error(f"Notification scheduler error: {e}")
+
+    scheduler.add_job(run_notifications, "interval", minutes=15, id="notification_scheduler")
+    scheduler.start()
+    logger.info("Notification scheduler started (every 15 minutes)")
+    yield
+    scheduler.shutdown()
+
+app = FastAPI(title="Voice AI Buddy Backend", version="1.0.0", lifespan=lifespan)
 
 # Request logging (outermost — wraps everything)
 app.add_middleware(RequestLoggerMiddleware)
