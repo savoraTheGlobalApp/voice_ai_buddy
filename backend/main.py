@@ -3,7 +3,7 @@ Voice AI Buddy Backend API
 Handles ephemeral token generation for OpenAI Realtime API
 Future: Hardware control, ML models, parental insights
 """
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 import os
@@ -899,6 +899,56 @@ async def text_to_speech(request: TTSRequest):
             status_code=500,
             detail=f"TTS generation error: {str(e)}"
         )
+
+
+@app.post("/api/stt/transcribe")
+async def transcribe_audio_file(audio: UploadFile = File(...)):
+    """
+    Transcribe an audio file (m4a/aac) using Deepgram REST API.
+    Used by native mobile clients that record with expo-av.
+    """
+    dg_api_key = os.getenv("DEEPGRAM_API_KEY")
+    if not dg_api_key:
+        raise HTTPException(status_code=500, detail="DEEPGRAM_API_KEY not configured")
+
+    audio_data = await audio.read()
+    content_type = audio.content_type or "audio/m4a"
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.deepgram.com/v1/listen?model=nova-2-general&language=en",
+                headers={
+                    "Authorization": f"Token {dg_api_key}",
+                    "Content-Type": content_type,
+                },
+                content=audio_data,
+                timeout=30.0,
+            )
+        if response.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Deepgram error: {response.text}")
+
+        result = response.json()
+        transcript = (
+            result.get("results", {})
+            .get("channels", [{}])[0]
+            .get("alternatives", [{}])[0]
+            .get("transcript", "")
+            .strip()
+        )
+        confidence = (
+            result.get("results", {})
+            .get("channels", [{}])[0]
+            .get("alternatives", [{}])[0]
+            .get("confidence", 0)
+        )
+        duration = result.get("metadata", {}).get("duration", 0)
+        logger.info(f"[STT] bytes={len(audio_data)} content_type={content_type} duration={duration:.2f}s confidence={confidence:.2f} transcript='{transcript[:60]}'")
+        return {"transcript": transcript, "debug": {"bytes": len(audio_data), "duration": duration, "confidence": confidence, "content_type": content_type}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription error: {str(e)}")
 
 
 @app.websocket("/api/stt/deepgram")
