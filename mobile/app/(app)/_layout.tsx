@@ -53,11 +53,7 @@ export default function AppLayout() {
         <Tabs.Screen
           name="play"
           options={{
-            title: 'Play',
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="play-circle" size={size} color={color} />
-            ),
-            tabBarButton: (props) => <PlayTabButton {...props} />,
+            href: null, // F06: Play tab removed
           }}
         />
         <Tabs.Screen
@@ -90,7 +86,7 @@ export default function AppLayout() {
           options={{
             title: 'Parent',
             tabBarIcon: ({ color, size }) => (
-              <Ionicons name="heart-outline" size={size} color={color} />
+              <Ionicons name="people-outline" size={size} color={color} />
             ),
           }}
         />
