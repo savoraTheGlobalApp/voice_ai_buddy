@@ -592,15 +592,12 @@ export default function BlockViewerScreen() {
           onStorySwiped={onStorySwiped}
           play={play}
         />
-        {/* Narrator button — positioned above bottom actions, clear of header */}
+        {/* F08: Large centered play button */}
         <TouchableOpacity
           onPress={() => {
-            if (isCustom && audioStatus === 'pending') return; // still generating
+            if (isCustom && audioStatus === 'pending') return;
             if (isCustom && audioStatus === 'failed') {
-              // Retry audio generation
-              if (currentUser?.uid) {
-                retryAudio.mutate({ uid: currentUser.uid, storyId });
-              }
+              if (currentUser?.uid) retryAudio.mutate({ uid: currentUser.uid, storyId });
               return;
             }
             play('tabFocus');
@@ -608,22 +605,20 @@ export default function BlockViewerScreen() {
             trackNarratorButtonTapped(storyId, displayContent.category);
             router.push(`/(app)/sacred-stories/narrator?contentId=${storyId}${isCustom ? '&source=custom' : ''}`);
           }}
-          style={[styles.narratorBtn, { top: safeTop + 60 }]}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={styles.playBtn}
+          activeOpacity={0.85}
         >
           <Ionicons
-            name={isCustom && audioStatus === 'failed' ? 'refresh-outline' : 'headset-outline'}
-            size={20}
+            name={isCustom && audioStatus === 'failed' ? 'refresh' : 'play-circle'}
+            size={80}
             color="#fff"
           />
-          <Text style={styles.narratorBtnLabel}>
-            {isCustom && audioStatus === 'pending'
-              ? '⏳ Generating...'
-              : isCustom && audioStatus === 'failed'
-              ? '↺ Retry audio'
+          <Text style={styles.playBtnLabel}>
+            {isCustom && audioStatus === 'pending' ? '⏳ Generating...'
+              : isCustom && audioStatus === 'failed' ? 'Retry audio'
               : 'Listen'}
           </Text>
-          {narratorHighlight && <PulsingRing borderRadius={20} />}
+          {narratorHighlight && <PulsingRing borderRadius={48} />}
         </TouchableOpacity>
       </View>
     </>
@@ -746,24 +741,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  narratorBtn: {
+  // F08: large centered play button
+  playBtn: {
     position: 'absolute',
-    right: 16,
-    zIndex: 100,
-    flexDirection: 'row',
+    top: '40%',
+    left: 0,
+    right: 0,
     alignItems: 'center',
+    zIndex: 100,
     gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.25)',
   },
-  narratorBtnLabel: {
+  playBtnLabel: {
     color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   container: {
     flex: 1,
