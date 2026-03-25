@@ -52,7 +52,7 @@ interface BaluProfile {
 export default function ParentCornerScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { currentUser } = useAuth();
+  const { currentUser, userData } = useAuth();
   const queryClient = useQueryClient();
   const [goalInput, setGoalInput] = useState('');
   const [goalEditing, setGoalEditing] = useState(false);
@@ -104,6 +104,36 @@ export default function ParentCornerScreen() {
           refreshControl={<RefreshControl refreshing={isFetching} onRefresh={refetch} tintColor={colors.accent} />}
         >
 
+          {/* ── F01: Child name greeting ────────────────────────────── */}
+          {userData?.name && (
+            <Text style={styles.greeting}>Here's what {userData.name} has been up to 👀</Text>
+          )}
+
+          {/* ── F05: Goal at the top ────────────────────────────────── */}
+          <SectionHeader icon="flag" label="Tell Balu what to focus on" colors={colors} />
+          <View style={styles.card}>
+            <TextInput
+              style={[styles.goalInput, { color: colors.text, borderColor: colors.surfaceBorder }]}
+              placeholder="e.g. Help learn about planets, practice counting to 20..."
+              placeholderTextColor={colors.textTertiary}
+              value={goalInput}
+              onChangeText={(t) => { setGoalInput(t); setGoalEditing(true); }}
+              multiline
+              maxLength={200}
+            />
+            {goalEditing && (
+              <TouchableOpacity
+                style={[styles.goalSaveBtn, { backgroundColor: colors.accent }]}
+                onPress={() => goalMutation.mutate(goalInput)}
+                disabled={goalMutation.isPending}
+              >
+                <Text style={styles.goalSaveBtnText}>
+                  {goalMutation.isPending ? 'Saving...' : 'Save Goal'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
           {/* ── Balu's Memory ──────────────────────────────────────── */}
           {profile && (
             <>
@@ -137,32 +167,6 @@ export default function ParentCornerScreen() {
               )}
             </>
           )}
-
-          {/* ── Parent's Goal ──────────────────────────────────────── */}
-          <SectionHeader icon="flag" label="This Week's Goal" colors={colors} />
-          <View style={styles.card}>
-            <Text style={[styles.cardSubtitle, { marginBottom: 6 }]}>Tell Balu what to focus on</Text>
-            <TextInput
-              style={[styles.goalInput, { color: colors.text, borderColor: colors.surfaceBorder }]}
-              placeholder="e.g. Help learn about planets, practice counting to 20..."
-              placeholderTextColor={colors.textTertiary}
-              value={goalInput}
-              onChangeText={(t) => { setGoalInput(t); setGoalEditing(true); }}
-              multiline
-              maxLength={200}
-            />
-            {goalEditing && (
-              <TouchableOpacity
-                style={[styles.goalSaveBtn, { backgroundColor: colors.accent }]}
-                onPress={() => goalMutation.mutate(goalInput)}
-                disabled={goalMutation.isPending}
-              >
-                <Text style={styles.goalSaveBtnText}>
-                  {goalMutation.isPending ? 'Saving...' : 'Save Goal'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
 
           {/* ── Balu Conversations ────────────────────────────────── */}
           <SectionHeader icon="mic" label="Balu Conversations" colors={colors} />
@@ -295,6 +299,7 @@ function createStyles(c: ThemeColors) {
     center:       { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12, padding: 24 },
     loadingText:  { color: c.textSecondary, fontSize: 14 },
     content:      { paddingBottom: 40 },
+    greeting:     { fontSize: 18, fontWeight: '700', color: c.text, marginHorizontal: 16, marginTop: 16, marginBottom: 4 },
     card: {
       marginHorizontal: 16,
       marginBottom: 4,
