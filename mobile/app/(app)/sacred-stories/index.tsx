@@ -14,6 +14,7 @@ import {
   Pressable,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useStaticStories } from '../../../src/hooks/useStaticStories';
 import { useCustomStories, useDeleteCustomStory } from '../../../src/hooks/useCustomStory';
@@ -35,12 +36,13 @@ const HERO_HEIGHT = 340;
 type PlayFn = (name: SoundName) => void;
 
 // Category display config: label, gradient colors, cover emoji
+// F04: brighter, more vibrant gradients
 const CATEGORY_CONFIG: Record<string, { label: string; gradient: [string, string]; emoji: string }> = {
-  mahabharata:   { label: 'Mahabharata',      gradient: ['#7c3aed', '#2e1065'], emoji: '⚔️' },
-  ramayana:      { label: 'Ramayana',          gradient: ['#b45309', '#431407'], emoji: '🏹' },
-  habits:        { label: 'Daily Habits',      gradient: ['#0891b2', '#0c1a2e'], emoji: '🌱' },
-  emotions:      { label: 'Emotions',          gradient: ['#db2777', '#4a0020'], emoji: '❤️' },
-  moral_values:  { label: 'Moral Values',      gradient: ['#15803d', '#052e16'], emoji: '🌟' },
+  mahabharata:   { label: 'Mahabharata',      gradient: ['#a855f7', '#6d28d9'], emoji: '⚔️' },
+  ramayana:      { label: 'Ramayana',          gradient: ['#f97316', '#b45309'], emoji: '🏹' },
+  habits:        { label: 'Daily Habits',      gradient: ['#06b6d4', '#0369a1'], emoji: '🌱' },
+  emotions:      { label: 'Emotions',          gradient: ['#f43f5e', '#be185d'], emoji: '❤️' },
+  moral_values:  { label: 'Moral Values',      gradient: ['#22c55e', '#15803d'], emoji: '🌟' },
 };
 
 /** Convert a portrait Cloudinary URL (ar_9:16) to landscape (ar_16:9) for the hero banner. */
@@ -575,6 +577,21 @@ export default function SacredStoriesLibrary() {
 
       {/* Floating custom story button */}
       <CustomStoryFAB play={play} />
+
+      {/* F06: Balu icon — bottom-left, starts a random story */}
+      <TouchableOpacity
+        style={styles.baluFab}
+        activeOpacity={0.85}
+        onPress={() => {
+          if (stories.length === 0) return;
+          const random = stories[Math.floor(Math.random() * stories.length)];
+          play('startStory');
+          router.push(`/(app)/sacred-stories/block-viewer?contentId=${random.story_id}`);
+        }}
+      >
+        <Image source={require('../../../assets/icon.png')} style={styles.baluFabIcon} />
+        <Text style={styles.baluFabLabel}>Balu</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -840,6 +857,36 @@ function createStyles(c: ThemeColors) {
       fontWeight: '600',
       textAlign: 'center',
       opacity: 0.85,
+    },
+
+    // F06: Balu random-story button (top-right)
+    baluFab: {
+      position: 'absolute',
+      top: 52,
+      right: 16,
+      height: 72,
+      borderRadius: 36,
+      paddingHorizontal: 16,
+      backgroundColor: '#f97316',
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 10,
+      zIndex: 100,
+    },
+    baluFabIcon: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+    },
+    baluFabLabel: {
+      color: '#fff',
+      fontSize: 17,
+      fontWeight: '700',
     },
 
     // FAB
