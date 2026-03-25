@@ -7,7 +7,9 @@ import {
   Animated,
   Dimensions,
   Alert,
+  Platform,
 } from 'react-native';
+import * as Speech from 'expo-speech';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
@@ -32,7 +34,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const VAPI_PUBLIC_KEY        = process.env.EXPO_PUBLIC_VAPI_KEY ?? '';
 const VAPI_ASSISTANT_ID      = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID ?? '';
 const VAPI_ASSISTANT_ID_V2   = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID_V2 ?? '';
-const SESSION_SECONDS        = 3 * 60;
+const SESSION_SECONDS        = 60 * 60; // fallback when daily quota unknown (1h)
 
 type AssistantMode = 'classic' | 'learning';
 const ASSISTANT_MODES: { key: AssistantMode; label: string; desc: string }[] = [
@@ -145,6 +147,275 @@ function buildBaluHtml(assistantId: string, uid: string, memory: string, childNa
 </body>
 </html>`; }
 
+// ── DIY Voice Stack HTML ──────────────────────────────────────────────────────
+const BACKEND_WS_URL = __DEV__
+  ? 'ws://10.0.2.2:8000'
+  : 'wss://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app';
+const BACKEND_HTTP_URL = __DEV__
+  ? 'http://10.0.2.2:8000'
+  : 'https://voiceaibuddybackend-voiceaibuddy-pr-33.up.railway.app';
+
+function buildDiyBaluHtml(childName: string, childAge: number, memory: string) { return `<!DOCTYPE html>
+<html>
+<head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
+<body><script>
+  var BACKEND_WS   = ${JSON.stringify(BACKEND_WS_URL)};
+  var BACKEND_HTTP = ${JSON.stringify(BACKEND_HTTP_URL)};
+  var CHILD_NAME   = ${JSON.stringify(childName || 'there')};
+  var CHILD_AGE    = ${childAge || 5};
+  var MEMORY       = ${JSON.stringify(memory || '')};
+
+  var sttWs = null, ttsWs = null;
+  var audioCtx = null, micStream = null, processor = null, silentGain = null;
+  var nextPlayTime = 0;
+  var isBaluSpeaking = false;
+  var messages = [];
+  var stopped = false;
+  var pendingAudioCount = 0;
+  var dgPlaybackDone = false;
+  var speechTimeoutId = null;
+  var totalQueuedDuration = 0;
+
+  function post(type, payload) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
+  }
+
+  function buildSystemPrompt() {
+    var name = CHILD_NAME !== 'there' ? CHILD_NAME : 'a child';
+    var prompt = 'You are Balu, a warm and friendly bear who loves talking with children. '
+      + 'You are speaking with ' + name + ', who is ' + CHILD_AGE + ' years old. '
+      + 'Keep every response to 1-3 short sentences. Use simple, fun words. Be enthusiastic!';
+    if (MEMORY) prompt += ' What you know about this child: ' + MEMORY;
+    return prompt;
+  }
+
+  function init() {
+    messages = [{ role: 'system', content: buildSystemPrompt() }];
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    } catch(e) {
+      post('error', { message: 'AudioContext: ' + e.message }); return;
+    }
+
+    // ── TTS WebSocket ──
+    try {
+      ttsWs = new WebSocket(BACKEND_WS + '/api/tts/deepgram');
+      ttsWs.binaryType = 'arraybuffer';
+      ttsWs.onopen = function() { console.log('[DIY] TTS connected'); };
+      ttsWs.onmessage = onTTSMessage;
+      ttsWs.onerror = function() { if (!stopped) post('error', { message: 'TTS connection failed' }); };
+      ttsWs.onclose = function() { console.log('[DIY] TTS closed'); };
+    } catch(e) { post('error', { message: 'TTS init: ' + e.message }); return; }
+
+    // ── STT WebSocket ──
+    try {
+      sttWs = new WebSocket(BACKEND_WS + '/api/stt/deepgram');
+      sttWs.binaryType = 'arraybuffer';
+      sttWs.onopen = function() {
+        console.log('[DIY] STT connected');
+        post('call-start');
+        startMic();
+      };
+      sttWs.onmessage = onSTTMessage;
+      sttWs.onerror = function() { if (!stopped) post('error', { message: 'STT connection failed' }); };
+      sttWs.onclose = function() { console.log('[DIY] STT closed'); };
+    } catch(e) { post('error', { message: 'STT init: ' + e.message }); return; }
+  }
+
+  function startMic() {
+    try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      post('error', { message: 'getUserMedia not available (check WebView origin)' }); return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false })
+      .then(function(stream) {
+        micStream = stream;
+        var source = audioCtx.createMediaStreamSource(stream);
+        processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0;
+        processor.onaudioprocess = function(e) {
+          if (stopped) return;
+          if (!sttWs || sttWs.readyState !== WebSocket.OPEN) return;
+          var f32 = e.inputBuffer.getChannelData(0);
+          var i16 = new Int16Array(f32.length);
+          for (var i = 0; i < f32.length; i++) {
+            i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+          }
+          sttWs.send(i16.buffer);
+        };
+        source.connect(processor);
+        processor.connect(silentGain);
+        silentGain.connect(audioCtx.destination);
+      })
+      .catch(function(e) { post('error', { message: 'Mic: ' + e.message }); });
+    } catch(e) { post('error', { message: 'Mic init: ' + (e.message || e) }); }
+  }
+
+  function onSTTMessage(event) {
+    try {
+      var data = JSON.parse(event.data);
+      if (data.type === 'transcript' && data.text && data.text.trim()) {
+        if (isBaluSpeaking) return; // ignore echo while Balu is talking
+        post('user-speech-start');
+        post('user-speech-end', { transcript: data.text });
+        messages.push({ role: 'user', content: data.text });
+        callLLM();
+      }
+    } catch(e) {}
+  }
+
+  function onSpeechComplete() {
+    if (stopped || !isBaluSpeaking) return;
+    if (speechTimeoutId) { clearTimeout(speechTimeoutId); speechTimeoutId = null; }
+    isBaluSpeaking = false;
+    nextPlayTime = 0;
+    pendingAudioCount = 0;
+    dgPlaybackDone = false;
+    post('speech-end');
+  }
+
+  function callLLM() {
+    pendingAudioCount = 0;
+    dgPlaybackDone = false;
+    totalQueuedDuration = 0;
+    isBaluSpeaking = true;
+    post('speech-start');
+    // Safety net: force speech-end after 25s if nothing else triggers it
+    if (speechTimeoutId) clearTimeout(speechTimeoutId);
+    speechTimeoutId = setTimeout(function() { onSpeechComplete(); }, 25000);
+    var body = JSON.stringify({ messages: messages, model: 'gpt-4o-mini' });
+    fetch(BACKEND_HTTP + '/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+    }).then(function(response) {
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var fullResponse = '';
+      var sentenceBuf = '';
+      function pump() {
+        reader.read().then(function(result) {
+          if (result.done) {
+            if (sentenceBuf.trim()) sendToTTS(sentenceBuf.trim());
+            if (ttsWs && ttsWs.readyState === WebSocket.OPEN) ttsWs.send(JSON.stringify({ type: 'flush' }));
+            messages.push({ role: 'assistant', content: fullResponse });
+            return;
+          }
+          var text = decoder.decode(result.value, { stream: true });
+          var lines = text.split('\\n');
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i];
+            if (line.indexOf('data: ') !== 0) continue;
+            try {
+              var chunk = JSON.parse(line.slice(6));
+              if (chunk.delta) {
+                fullResponse += chunk.delta;
+                sentenceBuf += chunk.delta;
+                if (/[.!?]/.test(sentenceBuf) && sentenceBuf.length > 8) {
+                  sendToTTS(sentenceBuf.trim());
+                  sentenceBuf = '';
+                }
+              }
+              if (chunk.done) {
+                if (sentenceBuf.trim()) sendToTTS(sentenceBuf.trim());
+                if (ttsWs && ttsWs.readyState === WebSocket.OPEN) ttsWs.send(JSON.stringify({ type: 'flush' }));
+                messages.push({ role: 'assistant', content: fullResponse });
+                return;
+              }
+            } catch(e) {}
+          }
+          pump();
+        }).catch(function(e) {
+          post('error', { message: 'LLM read: ' + e.message });
+          isBaluSpeaking = false;
+          post('speech-end');
+        });
+      }
+      pump();
+    }).catch(function(e) {
+      post('error', { message: 'LLM fetch: ' + e.message });
+      isBaluSpeaking = false;
+      post('speech-end');
+    });
+  }
+
+  function sendToTTS(text) {
+    if (ttsWs && ttsWs.readyState === WebSocket.OPEN) {
+      ttsWs.send(JSON.stringify({ type: 'speak', text: text }));
+    }
+  }
+
+  function onTTSMessage(event) {
+    if (event.data instanceof ArrayBuffer) {
+      playPCM(event.data);
+    } else {
+      try {
+        var data = JSON.parse(event.data);
+        if (data.type === 'playback_finished') {
+          dgPlaybackDone = true;
+          if (pendingAudioCount === 0) {
+            onSpeechComplete();
+          } else {
+            // AudioContext may be suspended so onended may never fire.
+            // Wait for expected audio duration + 600ms, then force complete.
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            var fallbackMs = Math.max(300, totalQueuedDuration * 1000 + 600);
+            setTimeout(function() {
+              if (isBaluSpeaking && dgPlaybackDone) onSpeechComplete();
+            }, fallbackMs);
+          }
+        }
+      } catch(e) {}
+    }
+  }
+
+  function playPCM(buffer) {
+    if (!audioCtx || stopped) return;
+    var i16 = new Int16Array(buffer);
+    if (i16.length === 0) return;
+    var f32 = new Float32Array(i16.length);
+    for (var i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768.0;
+    try {
+      var ab = audioCtx.createBuffer(1, f32.length, 48000);
+      ab.getChannelData(0).set(f32);
+      var src = audioCtx.createBufferSource();
+      src.buffer = ab;
+      src.connect(audioCtx.destination);
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      var t = Math.max(audioCtx.currentTime + 0.05, nextPlayTime);
+      totalQueuedDuration += ab.duration;
+      pendingAudioCount++;
+      src.onended = function() {
+        pendingAudioCount--;
+        if (pendingAudioCount === 0 && dgPlaybackDone) onSpeechComplete();
+      };
+      src.start(t);
+      nextPlayTime = t + ab.duration;
+    } catch(e) { console.warn('[DIY] playPCM error:', e); }
+  }
+
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    try { if (sttWs) sttWs.close(); } catch(e) {}
+    try { if (ttsWs) ttsWs.close(); } catch(e) {}
+    try { if (micStream) micStream.getTracks().forEach(function(t) { t.stop(); }); } catch(e) {}
+    try { if (processor) processor.disconnect(); } catch(e) {}
+    try { if (silentGain) silentGain.disconnect(); } catch(e) {}
+    try { if (audioCtx) audioCtx.close(); } catch(e) {}
+    post('call-end', {});
+  }
+
+  function handleMsg(e) {
+    try { var m = JSON.parse(e.data); if (m.type === 'stop') stop(); } catch(e) {}
+  }
+  document.addEventListener('message', handleMsg);
+  window.addEventListener('message', handleMsg);
+
+  init();
+<\/script></body></html>`; }
+
 function formatTime(s: number) {
   const m = Math.floor(s / 60);
   return `${m}:${(s % 60).toString().padStart(2, '0')}`;
@@ -177,10 +448,22 @@ export default function BaluScreen() {
   const [secondsLeft, setSecondsLeft]         = useState(SESSION_SECONDS);
   const [errorMsg, setErrorMsg]               = useState('');
   const [dailyRemaining, setDailyRemaining]   = useState<number | null>(null);
-  const [assistantMode, setAssistantMode]     = useState<AssistantMode>('classic');
+  const [assistantMode, setAssistantMode]     = useState<AssistantMode>('learning'); // F02: default fun mode
+  const [callMode, setCallMode]               = useState<'vapi' | 'diy'>('vapi');
+  const [nativeDiyActive, setNativeDiyActive] = useState(false);
+  const [debugLog, setDebugLog]               = useState<string[]>([]);
   const callStartTimeRef                       = useRef<number>(0);
   const callIdRef                              = useRef<string>('');
   const webViewRef = useRef<WebView>(null);
+
+  // ── Native DIY refs ─────────────────────────────────────────────────────────
+  const diyRunning      = useRef(false);
+  const diyMessages     = useRef<{ role: string; content: string }[]>([]);
+  const diyRecording    = useRef<Audio.Recording | null>(null);
+  const diyHasSpeech    = useRef(false);
+  const diySilenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const diyAuthToken    = useRef<string | null>(null);
+  const diyStopPromise  = useRef<Promise<unknown>>(Promise.resolve());
   const pulseAnim  = useRef(new Animated.Value(1)).current;
   const pulseLoop  = useRef<Animated.CompositeAnimation | null>(null);
 
@@ -236,49 +519,51 @@ export default function BaluScreen() {
       Alert.alert("Daily limit reached", `You've used all your ${COMPANION.name} time for today. Come back tomorrow!`);
       return;
     }
-    const sessionCap = dailyRemaining !== null
-      ? Math.min(SESSION_SECONDS, dailyRemaining)
-      : SESSION_SECONDS;
+    // F10: no per-session limit — session runs until daily quota exhausted
+    const sessionCap = dailyRemaining !== null ? dailyRemaining : SESSION_SECONDS;
     setSecondsLeft(sessionCap);
 
-    if (micGranted) {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
-      callStartTimeRef.current = Date.now();
-      // Pre-register uid→assistant mapping so webhook can identify this user
-      apiClient('/api/vapi/register-call', {
-        method: 'POST',
-        body: JSON.stringify({ assistant_mode: assistantMode }),
-      }).catch(() => {});
-      setCallActive(true);
-      setStatus('connecting');
-      trackBaluSessionStarted(assistantMode);
+    // Ensure mic permission
+    let hasPermission = micGranted;
+    if (!hasPermission) {
+      setStatus('requesting-permission');
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        setStatus('permission-denied');
+        Alert.alert(
+          'Microphone Access Needed',
+          `To talk with ${COMPANION.name}, please allow microphone access in your device settings.`,
+          [{ text: 'OK', onPress: () => setStatus('idle') }]
+        );
+        return;
+      }
+      setMicGranted(true);
+      hasPermission = true;
+    }
+
+    if (callMode === 'diy') {
+      startNativeDiy();
       return;
     }
-    setStatus('requesting-permission');
-    const { granted } = await Audio.requestPermissionsAsync();
-    if (granted) {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
-      setMicGranted(true);
-      callStartTimeRef.current = Date.now();
-      apiClient('/api/vapi/register-call', {
-        method: 'POST',
-        body: JSON.stringify({ assistant_mode: assistantMode }),
-      }).catch(() => {});
-      setCallActive(true);
-      setStatus('connecting');
-      trackBaluSessionStarted(assistantMode);
-    } else {
-      setStatus('permission-denied');
-      Alert.alert(
-        'Microphone Access Needed',
-        `To talk with ${COMPANION.name}, please allow microphone access in your device settings.`,
-        [{ text: 'OK', onPress: () => setStatus('idle') }]
-      );
-    }
-  }, [micGranted, dailyRemaining]);
+
+    // Vapi path
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
+    callStartTimeRef.current = Date.now();
+    apiClient('/api/vapi/register-call', {
+      method: 'POST',
+      body: JSON.stringify({ assistant_mode: assistantMode }),
+    }).catch(() => {});
+    setCallActive(true);
+    setStatus('connecting');
+    trackBaluSessionStarted(assistantMode);
+  }, [micGranted, dailyRemaining, callMode, startNativeDiy, assistantMode]);
 
   // ── End conversation → return to idle ──────────────────────────────────────
   const endCall = useCallback((reason: 'user' | 'timer' | 'error' = 'user') => {
+    if (nativeDiyActive) {
+      stopNativeDiy();
+      return;
+    }
     if (callStartTimeRef.current > 0) {
       const durationSeconds = Math.round((Date.now() - callStartTimeRef.current) / 1000);
       recordUsage(callStartTimeRef.current);
@@ -292,9 +577,211 @@ export default function BaluScreen() {
     setSecondsLeft(SESSION_SECONDS);
     setStatus('idle');
     Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => {});
-  }, [recordUsage, assistantMode]);
+  }, [recordUsage, assistantMode, nativeDiyActive, stopNativeDiy]);
 
-  // ── Session timer ───────────────────────────────────────────────────────────
+  // ── Native DIY functions ────────────────────────────────────────────────────
+  const diyBackendUrl = BACKEND_HTTP_URL;
+  const dlog = useCallback((msg: string) => {
+    console.log('[DIY]', msg);
+    setDebugLog(prev => [...prev.slice(-6), msg]);
+  }, []);
+
+  const diySystemPrompt = useCallback(() => {
+    const name = userData?.name || 'there';
+    let prompt = `You are Balu, a warm and friendly bear who loves talking with children. You are speaking with ${name}, who is ${userData?.age || 5} years old. Keep every response to 1-3 short sentences. Use simple, fun words. Be enthusiastic!`;
+    if (baluMemory) prompt += ` What you know about this child: ${baluMemory}`;
+    return prompt;
+  }, [userData, baluMemory]);
+
+  const diyStopRecording = useCallback(() => {
+    if (diySilenceTimer.current) { clearTimeout(diySilenceTimer.current); diySilenceTimer.current = null; }
+    if (diyRecording.current) {
+      const rec = diyRecording.current;
+      diyRecording.current = null;
+      // Save the stop promise so diyStartRecording can await it
+      diyStopPromise.current = rec.stopAndUnloadAsync().catch(() => {});
+    }
+  }, []);
+
+  const diyStartRecording = useCallback(async () => {
+    if (!diyRunning.current) return;
+    diyHasSpeech.current = false;
+    // Wait for any previous recording to fully release the Android mic
+    await diyStopPromise.current;
+    if (!diyRunning.current) return; // session may have ended while waiting
+    dlog('mic: preparing...');
+    setStatus('active');
+    try {
+      const rec = new Audio.Recording();
+      await rec.prepareToRecordAsync({
+        android: {
+          extension: '.m4a', outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder: Audio.AndroidAudioEncoder.AAC,
+          sampleRate: 16000, numberOfChannels: 1, bitRate: 64000,
+        },
+        ios: {
+          extension: '.m4a', outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality: Audio.IOSAudioQuality.MEDIUM,
+          sampleRate: 16000, numberOfChannels: 1, bitRate: 64000,
+        },
+        web: {},
+        isMeteringEnabled: true,
+      });
+      // interval BEFORE startAsync — some Android devices need this to enable metering
+      rec.setProgressUpdateInterval(100);
+      // Set ref BEFORE startAsync so the status callback always sees it
+      diyRecording.current = rec;
+      let firstCb = true;
+      rec.setOnRecordingStatusUpdate((s) => {
+        if (firstCb) { firstCb = false; dlog(`cb1: isRec=${s.isRecording} db=${s.metering?.toFixed(0) ?? 'null'}`); }
+        if (!diyRunning.current || !s.isRecording) return;
+        const db = s.metering ?? -160;
+        if (db > -40) {
+          if (!diyHasSpeech.current) dlog(`speech! db=${db.toFixed(0)}`);
+          diyHasSpeech.current = true;
+          setStatus('user-speaking');
+          if (diySilenceTimer.current) { clearTimeout(diySilenceTimer.current); diySilenceTimer.current = null; }
+        } else if (diyHasSpeech.current && !diySilenceTimer.current) {
+          dlog(`silence db=${db.toFixed(0)}, wait 0.8s`);
+          diySilenceTimer.current = setTimeout(() => {
+            diySilenceTimer.current = null;
+            if (diyRunning.current && diyRecording.current) diyProcessTurn();
+          }, 800);
+        }
+      });
+      await rec.startAsync();
+      dlog('mic: recording started');
+
+      // Fallback: if metering never fires (device quirk), force a turn after 8s
+      setTimeout(() => {
+        if (diyRunning.current && diyRecording.current === rec && !diyHasSpeech.current) {
+          dlog('fallback: no speech in 8s, restarting mic');
+          diyStopRecording();
+          diyStartRecording();
+        }
+      }, 8000);
+    } catch (e: any) {
+      dlog(`mic ERROR: ${e?.message ?? e}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const diyProcessTurn = useCallback(async () => {
+    if (!diyRunning.current) return;
+    const rec = diyRecording.current;
+    diyRecording.current = null;
+    if (diySilenceTimer.current) { clearTimeout(diySilenceTimer.current); diySilenceTimer.current = null; }
+    setStatus('thinking');
+    dlog('turn: stopping recording...');
+
+    try {
+      if (rec) {
+        diyStopPromise.current = rec.stopAndUnloadAsync().catch(() => {});
+        await diyStopPromise.current;
+      }
+      const uri = rec?.getURI?.() ?? null;
+      dlog(`turn: uri=${uri ? 'ok' : 'NULL'}`);
+      if (!uri) { if (diyRunning.current) diyStartRecording(); return; }
+
+      // Transcribe via backend
+      dlog('stt: sending...');
+      const token = diyAuthToken.current;
+      const formData = new FormData();
+      // Use audio/mp4 — the valid MIME type for .m4a files
+      formData.append('audio', { uri, type: 'audio/mp4', name: 'audio.m4a' } as any);
+      const sttResp = await fetch(`${diyBackendUrl}/api/stt/transcribe`, {
+        method: 'POST',
+        body: formData,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const sttData = await sttResp.json();
+      const transcript: string = sttData.transcript ?? '';
+      const d = sttData.debug;
+      dlog(`stt: "${transcript.slice(0, 40)}" | ${d ? `${d.bytes}B ${d.duration?.toFixed(1)}s ct=${d.content_type}` : 'no debug'}`);
+      if (!transcript.trim()) {
+        dlog(`stt empty! confidence=${d?.confidence}`);
+        if (diyRunning.current) diyStartRecording();
+        return;
+      }
+
+      // LLM — use text() not body.getReader() (RN Hermes has no Streams API)
+      dlog('llm: fetching...');
+      diyMessages.current.push({ role: 'user', content: transcript });
+      const llmResp = await fetch(`${diyBackendUrl}/api/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ messages: diyMessages.current, model: 'gpt-4o-mini' }),
+      });
+      const rawText = await llmResp.text();
+      let fullText = '';
+      for (const line of rawText.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const chunk = JSON.parse(line.slice(6));
+          if (chunk.delta) fullText += chunk.delta;
+        } catch {}
+      }
+      dlog(`llm: "${fullText.slice(0, 40)}"`);
+      diyMessages.current.push({ role: 'assistant', content: fullText });
+
+      // TTS via expo-speech
+      if (fullText.trim() && diyRunning.current) {
+        dlog('tts: speaking...');
+        setStatus('balu-speaking');
+        await new Promise<void>((resolve) => {
+          Speech.speak(fullText.trim(), {
+            rate: 0.95, pitch: 1.1,
+            onDone: () => { dlog('tts: done'); resolve(); },
+            onError: (e) => { dlog(`tts err: ${e}`); resolve(); },
+            onStopped: () => { dlog('tts: stopped'); resolve(); },
+          });
+        });
+      }
+
+      if (diyRunning.current) {
+        // Reset audio mode after TTS — Speech.speak may have changed audio focus
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
+        await new Promise(r => setTimeout(r, 150));
+        diyStartRecording();
+      }
+    } catch (e: any) {
+      dlog(`ERROR: ${e?.message ?? e}`);
+      if (diyRunning.current) diyStartRecording();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diyBackendUrl, diyStartRecording]);
+
+  const startNativeDiy = useCallback(async () => {
+    diyRunning.current = true;
+    diyMessages.current = [{ role: 'system', content: diySystemPrompt() }];
+    setNativeDiyActive(true);
+    setDebugLog([]);
+    callStartTimeRef.current = Date.now();
+    trackBaluSessionStarted('diy' as any);
+    dlog(`start: backend=${diyBackendUrl}`);
+    // Pre-fetch auth token once so per-turn requests don't block on token refresh
+    const { auth } = await import('../../src/lib/firebase');
+    diyAuthToken.current = (await auth.currentUser?.getIdToken()) ?? null;
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true, playThroughEarpieceAndroid: false });
+    diyStartRecording();
+  }, [diySystemPrompt, diyStartRecording, dlog, diyBackendUrl]);
+
+  const stopNativeDiy = useCallback(() => {
+    diyRunning.current = false;
+    diyStopRecording();
+    Speech.stop();
+    if (callStartTimeRef.current > 0) {
+      const dur = Math.round((Date.now() - callStartTimeRef.current) / 1000);
+      callStartTimeRef.current = 0;
+      trackBaluSessionEnded('diy' as any, dur, 'user');
+    }
+    setNativeDiyActive(false);
+    setSecondsLeft(SESSION_SECONDS);
+    setStatus('idle');
+    Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => {});
+  }, [diyStopRecording]);
+
+  // ── Daily quota countdown (ends call when daily limit hit) ──────────────────
   useEffect(() => {
     const active = ['active', 'balu-speaking', 'user-speaking', 'thinking'];
     if (!active.includes(status)) return;
@@ -349,7 +836,7 @@ export default function BaluScreen() {
     } catch {}
   }, [endCall]);
 
-  const isInCall    = callActive;
+  const isInCall    = callActive || nativeDiyActive;
   const isSpeaking  = status === 'balu-speaking';
   const isListening = status === 'user-speaking' || status === 'active';
 
@@ -401,6 +888,13 @@ export default function BaluScreen() {
         {/* Idle content is conditionally rendered (not just opacity-hidden) so no ghost touches during calls */}
         <View style={styles.bottomBar}>
           <Text style={styles.statusText}>{STATUS_LABELS[status]}</Text>
+          {nativeDiyActive && debugLog.length > 0 && (
+            <View style={{ alignSelf: 'stretch', backgroundColor: 'rgba(0,0,0,0.07)', borderRadius: 8, padding: 6, marginBottom: 4 }}>
+              {debugLog.map((line, i) => (
+                <Text key={i} style={{ fontSize: 10, color: '#78350f', fontFamily: 'monospace' }}>{line}</Text>
+              ))}
+            </View>
+          )}
           {status === 'error' && errorMsg
             ? <Text style={styles.errorDetail}>{errorMsg}</Text>
             : null}
@@ -413,21 +907,7 @@ export default function BaluScreen() {
                       : `${Math.floor(dailyRemaining / 60)}m ${dailyRemaining % 60}s left today`)
                   : ' '}
               </Text>
-              {VAPI_ASSISTANT_ID_V2 ? (
-                <View style={styles.modeToggle}>
-                  {ASSISTANT_MODES.map((m) => (
-                    <TouchableOpacity
-                      key={m.key}
-                      style={[styles.modeBtn, assistantMode === m.key && styles.modeBtnActive]}
-                      onPress={() => { trackBaluModeSwitched(assistantMode, m.key); setAssistantMode(m.key); }}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.modeBtnText, assistantMode === m.key && styles.modeBtnTextActive]}>{m.label}</Text>
-                      <Text style={[styles.modeBtnDesc, assistantMode === m.key && styles.modeBtnTextActive]}>{m.desc}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : null}
+              {/* F02: Stories/Fun toggle hidden — always fun mode */}
               <TouchableOpacity
                 style={styles.startBtn}
                 onPress={startConversation}
@@ -436,6 +916,7 @@ export default function BaluScreen() {
                 <Ionicons name="mic" size={22} color="#fff" />
                 <Text style={styles.startBtnText}>Start Talking</Text>
               </TouchableOpacity>
+              {/* DIY toggle hidden from release — preserved in code for testing */}
             </>
           )}
           {/* Call controls: absolutely positioned within bottomBar so height stays fixed */}
@@ -461,7 +942,9 @@ export default function BaluScreen() {
       {callActive && micGranted && (
         <WebView
           ref={webViewRef}
-          source={{ html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory, userData?.name ?? '', userData?.age ?? 0), baseUrl: 'https://vapi.ai' }}
+          source={callMode === 'diy'
+            ? { html: buildDiyBaluHtml(userData?.name ?? '', userData?.age ?? 0, baluMemory), baseUrl: BACKEND_HTTP_URL }
+            : { html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory, userData?.name ?? '', userData?.age ?? 0), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}
@@ -542,7 +1025,7 @@ function createStyles(_c: ThemeColors) {
     // Bottom bar — FIXED height, all idle content always in flow (opacity toggled)
     // Call controls are absolute within bottomBar so they don't affect height
     bottomBar: {
-      height: 190,
+      height: 230,
       alignItems: 'center',
       justifyContent: 'flex-start',
       paddingTop: 4,
@@ -635,5 +1118,22 @@ function createStyles(_c: ThemeColors) {
       position: 'absolute',
       bottom: 0,
     },
+
+    callModeToggle: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 8,
+    },
+    callModeBtn: {
+      paddingHorizontal: 16,
+      paddingVertical: 6,
+      borderRadius: 20,
+      backgroundColor: 'rgba(249,115,22,0.08)',
+      borderWidth: 1,
+      borderColor: 'rgba(249,115,22,0.2)',
+    },
+    callModeBtnActive:     { backgroundColor: 'rgba(249,115,22,0.18)', borderColor: '#f97316' },
+    callModeBtnText:       { color: '#c2410c', fontSize: 12, fontWeight: '600' },
+    callModeBtnTextActive: { color: '#f97316' },
   });
 }
