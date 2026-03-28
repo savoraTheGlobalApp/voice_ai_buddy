@@ -30,6 +30,10 @@ function LibraryTabButton(props: any) {
   );
 }
 
+// Tell Expo Router that 'balu' is the initial route in this segment,
+// so Android back from any tab exits the app instead of going to 'play'.
+export const unstable_settings = { initialRouteName: 'balu' };
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 export default function AppLayout() {
@@ -40,6 +44,7 @@ export default function AppLayout() {
       <CoachOverlay />
       <FeedbackSheet />
       <Tabs
+        initialRouteName="balu"
         screenOptions={{
           tabBarActiveTintColor: colors.accent,
           tabBarInactiveTintColor: colors.textTertiary,
