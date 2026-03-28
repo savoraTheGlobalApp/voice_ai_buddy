@@ -4,7 +4,7 @@ Processes notification campaigns and sends notifications to eligible users.
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 
 from services.firebase_service import is_firebase_available, get_db
@@ -173,39 +173,6 @@ async def get_eligible_users(campaign) -> List[Dict[str, Any]]:
     return eligible_users
 
 
-async def has_received_recently(user_id: str, campaign_id: str, hours: int = 24) -> bool:
-    """Check if user received this campaign recently (prevents spam)."""
-    if not is_firebase_available():
-        return False
-
-    try:
-        db = get_db()
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-        # Check notification logs for recent sends
-        logs = (
-            db.collection("notification_logs")
-            .where("user_id", "==", user_id)
-            .where("campaign_id", "==", campaign_id)
-            .where("action", "==", "sent")
-            .order_by("sent_at", direction="DESCENDING")
-            .limit(1)
-            .stream()
-        )
-
-        for log in logs:
-            log_data = log.to_dict()
-            sent_at = log_data.get("sent_at")
-            if sent_at:
-                sent_date = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-                if sent_date > cutoff:
-                    return True
-
-        return False
-
-    except Exception as e:
-        logger.error(f"Error checking recent notification for user {user_id}: {e}")
-        return False
 
 
 async def log_notification_sent(user_id: str, campaign_id: str, content: Dict[str, Any]):
@@ -248,11 +215,6 @@ async def process_campaign(campaign) -> Dict[str, int]:
 
     for user_data in eligible_users:
         user_id = user_data["uid"]
-
-        # Prevent duplicate sends within 12 hours
-        if await has_received_recently(user_id, campaign.campaign_id, hours=12):
-            stats["skipped"] += 1
-            continue
 
         # Select content variant (for A/B testing)
         content = select_variant(campaign, user_id)
