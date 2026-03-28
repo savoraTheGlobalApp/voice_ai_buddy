@@ -12,6 +12,7 @@ import {
   Image,
   Alert,
   Pressable,
+  InteractionManager,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -70,7 +71,7 @@ interface StoryItem {
   cover_image_url?: string;
 }
 
-function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => void; play: PlayFn }) {
+function StoryCard({ story, onPress, onBaluPress, play }: { story: StoryItem; onPress: () => void; onBaluPress: () => void; play: PlayFn }) {
   const config = getCategoryConfig(story.category);
   const { colors } = useTheme();
   const tapHighlight = useCoachHighlight('tap-story');
@@ -82,37 +83,34 @@ function StoryCard({ story, onPress, play }: { story: StoryItem; onPress: () => 
     onPress();
   }, [play, onPress, story.story_id, story.category]);
 
+  const cardContent = story.cover_image_url ? (
+    <View style={StyleSheet.absoluteFill}>
+      <Image source={{ uri: story.cover_image_url }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+      <LinearGradient colors={['transparent', 'rgba(0,0,0,0.85)']} style={styles.cardOverlay}>
+        <Text style={styles.cardTitle} numberOfLines={2}>{story.title.en}</Text>
+        <Text style={styles.cardMeta}>{story.metadata.reading_time} min</Text>
+      </LinearGradient>
+    </View>
+  ) : (
+    <LinearGradient colors={config.gradient} style={StyleSheet.absoluteFill}>
+      <Text style={styles.cardEmoji}>{config.emoji}</Text>
+      <LinearGradient colors={['transparent', 'rgba(0,0,0,0.85)']} style={styles.cardOverlay}>
+        <Text style={styles.cardTitle} numberOfLines={2}>{story.title.en}</Text>
+        <Text style={styles.cardMeta}>{story.metadata.reading_time} min</Text>
+      </LinearGradient>
+    </LinearGradient>
+  );
+
   return (
-    <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={styles.card}>
+    <View style={styles.card}>
       {tapHighlight && <PulsingRing borderRadius={10} />}
-      {story.cover_image_url ? (
-        <View style={styles.cardGradient}>
-          <Image
-            source={{ uri: story.cover_image_url }}
-            style={StyleSheet.absoluteFill}
-            resizeMode="cover"
-          />
-          <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.85)']}
-            style={styles.cardOverlay}
-          >
-            <Text style={styles.cardTitle} numberOfLines={2}>{story.title.en}</Text>
-            <Text style={styles.cardMeta}>{story.metadata.reading_time} min</Text>
-          </LinearGradient>
-        </View>
-      ) : (
-        <LinearGradient colors={config.gradient} style={styles.cardGradient}>
-          <Text style={styles.cardEmoji}>{config.emoji}</Text>
-          <LinearGradient
-            colors={['transparent', 'rgba(0,0,0,0.85)']}
-            style={styles.cardOverlay}
-          >
-            <Text style={styles.cardTitle} numberOfLines={2}>{story.title.en}</Text>
-            <Text style={styles.cardMeta}>{story.metadata.reading_time} min</Text>
-          </LinearGradient>
-        </LinearGradient>
-      )}
-    </TouchableOpacity>
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.8} style={StyleSheet.absoluteFill}>
+        {cardContent}
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.baluCardBtn} onPress={onBaluPress} activeOpacity={0.85}>
+        <Image source={require('../../../assets/icon.png')} style={styles.baluCardBtnIcon} />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -273,6 +271,12 @@ function CategoryRow({ category, stories, play }: { category: string; stories: S
             onPress={() =>
               router.push(`/(app)/sacred-stories/block-viewer?contentId=${item.story_id}`)
             }
+            onBaluPress={() => {
+              play('startStory');
+              InteractionManager.runAfterInteractions(() => {
+                router.navigate({ pathname: '/(app)/balu', params: { storyId: item.story_id, storyTitle: item.title.en, storyCategory: item.category } });
+              });
+            }}
           />
         )}
       />
@@ -857,6 +861,28 @@ function createStyles(c: ThemeColors) {
       fontWeight: '600',
       textAlign: 'center',
       opacity: 0.85,
+    },
+
+    // Bear button on story cards (3x size, bottom-center)
+    baluCardBtn: {
+      position: 'absolute',
+      bottom: 10,
+      alignSelf: 'center',
+      left: '50%',
+      marginLeft: -32,
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: 'rgba(255,255,255,0.3)',
+    },
+    baluCardBtnIcon: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
     },
 
     // F06: Balu random-story button (top-right)

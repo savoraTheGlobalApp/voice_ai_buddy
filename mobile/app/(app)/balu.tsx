@@ -8,16 +8,18 @@ import {
   Dimensions,
   Alert,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import * as Speech from 'expo-speech';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Stack } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import WebView from 'react-native-webview';
 import { useTheme } from '../../src/contexts/ThemeContext';
 import { useAuth } from '../../src/contexts/AuthContext';
+import { useStaticStory } from '../../src/hooks/useStaticStories';
 import { apiClient } from '../../src/api/client';
 import RiveNarratorAvatar from '../../src/components/RiveNarratorAvatar';
 import { COMPANION } from '../../src/config/companion';
@@ -31,9 +33,10 @@ import {
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const VAPI_PUBLIC_KEY        = process.env.EXPO_PUBLIC_VAPI_KEY ?? '';
-const VAPI_ASSISTANT_ID      = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID ?? '';
-const VAPI_ASSISTANT_ID_V2   = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID_V2 ?? '';
+const VAPI_PUBLIC_KEY           = process.env.EXPO_PUBLIC_VAPI_KEY ?? '';
+const VAPI_ASSISTANT_ID         = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID ?? '';
+const VAPI_ASSISTANT_ID_V2      = process.env.EXPO_PUBLIC_VAPI_ASSISTANT_ID_V2 ?? '';
+const VAPI_STORY_ASSISTANT_ID   = process.env.EXPO_PUBLIC_VAPI_STORY_ASSISTANT_ID ?? '';
 const SESSION_SECONDS        = 60 * 60; // fallback when daily quota unknown (1h)
 
 type AssistantMode = 'classic' | 'learning';
@@ -82,7 +85,7 @@ const STATUS_LABELS: Record<CallStatus, string> = {
 // ── Vapi WebView HTML ─────────────────────────────────────────────────────────
 const VAPI_SDK_URL = 'https://res.cloudinary.com/dsqytt7ty/raw/upload/v1773051338/vapi-sdk/vapi.browser.js';
 
-function buildBaluHtml(assistantId: string, uid: string, memory: string, childName: string, childAge: number) { return `<!DOCTYPE html>
+function buildBaluHtml(assistantId: string, uid: string, memory: string, childName: string, childAge: number, storyContext = '', firstMessage = '') { return `<!DOCTYPE html>
 <html>
 <head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:transparent}</style></head>
 <body>
@@ -93,6 +96,8 @@ function buildBaluHtml(assistantId: string, uid: string, memory: string, childNa
   window.__MEMORY__ = ${JSON.stringify(memory)};
   window.__CHILD_NAME__ = ${JSON.stringify(childName)};
   window.__CHILD_AGE__ = ${childAge || 0};
+  window.__STORY_CONTEXT__ = ${JSON.stringify(storyContext)};
+  window.__FIRST_MESSAGE__ = ${JSON.stringify(firstMessage)};
   function post(type, payload) {
     try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload || {} })); } catch(e) {}
   }
@@ -126,9 +131,11 @@ function buildBaluHtml(assistantId: string, uid: string, memory: string, childNa
           uid: window.__USER_ID__,
           child_memory: window.__MEMORY__ || '',
           child_name: window.__CHILD_NAME__ || '',
-          child_age: String(window.__CHILD_AGE__ || '')
+          child_age: String(window.__CHILD_AGE__ || ''),
+          story_context: window.__STORY_CONTEXT__ || ''
         }
       };
+      if (window.__FIRST_MESSAGE__) overrides.firstMessage = window.__FIRST_MESSAGE__;
       vapi.start(window.__VAPI_ASSISTANT_ID__, overrides);
       function handleMsg(e) {
         try {
@@ -430,6 +437,33 @@ export default function BaluScreen() {
   const { currentUser, userData } = useAuth();
   const insets = useSafeAreaInsets();
 
+  // Story mode — params injected when navigating from library
+  const { storyId, storyTitle, storyCategory } = useLocalSearchParams<{
+    storyId?: string; storyTitle?: string; storyCategory?: string;
+  }>();
+  const isStoryMode = !!storyId;
+  const storyQuery = useStaticStory(storyId ?? '');
+
+  const storyContext = useMemo(() => {
+    if (!isStoryMode || !storyQuery.data) return '';
+    const data = storyQuery.data as any;
+    let parts = '';
+    if (Array.isArray(data.segments) && data.segments.length > 0) {
+      // StaticStory format (maha-001 etc.)
+      parts = data.segments
+        .map((s: any, i: number) => `Part ${i + 1}${s.segmentType ? ` (${s.segmentType})` : ''}: ${s.narrative?.en ?? ''}${s.discussionQuestion ? `\nDiscussion question: ${s.discussionQuestion.en ?? ''}` : ''}`)
+        .join('\n\n');
+    } else if (Array.isArray(data.blocks) && data.blocks.length > 0) {
+      // BlockBasedContent format (habits, emotions etc.)
+      parts = data.blocks
+        .map((b: any) => b.content?.en ?? b.question?.en ?? '')
+        .filter(Boolean)
+        .join('\n\n');
+    }
+    if (!parts) return '';
+    return `Title: ${storyTitle}\nCategory: ${storyCategory}\n\n${parts}`;
+  }, [isStoryMode, storyQuery.data, storyTitle, storyCategory]);
+
   // Calculate positions ONCE at mount — frozen forever, immune to layout shifts
   const avatarSize = SCREEN_WIDTH * 0.72;
   const avatarPos = useMemo(() => {
@@ -485,6 +519,41 @@ export default function BaluScreen() {
     trackBaluScreenOpened(assistantMode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Reset state when story params change (tab stays mounted between navigations) ──
+  const prevStoryIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (storyId === prevStoryIdRef.current) return;
+    prevStoryIdRef.current = storyId;
+    // End any active call so the WebView doesn't receive a new source mid-call
+    if (callActive) {
+      webViewRef.current?.injectJavaScript(
+        `window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({type:'stop'}) })); true;`
+      );
+      setCallActive(false);
+    }
+    if (nativeDiyActive) {
+      diyRunning.current = false;
+      setNativeDiyActive(false);
+    }
+    setStatus('idle');
+    setErrorMsg('');
+    setSecondsLeft(SESSION_SECONDS);
+    autoStartedRef.current = false;
+  }, [storyId]);
+
+  // ── F17: Auto-start call when entering story mode ───────────────────────────
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!isStoryMode) return;
+    if (autoStartedRef.current) return;
+    if (storyQuery.isLoading || storyQuery.isError) return;
+    if (callActive || nativeDiyActive) return;
+    if (status !== 'idle') return;
+    autoStartedRef.current = true;
+    startConversation();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStoryMode, storyQuery.isLoading, storyQuery.isError, callActive, nativeDiyActive, status]);
 
   // ── Fetch daily remaining + memory on mount ─────────────────────────────────
   useEffect(() => {
@@ -590,8 +659,9 @@ export default function BaluScreen() {
     const name = userData?.name || 'there';
     let prompt = `You are Balu, a warm and friendly bear who loves talking with children. You are speaking with ${name}, who is ${userData?.age || 5} years old. Keep every response to 1-3 short sentences. Use simple, fun words. Be enthusiastic!`;
     if (baluMemory) prompt += ` What you know about this child: ${baluMemory}`;
+    if (storyContext) prompt += `\n\n${storyContext}`;
     return prompt;
-  }, [userData, baluMemory]);
+  }, [userData, baluMemory, storyContext]);
 
   const diyStopRecording = useCallback(() => {
     if (diySilenceTimer.current) { clearTimeout(diySilenceTimer.current); diySilenceTimer.current = null; }
@@ -867,7 +937,10 @@ export default function BaluScreen() {
         <View style={styles.topBar}>
           <View style={[styles.topIdle, { opacity: isInCall ? 0 : 1 }]} pointerEvents={isInCall ? 'none' : 'auto'}>
             <Text style={styles.title}>{COMPANION.name} {COMPANION.emoji}</Text>
-            <Text style={styles.subtitle}>Your friendly story companion</Text>
+            {isStoryMode && storyTitle
+              ? <Text style={styles.subtitle} numberOfLines={1}>📖 {storyTitle}</Text>
+              : <Text style={styles.subtitle}>Your friendly story companion</Text>
+            }
           </View>
           <View style={[styles.header, { opacity: isInCall ? 1 : 0 }]} pointerEvents={isInCall ? 'auto' : 'none'}>
             <TouchableOpacity style={styles.closeBtn} onPress={() => endCall('user')} activeOpacity={0.7}>
@@ -909,12 +982,15 @@ export default function BaluScreen() {
               </Text>
               {/* F02: Stories/Fun toggle hidden — always fun mode */}
               <TouchableOpacity
-                style={styles.startBtn}
+                style={[styles.startBtn, isStoryMode && storyQuery.isLoading && { opacity: 0.6 }]}
                 onPress={startConversation}
                 activeOpacity={0.85}
+                disabled={isStoryMode && storyQuery.isLoading}
               >
-                <Ionicons name="mic" size={22} color="#fff" />
-                <Text style={styles.startBtnText}>Start Talking</Text>
+                {isStoryMode && storyQuery.isLoading
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <><Ionicons name="mic" size={22} color="#fff" /><Text style={styles.startBtnText}>Start Talking</Text></>
+                }
               </TouchableOpacity>
               {/* DIY toggle hidden from release — preserved in code for testing */}
             </>
@@ -944,7 +1020,19 @@ export default function BaluScreen() {
           ref={webViewRef}
           source={callMode === 'diy'
             ? { html: buildDiyBaluHtml(userData?.name ?? '', userData?.age ?? 0, baluMemory), baseUrl: BACKEND_HTTP_URL }
-            : { html: buildBaluHtml(assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2 ? VAPI_ASSISTANT_ID_V2 : VAPI_ASSISTANT_ID, currentUser?.uid ?? '', baluMemory, userData?.name ?? '', userData?.age ?? 0), baseUrl: 'https://vapi.ai' }}
+            : { html: buildBaluHtml(
+                isStoryMode && VAPI_STORY_ASSISTANT_ID
+                  ? VAPI_STORY_ASSISTANT_ID
+                  : assistantMode === 'learning' && VAPI_ASSISTANT_ID_V2
+                    ? VAPI_ASSISTANT_ID_V2
+                    : VAPI_ASSISTANT_ID,
+                currentUser?.uid ?? '',
+                baluMemory,
+                userData?.name ?? '',
+                userData?.age ?? 0,
+                storyContext,
+                isStoryMode && storyTitle ? `Namaste! I'm Balu 🐻 Let's explore the story of ${storyTitle}! Are you ready?` : ''
+              ), baseUrl: 'https://vapi.ai' }}
           onMessage={onWebViewMessage}
           allowsInlineMediaPlayback={true}
           mediaPlaybackRequiresUserAction={false}

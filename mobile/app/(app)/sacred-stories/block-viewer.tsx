@@ -9,6 +9,8 @@ import {
   Dimensions,
   FlatList,
   Alert,
+  Image,
+  InteractionManager,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, router, Stack } from 'expo-router';
@@ -548,8 +550,25 @@ export default function BlockViewerScreen() {
           title: '',
           headerTransparent: true,
           headerBackTitle: '',
-          headerRight: isCustom
-            ? () => (
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 4 }}>
+              {!isCustom && displayContent && (
+                <TouchableOpacity
+                  onPress={() => {
+                    openingNarratorRef.current = true;
+                    InteractionManager.runAfterInteractions(() => {
+                      router.navigate({ pathname: '/(app)/balu', params: { storyId, storyTitle: displayContent.title.en, storyCategory: displayContent.category } });
+                    });
+                  }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Image
+                    source={require('../../../assets/icon.png')}
+                    style={{ width: 32, height: 32, borderRadius: 16 }}
+                  />
+                </TouchableOpacity>
+              )}
+              {isCustom && (
                 <TouchableOpacity
                   onPress={() => {
                     Alert.alert(
@@ -573,12 +592,12 @@ export default function BlockViewerScreen() {
                     );
                   }}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={{ marginRight: 4 }}
                 >
                   <Ionicons name="trash-outline" size={22} color="#fff" />
                 </TouchableOpacity>
-              )
-            : undefined,
+              )}
+            </View>
+          ),
         }}
       />
       <View style={styles.slidesRoot}>
