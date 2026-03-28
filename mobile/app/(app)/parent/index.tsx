@@ -137,7 +137,7 @@ export default function ParentCornerScreen() {
           {/* ── Balu's Memory ──────────────────────────────────────── */}
           {profile && (
             <>
-              <SectionHeader icon="heart" label="What Balu Knows" colors={colors} />
+              <SectionHeader icon="heart" label={userData?.name ? `What Balu knows about ${userData.name}` : 'What Balu Knows'} colors={colors} />
               {profile.top_interests.length > 0 && (
                 <View style={styles.card}>
                   <Text style={styles.cardSubtitle}>Top interests</Text>
@@ -169,7 +169,7 @@ export default function ParentCornerScreen() {
           )}
 
           {/* ── Balu Conversations ────────────────────────────────── */}
-          <SectionHeader icon="mic" label="Balu Conversations" colors={colors} />
+          <SectionHeader icon="mic" label={userData?.name ? `Balu conversations with ${userData.name}` : 'Balu Conversations'} colors={colors} />
           <View style={styles.card}>
             <StatRow label="Sessions this week" value={`${data.balu.sessions_count}`} colors={colors} />
             <StatRow label="📖 Stories mode" value={`${data.balu.classic_sessions}`} colors={colors} />
